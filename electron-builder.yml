@@ -1,0 +1,50 @@
+appId: com.protimer.desktop
+productName: ProTimer
+executableName: ProTimer
+copyright: Copyright © 2026 ProTimer
+
+directories:
+  buildResources: build
+  output: release
+
+files:
+  - dist/**/*
+  - electron/**/*
+  - build/icon.ico
+  - build/icon.png
+  - package.json
+  - "!node_modules/**/*"
+
+asar: true
+compression: store
+
+win:
+  icon: build/icon.ico
+  executableName: ProTimer
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeaderIcon: build/icon.ico
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: ProTimer
+  runAfterFinish: true
+  deleteAppDataOnUninstall: false
+  license: build/license.txt
+  artifactName: ProTimer-Setup.exe
+  uninstallDisplayName: ProTimer
+
+portable:
+  artifactName: ProTimer-Portable.exe

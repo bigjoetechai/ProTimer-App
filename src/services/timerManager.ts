@@ -1,0 +1,2287 @@
+/**
+ * Central Timer Management Engine.
+ *
+ * Implements high-precision, drift-free real-time timer calculations
+ * using wall-clock timestamp deltas (immune to setInterval drift and background tab throttling).
+ *
+ * Supports:
+ * - START: Start selected timer
+ * - STOP: Stop selected timer
+ * - PAUSE: Pause selected timer while preserving current value
+ * - RESTART: Reset timer to original duration and start again immediately
+ * - CUE: Return timer to configured starting value without auto-starting
+ * - Duration Controls: Increase, decrease, manual editing, and configurable increments
+ * - Speed Control: 1% to 200% (50% = half speed, 200% = twice as fast)
+ * - Timer Types: Countdown, Count Up, Stopwatch (with Laps), Digital Clock, Meeting Timer
+ * - Multiple independently running timers
+ */
+
+import { 
+  TimerItem, 
+  TimerList, 
+  TimerStatus, 
+  TimerSnapshot, 
+  StopwatchLap,
+  TimerAlert,
+  ListExportData,
+  AllListsBackupData
+} from '../types';
+import { generateId } from '../utilities/idGenerator';
+import { formatSeconds } from '../utilities/timeFormatters';
+import { storageService } from './storageService';
+import { audioController } from '../audio/AudioController';
+import { formatClock, calculateEndTime } from '../utilities/timeFormatters';
+
+export type TimerManagerSubscriber = (snapshot: TimerSnapshot, timers: TimerItem[]) => void;
+
+export interface ActiveAlertInfo {
+  color?: string;
+  flash: boolean;
+  onOff: boolean;
+  level: 'none' | 'alert1' | 'alert2' | 'overtime';
+  name?: string;
+}
+
+/**
+ * Universal evaluator for Alert 1 and Alert 2 thresholds across count down and count up timers.
+ * Accurately determines when timer reaches Alert 1 threshold (applying Alert 1 color)
+ * and when timer reaches Alert 2 threshold (applying Alert 2 color).
+ */
+export function computeActiveAlert(
+  timer: TimerItem | null | undefined,
+  currentSeconds: number,
+  status?: TimerStatus
+): ActiveAlertInfo {
+  if (!timer || timer.type === 'spacer' || timer.type === 'empty') {
+    return { flash: false, onOff: false, level: 'none' };
+  }
+
+  const isCountUp = timer.type === 'count_up' || timer.type === 'stopwatch';
+  const isOvertime = status === 'overtime' || (!isCountUp && currentSeconds <= 0 && (status === 'running' || status === 'paused'));
+
+  // If timer is in overtime (completed countdown or past zero)
+  if (isOvertime) {
+    const color = timer.alert2?.color || timer.alert1?.color || '#ef4444';
+    const onOff = timer.alert2?.onOff ?? timer.alert1?.onOff ?? true;
+    const flash = onOff ? false : (timer.alert2?.flash ?? timer.alert1?.flash ?? false);
+    return { color, flash, onOff, level: 'overtime', name: 'Overtime' };
+  }
+
+  // Only apply alert colors when the timer is active/running/paused
+  if (status !== 'running' && status !== 'paused') {
+    return { flash: false, onOff: false, level: 'none' };
+  }
+
+  const a1 = timer.alert1;
+  const a2 = timer.alert2;
+
+  if (isCountUp) {
+    // For Count Up: alert triggers when elapsed time reaches or exceeds the threshold
+    const a1Due = a1 ? currentSeconds >= a1.timeSeconds : false;
+    const a2Due = a2 ? currentSeconds >= a2.timeSeconds : false;
+
+    if (a1Due && a2Due && a1 && a2) {
+      // Both thresholds reached: whichever threshold was reached second (higher threshold) takes priority
+      if (a2.timeSeconds >= a1.timeSeconds) {
+        return { color: a2.color, flash: a2.flash, onOff: !!a2.onOff, level: 'alert2', name: a2.label || 'Alert 2' };
+      } else {
+        return { color: a1.color, flash: a1.flash, onOff: !!a1.onOff, level: 'alert1', name: a1.label || 'Alert 1' };
+      }
+    } else if (a2Due && a2) {
+      return { color: a2.color, flash: a2.flash, onOff: !!a2.onOff, level: 'alert2', name: a2.label || 'Alert 2' };
+    } else if (a1Due && a1) {
+      return { color: a1.color, flash: a1.flash, onOff: !!a1.onOff, level: 'alert1', name: a1.label || 'Alert 1' };
+    }
+  } else {
+    // For Countdown: alert triggers when remaining time drops to or below the threshold
+    const a1Due = a1 ? currentSeconds <= a1.timeSeconds && currentSeconds > 0 : false;
+    const a2Due = a2 ? currentSeconds <= a2.timeSeconds && currentSeconds > 0 : false;
+
+    if (a1Due && a2Due && a1 && a2) {
+      // Both thresholds met: whichever threshold is closer to zero (lower threshold / reached second) takes priority
+      if (a2.timeSeconds <= a1.timeSeconds) {
+        return { color: a2.color, flash: a2.flash, onOff: !!a2.onOff, level: 'alert2', name: a2.label || 'Alert 2' };
+      } else {
+        return { color: a1.color, flash: a1.flash, onOff: !!a1.onOff, level: 'alert1', name: a1.label || 'Alert 1' };
+      }
+    } else if (a2Due && a2) {
+      return { color: a2.color, flash: a2.flash, onOff: !!a2.onOff, level: 'alert2', name: a2.label || 'Alert 2' };
+    } else if (a1Due && a1) {
+      return { color: a1.color, flash: a1.flash, onOff: !!a1.onOff, level: 'alert1', name: a1.label || 'Alert 1' };
+    }
+  }
+
+  return { flash: false, onOff: false, level: 'none' };
+}
+
+class TimerManagerService {
+  private timers: Map<string, TimerItem> = new Map();
+  private lists: Map<string, TimerList> = new Map();
+  private activeListId: string = 'list_1';
+
+  private activeTimerId: string | null = null;
+  private cuedTimerId: string | null = null;
+
+  // Set of IDs of timers currently running concurrently
+  private runningTimerIds: Set<string> = new Set();
+
+  // Central high-resolution tick interval
+  private intervalHandle: number | null = null;
+  private readonly TICK_RATE_MS = 50; // 20 ticks per second for silky smooth UI
+
+  // Configurable duration adjustment increment (default: 60s / 1 min)
+  private durationIncrementSeconds: number = 60;
+  private autoAdvanceRundown: boolean = false;
+  private wallClockCheckerInterval: any = null;
+
+  private subscribers: Set<TimerManagerSubscriber> = new Set();
+  private blackoutListeners: Set<(blackout: boolean) => void> = new Set();
+  private isInitialized: boolean = false;
+
+  public onBlackout(listener: (blackout: boolean) => void): () => void {
+    this.blackoutListeners.add(listener);
+    return () => {
+      this.blackoutListeners.delete(listener);
+    };
+  }
+
+  private triggerBlackout(blackout: boolean): void {
+    this.blackoutListeners.forEach((fn) => {
+      try {
+        fn(blackout);
+      } catch {}
+    });
+  }
+
+  constructor() {
+    // Listen for tab focus / visibility restoration to immediately catch up any background time
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden && this.runningTimerIds.size > 0) {
+          this.tickAllRunning();
+        }
+      });
+      window.addEventListener('focus', () => {
+        if (this.runningTimerIds.size > 0) {
+          this.tickAllRunning();
+        }
+      });
+    }
+  }
+
+  public async initialize(): Promise<void> {
+    if (this.isInitialized) return;
+
+    // Load lists & timers from IndexedDB
+    const savedLists = await storageService.getAllLists();
+    const savedTimers = await storageService.getAllTimers();
+
+    if (savedLists.length > 0) {
+      savedLists.forEach((l, idx) => {
+        if (l.order === undefined) l.order = idx;
+        this.lists.set(l.id, l);
+      });
+      this.activeListId = savedLists[0].id;
+
+      // Ensure standard default lists exist
+      if (!this.lists.has('list_2')) {
+        const l2: TimerList = { id: 'list_2', name: 'List 2: Conference', order: 1, timerIds: [] };
+        this.lists.set(l2.id, l2);
+        storageService.saveList(l2);
+      }
+      if (!this.lists.has('list_3')) {
+        const l3: TimerList = { id: 'list_3', name: 'List 3: Speakers', order: 2, timerIds: [] };
+        this.lists.set(l3.id, l3);
+        storageService.saveList(l3);
+      }
+    } else {
+      const defaultLists: TimerList[] = [
+        { id: 'list_1', name: 'List 1: Sunday Service', order: 0, isDefault: true, timerIds: [] },
+        { id: 'list_2', name: 'List 2: Conference', order: 1, timerIds: [] },
+        { id: 'list_3', name: 'List 3: Speakers', order: 2, timerIds: [] },
+      ];
+      defaultLists.forEach(l => {
+        this.lists.set(l.id, l);
+        storageService.saveList(l);
+      });
+      this.activeListId = 'list_1';
+    }
+
+    if (savedTimers.length > 0) {
+      savedTimers.forEach(t => {
+        // Normalize status to idle/paused on fresh boot
+        t.status = t.status === 'running' ? 'paused' : (t.status || 'idle');
+        if (t.type === 'countdown' || !t.type) {
+          if (!t.alert1 && t.durationSeconds >= 60) {
+            t.alert1 = {
+              id: generateId('alt'),
+              timeSeconds: Math.min(t.durationSeconds - 10, Math.max(30, Math.round(t.durationSeconds * 0.4))),
+              color: '#eab308',
+              flash: false,
+              soundEnabled: true,
+              soundType: 'chime',
+              label: 'Alert 1 (Warning)',
+            };
+          }
+          if (!t.alert2 && t.durationSeconds >= 30) {
+            t.alert2 = {
+              id: generateId('alt'),
+              timeSeconds: Math.min(t.durationSeconds - 5, Math.max(10, Math.round(t.durationSeconds * 0.2))),
+              color: '#ef4444',
+              flash: true,
+              soundEnabled: true,
+              soundType: 'alarm',
+              label: 'Alert 2 (Danger)',
+            };
+          }
+        }
+        this.timers.set(t.id, t);
+      });
+    } else {
+      // Seed with initial sample timers across all default lists
+      this.seedInitialTimers();
+    }
+
+    // Auto-cue first timer in active list
+    const activeList = this.lists.get(this.activeListId);
+    if (activeList && activeList.timerIds.length > 0) {
+      const firstId = activeList.timerIds[0];
+      this.cue(firstId);
+    }
+
+    this.isInitialized = true;
+    this.notifySubscribers();
+  }
+
+  private seedInitialTimers() {
+    const list1 = this.lists.get('list_1') || Array.from(this.lists.values())[0];
+    const list2 = this.lists.get('list_2');
+    const list3 = this.lists.get('list_3');
+
+    const allNewTimers: TimerItem[] = [];
+
+    // --- List 1: Sunday Service Timers ---
+    if (list1 && list1.timerIds.length === 0) {
+      const l1Timers: TimerItem[] = [
+        {
+          id: generateId('t'),
+          name: 'Prelude & Welcome',
+          order: 0,
+          durationSeconds: 300, // 5 min
+          elapsedSeconds: 0,
+          remainingSeconds: 300,
+          type: 'countdown',
+          status: 'idle',
+          speed: 100,
+          alert1: { id: 'a1', timeSeconds: 60, color: '#eab308', label: '1m Warning', flash: true, soundEnabled: true },
+          endAction: 'next_timer',
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+        {
+          id: generateId('t'),
+          name: 'Worship & Praise',
+          order: 1,
+          durationSeconds: 1200, // 20 min
+          elapsedSeconds: 0,
+          remainingSeconds: 1200,
+          type: 'countdown',
+          status: 'idle',
+          speed: 100,
+          alert1: { id: 'a1', timeSeconds: 180, color: '#eab308', label: '3m Wrap Up', flash: false, soundEnabled: true },
+          alert2: { id: 'a2', timeSeconds: 60, color: '#ef4444', label: 'Final Song', flash: true, soundEnabled: true },
+          endAction: 'next_timer',
+          createdAt: Date.now() + 1,
+          updatedAt: Date.now() + 1,
+        },
+        {
+          id: generateId('t'),
+          name: 'Sermon: Living with Purpose',
+          order: 2,
+          durationSeconds: 2100, // 35 min
+          elapsedSeconds: 0,
+          remainingSeconds: 2100,
+          type: 'countdown',
+          status: 'idle',
+          speed: 100,
+          alert1: { id: 'a1', timeSeconds: 300, color: '#eab308', label: '5m Remaining', flash: true, soundEnabled: true },
+          alert2: { id: 'a2', timeSeconds: 60, color: '#ef4444', label: 'Conclude', flash: true, soundEnabled: true },
+          endAction: 'count_up',
+          createdAt: Date.now() + 2,
+          updatedAt: Date.now() + 2,
+        },
+        {
+          id: generateId('t'),
+          name: 'Benediction & Dismissal',
+          order: 3,
+          durationSeconds: 300, // 5 min
+          elapsedSeconds: 0,
+          remainingSeconds: 300,
+          type: 'countdown',
+          status: 'idle',
+          speed: 100,
+          alert1: { id: 'a1', timeSeconds: 60, color: '#eab308', label: '1m Warning', flash: false, soundEnabled: true },
+          alert2: { id: 'a2', timeSeconds: 30, color: '#ef4444', label: '30s Final', flash: true, soundEnabled: true },
+          endAction: 'count_up',
+          createdAt: Date.now() + 3,
+          updatedAt: Date.now() + 3,
+        },
+      ];
+      l1Timers.forEach(t => {
+        this.timers.set(t.id, t);
+        list1.timerIds.push(t.id);
+        allNewTimers.push(t);
+      });
+      storageService.saveList(list1);
+    }
+
+    // --- List 2: Conference Timers ---
+    if (list2 && list2.timerIds.length === 0) {
+      const l2Timers: TimerItem[] = [
+        {
+          id: generateId('t'),
+          name: 'Keynote Presentation',
+          order: 0,
+          durationSeconds: 2700, // 45 min
+          elapsedSeconds: 0,
+          remainingSeconds: 2700,
+          type: 'countdown',
+          status: 'idle',
+          speed: 100,
+          alert1: { id: 'alt_10', timeSeconds: 600, color: '#eab308', label: '10m Warning', flash: false, soundEnabled: true, soundType: 'chime' },
+          alert2: { id: 'alt_1', timeSeconds: 60, color: '#ef4444', label: '1m Urgent', flash: true, soundEnabled: true, soundType: 'alarm' },
+          endAction: 'count_up',
+          createdAt: Date.now() + 10,
+          updatedAt: Date.now() + 10,
+        },
+        {
+          id: generateId('t'),
+          name: 'Expert Panel Discussion',
+          order: 1,
+          durationSeconds: 1800, // 30 min
+          elapsedSeconds: 0,
+          remainingSeconds: 1800,
+          type: 'countdown',
+          status: 'idle',
+          speed: 100,
+          endAction: 'stop',
+          createdAt: Date.now() + 11,
+          updatedAt: Date.now() + 11,
+        },
+        {
+          id: generateId('t'),
+          name: 'Morning Coffee Break',
+          order: 2,
+          durationSeconds: 900, // 15 min
+          elapsedSeconds: 0,
+          remainingSeconds: 900,
+          type: 'countdown',
+          status: 'idle',
+          speed: 100,
+          endAction: 'stop',
+          createdAt: Date.now() + 12,
+          updatedAt: Date.now() + 12,
+        },
+      ];
+      l2Timers.forEach(t => {
+        this.timers.set(t.id, t);
+        list2.timerIds.push(t.id);
+        allNewTimers.push(t);
+      });
+      storageService.saveList(list2);
+    }
+
+    // --- List 3: Speakers Timers ---
+    if (list3 && list3.timerIds.length === 0) {
+      const l3Timers: TimerItem[] = [
+        {
+          id: generateId('t'),
+          name: 'Guest Speaker 1',
+          order: 0,
+          durationSeconds: 1500, // 25 min
+          elapsedSeconds: 0,
+          remainingSeconds: 1500,
+          type: 'countdown',
+          status: 'idle',
+          speed: 100,
+          alert1: { id: 'a1', timeSeconds: 120, color: '#eab308', label: 'Wrap Up', flash: true, soundEnabled: true },
+          endAction: 'count_up',
+          createdAt: Date.now() + 20,
+          updatedAt: Date.now() + 20,
+        },
+        {
+          id: generateId('t'),
+          name: 'Lightning Talks',
+          order: 1,
+          durationSeconds: 600, // 10 min
+          elapsedSeconds: 0,
+          remainingSeconds: 600,
+          type: 'countdown',
+          status: 'idle',
+          speed: 100,
+          endAction: 'next_timer',
+          createdAt: Date.now() + 21,
+          updatedAt: Date.now() + 21,
+        },
+        {
+          id: generateId('t'),
+          name: 'Closing Remarks',
+          order: 2,
+          durationSeconds: 300, // 5 min
+          elapsedSeconds: 0,
+          remainingSeconds: 300,
+          type: 'countdown',
+          status: 'idle',
+          speed: 100,
+          endAction: 'stop',
+          createdAt: Date.now() + 22,
+          updatedAt: Date.now() + 22,
+        },
+      ];
+      l3Timers.forEach(t => {
+        this.timers.set(t.id, t);
+        list3.timerIds.push(t.id);
+        allNewTimers.push(t);
+      });
+      storageService.saveList(list3);
+    }
+
+    if (allNewTimers.length > 0) {
+      storageService.saveTimersBatch(allNewTimers);
+    }
+
+    if (typeof window !== 'undefined' && !this.wallClockCheckerInterval) {
+      this.wallClockCheckerInterval = setInterval(() => {
+        this.checkScheduledAutoStarts();
+      }, 1000);
+    }
+  }
+
+  // ===========================================================================
+  // TIMER AUTOMATION & SCHEDULED STARTS
+  // ===========================================================================
+
+  public setAutoAdvance(enabled: boolean): void {
+    this.autoAdvanceRundown = enabled;
+    this.notifySubscribers();
+  }
+
+  public isAutoAdvanceEnabled(): boolean {
+    return this.autoAdvanceRundown;
+  }
+
+  private checkScheduledAutoStarts(): void {
+    const list = this.lists.get(this.activeListId);
+    if (!list) return;
+
+    const now = new Date();
+    const currentHms = formatClock(now, true);
+    const currentHm = currentHms.slice(0, 5);
+
+    for (const id of list.timerIds) {
+      const timer = this.timers.get(id);
+      if (timer && timer.autoStart && timer.scheduledStartTime && timer.status !== 'running' && timer.status !== 'completed') {
+        const scheduled = timer.scheduledStartTime.trim();
+        if (scheduled === currentHms || scheduled === currentHm) {
+          timer.autoStart = false;
+          this.saveTimerToStorage(timer);
+          this.start(timer.id);
+          break;
+        }
+      }
+    }
+  }
+
+  // ===========================================================================
+  // CONTROL BUTTON IMPLEMENTATIONS
+  // ===========================================================================
+
+  /**
+   * START: Starts the next cue (or specified timer ID).
+   * - Uses system time + duration to determine the END time.
+   * - At the click of start button it starts the next cue in sequence and advances the cue pointer.
+   * - The active running cue becomes highlighted in red.
+   */
+  public start(targetId?: string): void {
+    const list = this.lists.get(this.activeListId);
+    if (!list || list.timerIds.length === 0) return;
+
+    const findNextPlayableId = (fromIndex: number): string | null => {
+      for (let step = 1; step <= list.timerIds.length; step++) {
+        const candidateId = list.timerIds[(fromIndex + step) % list.timerIds.length];
+        const candidate = this.timers.get(candidateId);
+        if (candidate && candidate.type !== 'spacer') {
+          return candidateId;
+        }
+      }
+      return null;
+    };
+
+    let idToStart: string | null = null;
+
+    if (targetId) {
+      // Explicit target specified (e.g. from row start button)
+      idToStart = targetId;
+    } else {
+      // START button clicked: Start the next cue!
+      if (this.cuedTimerId && this.cuedTimerId !== this.activeTimerId) {
+        idToStart = this.cuedTimerId;
+      } else if (this.activeTimerId && this.runningTimerIds.has(this.activeTimerId)) {
+        // Current timer is actively running: start the next cue in the list
+        const currentIndex = list.timerIds.indexOf(this.activeTimerId);
+        idToStart = findNextPlayableId(currentIndex);
+      } else if (this.cuedTimerId) {
+        idToStart = this.cuedTimerId;
+      } else {
+        idToStart = findNextPlayableId(-1);
+      }
+    }
+
+    if (!idToStart) return;
+
+    const timer = this.timers.get(idToStart);
+    if (!timer || timer.type === 'spacer') return;
+
+    // Transition previous running timer(s) to completed so the next cue takes over
+    if (this.activeTimerId && this.activeTimerId !== idToStart) {
+      const prevTimer = this.timers.get(this.activeTimerId);
+      if (prevTimer && prevTimer.status === 'running') {
+        prevTimer.status = 'completed';
+        this.runningTimerIds.delete(this.activeTimerId);
+        this.saveTimerToStorage(prevTimer);
+      }
+    }
+
+    this.activeTimerId = idToStart;
+
+    // START should use the system time using the DURATION to determine the END
+    const now = new Date();
+    timer.startTime = formatClock(now, true);
+
+    // If starting fresh (idle, cued, or completed), reset elapsed and remaining
+    if (timer.status === 'idle' || timer.status === 'cued' || timer.status === 'completed') {
+      timer.elapsedSeconds = 0;
+      timer.remainingSeconds = timer.durationSeconds;
+    }
+
+    const durationForEnd = timer.remainingSeconds > 0 ? timer.remainingSeconds : timer.durationSeconds;
+    timer.endTime = calculateEndTime(durationForEnd, now);
+
+    // Transition to running state
+    timer.status = 'running';
+    timer.triggeredAlertIds = [];
+    (timer as unknown as { endActionTriggered?: boolean }).endActionTriggered = false;
+    (timer as unknown as { lastWallClockTime: number }).lastWallClockTime = now.getTime();
+
+    this.runningTimerIds.add(idToStart);
+    this.ensureTickerRunning();
+    this.saveTimerToStorage(timer);
+
+    // Advance cuedTimerId to the NEXT playable cue in sequence so the operator's next click of START starts the subsequent cue
+    const currentIndex = list.timerIds.indexOf(idToStart);
+    if (currentIndex !== -1 && list.timerIds.length > 1) {
+      const nextCueId = findNextPlayableId(currentIndex);
+      if (nextCueId && nextCueId !== idToStart) {
+        this.cuedTimerId = nextCueId;
+        const nextTimer = this.timers.get(nextCueId);
+        if (nextTimer && nextTimer.status === 'idle') {
+          nextTimer.status = 'cued';
+          this.saveTimerToStorage(nextTimer);
+        }
+      }
+    }
+
+    this.notifySubscribers();
+  }
+
+  public resume(targetId?: string): void {
+    this.start(targetId);
+  }
+
+  /**
+   * STOP: Stop the selected timer.
+   */
+  public stop(targetId?: string): void {
+    const idToStop = targetId || this.activeTimerId;
+    if (!idToStop) return;
+
+    const timer = this.timers.get(idToStop);
+    if (!timer) return;
+
+    timer.status = 'idle';
+    timer.triggeredAlertIds = [];
+    (timer as unknown as { endActionTriggered?: boolean }).endActionTriggered = false;
+    this.runningTimerIds.delete(idToStop);
+    this.checkStopTicker();
+
+    // Reset elapsed and remaining back to configured values
+    timer.elapsedSeconds = 0;
+    if (timer.type === 'count_up' || timer.type === 'stopwatch') {
+      timer.remainingSeconds = timer.startingValueSeconds || 0;
+    } else if (timer.type === 'digital_clock') {
+      const now = new Date();
+      timer.remainingSeconds = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+    } else {
+      timer.remainingSeconds = timer.durationSeconds;
+    }
+
+    // Cue this timer back so hitting START starts it again, but clear activeTimerId
+    this.cuedTimerId = idToStop;
+    if (this.activeTimerId === idToStop) {
+      this.activeTimerId = null;
+    }
+
+    this.saveTimerToStorage(timer);
+    this.notifySubscribers();
+  }
+
+  /**
+   * PAUSE: Pause the selected timer while preserving its current value.
+   * Clicking Pause again while paused resumes the timer from where it left off.
+   */
+  public pause(targetId?: string): void {
+    const idToPause = targetId || this.activeTimerId;
+    if (!idToPause) return;
+
+    const timer = this.timers.get(idToPause);
+    if (!timer) return;
+
+    // If already paused, resume the timer
+    if (timer.status === 'paused') {
+      const now = new Date();
+      (timer as unknown as { lastWallClockTime: number }).lastWallClockTime = now.getTime();
+
+      if (timer.remainingSeconds > 0) {
+        timer.endTime = calculateEndTime(timer.remainingSeconds, now);
+      }
+
+      const isCountUp = timer.type === 'count_up' || timer.type === 'stopwatch' || timer.type === 'digital_clock';
+      timer.status = !isCountUp && timer.remainingSeconds <= 0 ? 'overtime' : 'running';
+
+      this.activeTimerId = idToPause;
+      this.runningTimerIds.add(idToPause);
+      this.ensureTickerRunning();
+
+      this.saveTimerToStorage(timer);
+      this.notifySubscribers();
+      return;
+    }
+
+    if (timer.status !== 'running' && timer.status !== 'overtime') return;
+
+    // Advance up to the exact moment of pause to ensure zero lost time
+    const now = Date.now();
+    const lastWall = (timer as unknown as { lastWallClockTime?: number }).lastWallClockTime || now;
+    const deltaMs = now - lastWall;
+    const virtualDeltaSec = (deltaMs / 1000) * ((timer.speed || 100) / 100);
+
+    timer.elapsedSeconds += virtualDeltaSec;
+    this.updateComputedSeconds(timer);
+
+    timer.status = 'paused';
+    (timer as unknown as { lastWallClockTime: number }).lastWallClockTime = now;
+
+    this.runningTimerIds.delete(idToPause);
+    this.checkStopTicker();
+
+    this.saveTimerToStorage(timer);
+    this.notifySubscribers();
+  }
+
+  /**
+   * RESTART: Reset the timer to its original configured duration and start it again immediately.
+   * Ensures alerts can trigger again after restarting.
+   */
+  public restart(targetId?: string): void {
+    const idToRestart = targetId || this.activeTimerId;
+    if (!idToRestart) return;
+
+    const timer = this.timers.get(idToRestart);
+    if (!timer) return;
+
+    const now = new Date();
+    timer.startTime = formatClock(now, true);
+    timer.endTime = calculateEndTime(timer.durationSeconds, now);
+
+    // Reset to starting values and clear triggered alert states
+    timer.elapsedSeconds = 0;
+    timer.triggeredAlertIds = [];
+    (timer as unknown as { endActionTriggered?: boolean }).endActionTriggered = false;
+
+    if (timer.type === 'count_up' || timer.type === 'stopwatch') {
+      timer.remainingSeconds = timer.durationSeconds;
+    } else if (timer.type === 'digital_clock') {
+      timer.elapsedSeconds = 0;
+      timer.remainingSeconds = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+    } else {
+      timer.remainingSeconds = timer.durationSeconds;
+    }
+
+    timer.status = 'running';
+    (timer as unknown as { lastWallClockTime: number }).lastWallClockTime = now.getTime();
+
+    this.activeTimerId = idToRestart;
+    this.runningTimerIds.add(idToRestart);
+    this.ensureTickerRunning();
+
+    this.saveTimerToStorage(timer);
+    this.notifySubscribers();
+  }
+
+  /**
+   * CUE / SELECT: Select a cue by clicking it without starting the countup or countdown
+   * to be an active cue. The only way to make a cue active is when the user hits the start button.
+   */
+  public cue(targetId: string): void {
+    const timer = this.timers.get(targetId);
+    if (!timer || timer.type === 'spacer') return;
+
+    // Set this as the selected/cued timer
+    this.cuedTimerId = targetId;
+
+    // Do NOT set activeTimerId. The only way to make a cue active is when the user hits the start button.
+    // If another timer is actively running, that running timer continues uninterrupted.
+
+    // If this timer is not running, prime its initial display values without starting
+    if (timer.status !== 'running') {
+      timer.elapsedSeconds = 0;
+      timer.status = 'cued';
+      timer.triggeredAlertIds = [];
+      (timer as unknown as { endActionTriggered?: boolean }).endActionTriggered = false;
+
+      if (timer.type !== 'empty') {
+        const now = new Date();
+        timer.endTime = calculateEndTime(timer.durationSeconds, now);
+
+        if (timer.type === 'count_up') {
+          timer.remainingSeconds = timer.startingValueSeconds || 0;
+        } else if (timer.type === 'stopwatch') {
+          timer.remainingSeconds = 0;
+        } else if (timer.type === 'digital_clock') {
+          timer.remainingSeconds = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+        } else {
+          timer.remainingSeconds = timer.durationSeconds;
+        }
+      }
+
+      this.saveTimerToStorage(timer);
+    }
+
+    this.notifySubscribers();
+  }
+
+  /**
+   * MOVE CUE NEXT:
+   * Moves the cued highlight in order through the timer list,
+   * without moving or interrupting the active selected view or running timer.
+   */
+  public moveNextCue(): void {
+    const list = this.lists.get(this.activeListId);
+    if (!list || list.timerIds.length === 0) return;
+
+    // Use current cuedTimerId if set, otherwise fallback to activeTimerId or first item
+    const baseId = this.cuedTimerId || this.activeTimerId || list.timerIds[0];
+    const currentIndex = list.timerIds.indexOf(baseId);
+    let nextId: string | null = null;
+    for (let step = 1; step <= list.timerIds.length; step++) {
+      const candidateId = list.timerIds[(currentIndex + step) % list.timerIds.length];
+      const candidate = this.timers.get(candidateId);
+      if (candidate && candidate.type !== 'spacer') {
+        nextId = candidateId;
+        break;
+      }
+    }
+    if (!nextId) return;
+
+    // Only highlight the cue in order without moving the active selected view
+    this.cuedTimerId = nextId;
+
+    const cuedTimer = this.timers.get(nextId);
+    if (cuedTimer && cuedTimer.status !== 'running' && cuedTimer.type !== 'empty') {
+      const now = new Date();
+      cuedTimer.endTime = calculateEndTime(cuedTimer.durationSeconds, now);
+      this.saveTimerToStorage(cuedTimer);
+    }
+
+    this.notifySubscribers();
+  }
+
+  /**
+   * MOVE CUE PREV:
+   * Moves the cued highlight backwards in order through the timer list,
+   * without moving or interrupting the active selected view or running timer.
+   */
+  public movePrevCue(): void {
+    const list = this.lists.get(this.activeListId);
+    if (!list || list.timerIds.length === 0) return;
+
+    const baseId = this.cuedTimerId || this.activeTimerId || list.timerIds[0];
+    const currentIndex = list.timerIds.indexOf(baseId);
+    let prevId: string | null = null;
+    for (let step = 1; step <= list.timerIds.length; step++) {
+      const candidateId = list.timerIds[(currentIndex - step + list.timerIds.length) % list.timerIds.length];
+      const candidate = this.timers.get(candidateId);
+      if (candidate && candidate.type !== 'spacer') {
+        prevId = candidateId;
+        break;
+      }
+    }
+    if (!prevId) return;
+
+    // Only highlight the cue in order without moving the active selected view
+    this.cuedTimerId = prevId;
+
+    const cuedTimer = this.timers.get(prevId);
+    if (cuedTimer && cuedTimer.status !== 'running' && cuedTimer.type !== 'empty') {
+      const now = new Date();
+      cuedTimer.endTime = calculateEndTime(cuedTimer.durationSeconds, now);
+      this.saveTimerToStorage(cuedTimer);
+    }
+
+    this.notifySubscribers();
+  }
+
+  public skipEvent(): void {
+    this.moveNextCue();
+  }
+
+  public moveToPrevEvent(): void {
+    this.movePrevCue();
+  }
+
+  public cueNext(): void {
+    this.moveNextCue();
+  }
+
+  public cuePrev(): void {
+    this.movePrevCue();
+  }
+
+  public togglePlayPause(targetId?: string): void {
+    const id = targetId || this.activeTimerId;
+    if (!id) {
+      this.start();
+      return;
+    }
+
+    const timer = this.timers.get(id);
+    if (timer?.status === 'running' || timer?.status === 'overtime') {
+      this.pause(id);
+    } else {
+      this.start(id);
+    }
+  }
+
+  // ===========================================================================
+  // DURATION CONTROLS
+  // ===========================================================================
+
+  /**
+   * Increase or decrease duration by specified delta (default 60s / 1 min).
+   */
+  public adjustDuration(secondsDelta: number, targetId?: string): void {
+    const id = targetId || this.activeTimerId || this.cuedTimerId;
+    if (!id) return;
+
+    const timer = this.timers.get(id);
+    if (!timer) return;
+
+    timer.durationSeconds = Math.max(5, timer.durationSeconds + secondsDelta);
+
+    if (timer.type === 'countdown' || timer.type === 'count_down' || timer.type === 'meeting_timer') {
+      if (timer.status === 'idle' || timer.status === 'cued') {
+        timer.remainingSeconds = timer.durationSeconds;
+      } else {
+        timer.remainingSeconds = timer.durationSeconds - timer.elapsedSeconds;
+      }
+
+      if (timer.remainingSeconds > 0) {
+        timer.endTime = calculateEndTime(timer.remainingSeconds, new Date());
+
+        // If the added time passes overtime, return the timer to normal running time
+        if (timer.status === 'overtime') {
+          timer.status = 'running';
+          (timer as unknown as { lastWallClockTime: number }).lastWallClockTime = Date.now();
+          this.runningTimerIds.add(timer.id);
+          this.ensureTickerRunning();
+        }
+
+        // Reset triggered alerts whose threshold is now below current remaining time
+        if (timer.triggeredAlertIds && timer.triggeredAlertIds.length > 0) {
+          timer.triggeredAlertIds = timer.triggeredAlertIds.filter((alertId) => {
+            if (alertId === 'alert1' && timer.alert1 && timer.remainingSeconds > timer.alert1.timeSeconds) {
+              return false;
+            }
+            if (alertId === 'alert2' && timer.alert2 && timer.remainingSeconds > timer.alert2.timeSeconds) {
+              return false;
+            }
+            return true;
+          });
+        }
+      } else if (timer.status === 'running') {
+        this.handleTimerCompletion(timer);
+      }
+    }
+
+    this.saveTimerToStorage(timer);
+    this.notifySubscribers();
+  }
+
+  /**
+   * Manual duration editing (e.g. user types new duration HH:MM:SS directly).
+   */
+  public setTimerDuration(targetId: string, newDurationSec: number): void {
+    const timer = this.timers.get(targetId);
+    if (!timer) return;
+
+    const clampedSec = Math.max(1, newDurationSec);
+    timer.durationSeconds = clampedSec;
+
+    // If timer has not run or is idle/cued, update remaining to match
+    if (timer.elapsedSeconds === 0 || timer.status === 'idle' || timer.status === 'cued') {
+      timer.remainingSeconds = clampedSec;
+    } else if (timer.type === 'countdown' || timer.type === 'count_down' || timer.type === 'meeting_timer') {
+      timer.remainingSeconds = timer.durationSeconds - timer.elapsedSeconds;
+      if (timer.remainingSeconds > 0 && timer.status === 'overtime') {
+        timer.status = 'running';
+        (timer as unknown as { lastWallClockTime: number }).lastWallClockTime = Date.now();
+        this.runningTimerIds.add(timer.id);
+        this.ensureTickerRunning();
+      }
+    }
+
+    this.saveTimerToStorage(timer);
+    this.notifySubscribers();
+  }
+
+  /**
+   * Configurable adjustment increment (e.g. 15s, 30s, 60s, 300s).
+   */
+  public setAdjustmentIncrement(incrementSeconds: number): void {
+    this.durationIncrementSeconds = Math.max(1, incrementSeconds);
+  }
+
+  public getAdjustmentIncrement(): number {
+    return this.durationIncrementSeconds;
+  }
+
+  // ===========================================================================
+  // SPEED CONTROL (1% to 200%)
+  // ===========================================================================
+
+  /**
+   * Adjust timer playback speed between 1% and 200%.
+   * 100% = normal speed (1.0x).
+   * 50% = half speed (0.5x).
+   * 200% = twice as fast (2.0x).
+   */
+  public setSpeed(speedPercent: number, targetId?: string): void {
+    const clampedSpeed = Math.max(1, Math.min(200, Math.round(speedPercent)));
+    const id = targetId || this.activeTimerId;
+
+    if (id) {
+      const timer = this.timers.get(id);
+      if (timer) {
+        timer.speed = clampedSpeed;
+        this.saveTimerToStorage(timer);
+      }
+    }
+
+    this.notifySubscribers();
+  }
+
+  // ===========================================================================
+  // STOPWATCH LAP FUNCTIONALITY
+  // ===========================================================================
+
+  /**
+   * Record a lap split for a stopwatch timer.
+   */
+  public recordLap(targetId?: string): StopwatchLap | null {
+    const id = targetId || this.activeTimerId;
+    if (!id) return null;
+
+    const timer = this.timers.get(id);
+    if (!timer) return null;
+
+    if (!timer.laps) {
+      timer.laps = [];
+    }
+
+    const lapNumber = timer.laps.length + 1;
+    const overallTimeSeconds = timer.elapsedSeconds;
+    const lastLapOverall = timer.laps.length > 0 ? timer.laps[timer.laps.length - 1].overallTimeSeconds : 0;
+    const lapTimeSeconds = Math.max(0, overallTimeSeconds - lastLapOverall);
+
+    const newLap: StopwatchLap = {
+      lapNumber,
+      lapTimeSeconds,
+      overallTimeSeconds,
+      timestamp: Date.now(),
+    };
+
+    timer.laps.push(newLap);
+    this.saveTimerToStorage(timer);
+    this.notifySubscribers();
+    return newLap;
+  }
+
+  public resetLaps(targetId?: string): void {
+    const id = targetId || this.activeTimerId;
+    if (!id) return;
+    const timer = this.timers.get(id);
+    if (!timer) return;
+    timer.laps = [];
+    this.saveTimerToStorage(timer);
+    this.notifySubscribers();
+  }
+
+  // ===========================================================================
+  // DRIFT-FREE MULTI-TIMER TICK ENGINE
+  // ===========================================================================
+
+  private ensureTickerRunning(): void {
+    if (this.intervalHandle === null) {
+      this.intervalHandle = window.setInterval(() => {
+        this.tickAllRunning();
+      }, this.TICK_RATE_MS);
+    }
+  }
+
+  private checkStopTicker(): void {
+    if (this.runningTimerIds.size === 0 && this.intervalHandle !== null) {
+      clearInterval(this.intervalHandle);
+      this.intervalHandle = null;
+    }
+  }
+
+  /**
+   * Advances all currently running timers using wall-clock timestamp delta calculation.
+   * Completely immune to setInterval delay variations and browser tab throttling.
+   */
+  private tickAllRunning(): void {
+    if (this.runningTimerIds.size === 0) return;
+
+    const now = Date.now();
+    const completedTimers: TimerItem[] = [];
+
+    this.runningTimerIds.forEach((id) => {
+      const timer = this.timers.get(id);
+      if (!timer || (timer.status !== 'running' && timer.status !== 'overtime')) {
+        this.runningTimerIds.delete(id);
+        return;
+      }
+
+      const timerObj = timer as unknown as { lastWallClockTime?: number };
+      const lastWall = timerObj.lastWallClockTime || now;
+      timerObj.lastWallClockTime = now;
+
+      const deltaMs = now - lastWall;
+      const speedMultiplier = (timer.speed || 100) / 100;
+      const virtualDeltaSec = (deltaMs / 1000) * speedMultiplier;
+
+      timer.elapsedSeconds += virtualDeltaSec;
+      const isComplete = this.updateComputedSeconds(timer);
+
+      if (!isComplete && timer.status === 'overtime') {
+        timer.status = 'running';
+      }
+
+      // Check all alerts for this timer (only triggers once per run)
+      this.checkTimerAlerts(timer);
+
+      if (isComplete && timer.status !== 'overtime') {
+        completedTimers.push(timer);
+      }
+    });
+
+    completedTimers.forEach((t) => this.handleTimerCompletion(t));
+    this.notifySubscribers();
+  }
+
+  /**
+   * Updates remaining and display seconds based on timer type.
+   * Returns true if timer has hit its target completion point.
+   */
+  private updateComputedSeconds(timer: TimerItem): boolean {
+    const tType = timer.type;
+
+    if (tType === 'count_up') {
+      // Counts upwards towards duration
+      const startingVal = timer.startingValueSeconds || 0;
+      const currentVal = startingVal + timer.elapsedSeconds;
+      timer.remainingSeconds = currentVal;
+      return timer.durationSeconds > 0 && currentVal >= timer.durationSeconds;
+    } else if (tType === 'stopwatch') {
+      // Free-running elapsed count
+      timer.remainingSeconds = timer.elapsedSeconds;
+      return false;
+    } else if (tType === 'digital_clock') {
+      // Real-time clock of the day
+      const d = new Date();
+      timer.remainingSeconds = d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds();
+      return false;
+    } else {
+      // Countdown / meeting_timer
+      const currentRemaining = timer.durationSeconds - timer.elapsedSeconds;
+      timer.remainingSeconds = currentRemaining;
+      return currentRemaining <= 0;
+    }
+  }
+
+  private checkTimerAlerts(timer: TimerItem): void {
+    if (timer.status !== 'running') return;
+    if (timer.type !== 'countdown' && timer.type !== 'count_down' && timer.type !== 'meeting_timer') return;
+
+    if (!timer.triggeredAlertIds) {
+      timer.triggeredAlertIds = [];
+    }
+
+    const remaining = timer.remainingSeconds;
+
+    // Alert 1
+    if (timer.alert1 && !timer.triggeredAlertIds.includes('alert1')) {
+      if (remaining <= timer.alert1.timeSeconds && remaining > 0) {
+        timer.triggeredAlertIds.push('alert1');
+      }
+    }
+
+    // Alert 2
+    if (timer.alert2 && !timer.triggeredAlertIds.includes('alert2')) {
+      if (remaining <= timer.alert2.timeSeconds && remaining > 0) {
+        timer.triggeredAlertIds.push('alert2');
+      }
+    }
+  }
+
+  private handleTimerCompletion(timer: TimerItem): void {
+    // Process standard end action
+    switch (timer.endAction) {
+      case 'blackout':
+        timer.status = 'completed';
+        this.runningTimerIds.delete(timer.id);
+        this.checkStopTicker();
+        this.triggerBlackout(true);
+        break;
+      case 'next_timer':
+        timer.status = 'completed';
+        this.runningTimerIds.delete(timer.id);
+        this.moveNextCue();
+        if (this.cuedTimerId && this.cuedTimerId !== timer.id) {
+          this.start(this.cuedTimerId);
+        } else {
+          this.checkStopTicker();
+        }
+        break;
+      case 'loop':
+        this.restart(timer.id);
+        break;
+      case 'stop':
+        // If explicitly requested to stop, complete and stop ticker
+        timer.status = 'completed';
+        this.runningTimerIds.delete(timer.id);
+        this.checkStopTicker();
+        break;
+      case 'count_up':
+      case 'none':
+      default:
+        // Overtime mode: continues ticking upward in overtime elapsed time
+        timer.status = 'overtime';
+        break;
+    }
+
+    this.saveTimerToStorage(timer);
+  }
+
+  private saveTimerToStorage(timer: TimerItem): void {
+    timer.updatedAt = Date.now();
+    storageService.saveTimer(timer);
+  }
+
+  // ===========================================================================
+  // CRUD & LIST MANAGEMENT
+  // ===========================================================================
+
+  public addTimer(timerData: Partial<TimerItem>): TimerItem {
+    const list = this.lists.get(this.activeListId);
+    const order = list ? list.timerIds.length : 0;
+    const isSpecialRow = timerData.type === 'empty' || timerData.type === 'spacer';
+    const durSec = timerData.durationSeconds ?? (isSpecialRow ? 0 : 300);
+
+    const defaultAlert1: TimerAlert | undefined = isSpecialRow
+      ? undefined
+      : (timerData.alert1 !== undefined 
+          ? timerData.alert1 
+          : (durSec >= 60 ? {
+              id: generateId('alt'),
+              timeSeconds: Math.min(durSec - 10, Math.max(30, Math.round(durSec * 0.4))),
+              color: '#eab308',
+              flash: false,
+              soundEnabled: false,
+              label: 'Alert 1 (Warning)',
+            } : undefined));
+
+    const defaultAlert2: TimerAlert | undefined = isSpecialRow
+      ? undefined
+      : (timerData.alert2 !== undefined 
+          ? timerData.alert2 
+          : (durSec >= 30 ? {
+              id: generateId('alt'),
+              timeSeconds: Math.min(durSec - 5, Math.max(10, Math.round(durSec * 0.2))),
+              color: '#ef4444',
+              flash: true,
+              soundEnabled: false,
+              label: 'Alert 2 (Danger)',
+            } : undefined));
+
+    const newTimer: TimerItem = {
+      id: generateId('t'),
+      name: timerData.name !== undefined ? timerData.name : `Timer ${order + 1}`,
+      order,
+      durationSeconds: durSec,
+      elapsedSeconds: 0,
+      remainingSeconds: durSec,
+      type: timerData.type || 'countdown',
+      status: 'idle',
+      speed: isSpecialRow ? (timerData.speed ?? 0) : Math.max(1, Math.min(200, timerData.speed || 100)),
+      alert1: defaultAlert1,
+      alert2: defaultAlert2,
+      endAction: timerData.endAction || (isSpecialRow ? 'none' : 'count_up'),
+      laps: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      ...timerData,
+    };
+
+    this.timers.set(newTimer.id, newTimer);
+
+    if (list) {
+      list.timerIds.push(newTimer.id);
+      storageService.saveList(list);
+    }
+
+    storageService.saveTimer(newTimer);
+
+    if (!this.cuedTimerId && newTimer.type !== 'spacer') {
+      this.cue(newTimer.id);
+    }
+
+    this.notifySubscribers();
+    return newTimer;
+  }
+
+  public updateTimer(id: string, updates: Partial<TimerItem>): void {
+    const existing = this.timers.get(id);
+    if (!existing) return;
+
+    const updated: TimerItem = {
+      ...existing,
+      ...updates,
+      speed: updates.speed !== undefined
+        ? Math.max(1, Math.min(200, updates.speed))
+        : (existing.speed || (updates.type && updates.type !== 'empty' && updates.type !== 'spacer' ? 100 : existing.speed)),
+      updatedAt: Date.now(),
+    };
+
+    // If duration was changed and timer hasn't run, sync remaining
+    if (updates.durationSeconds !== undefined && existing.elapsedSeconds === 0) {
+      updated.remainingSeconds = updates.durationSeconds;
+    }
+
+    // If timer type was changed while not running, prime its initial counter display
+    if (updates.type !== undefined && existing.status !== 'running' && existing.status !== 'overtime') {
+      updated.elapsedSeconds = 0;
+      if (existing.type === 'empty' && updates.type !== 'empty' && updates.type !== 'spacer') {
+        if (!updated.speed) updated.speed = 100;
+        if (updated.endAction === 'none' && updates.endAction === undefined) {
+          updated.endAction = 'count_up';
+        }
+      }
+      if (updated.type === 'count_up' || updated.type === 'stopwatch') {
+        updated.remainingSeconds = updated.startingValueSeconds || 0;
+      } else if (updated.type === 'digital_clock') {
+        const now = new Date();
+        updated.remainingSeconds = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+      } else if (updated.type === 'empty' || updated.type === 'spacer') {
+        updated.remainingSeconds = 0;
+      } else {
+        if (updated.durationSeconds <= 0) {
+          updated.durationSeconds = 300;
+        }
+        updated.remainingSeconds = updated.durationSeconds;
+      }
+    }
+
+    this.timers.set(id, updated);
+    this.saveTimerToStorage(updated);
+    this.notifySubscribers();
+  }
+
+  public deleteTimer(id: string): void {
+    this.runningTimerIds.delete(id);
+    this.checkStopTicker();
+
+    this.timers.delete(id);
+    const list = this.lists.get(this.activeListId);
+    if (list) {
+      list.timerIds = list.timerIds.filter(tid => tid !== id);
+      storageService.saveList(list);
+    }
+
+    storageService.deleteTimer(id);
+
+    if (this.activeTimerId === id) {
+      this.activeTimerId = list?.timerIds[0] || null;
+    }
+    if (this.cuedTimerId === id) {
+      this.cuedTimerId = list?.timerIds[0] || null;
+    }
+
+    this.notifySubscribers();
+  }
+
+  public duplicateTimer(id: string): TimerItem | null {
+    const original = this.timers.get(id);
+    if (!original) return null;
+
+    const list = this.lists.get(this.activeListId);
+    if (!list) return null;
+
+    const originalIdx = list.timerIds.indexOf(id);
+    const insertIdx = originalIdx >= 0 ? originalIdx + 1 : list.timerIds.length;
+
+    const newTimer: TimerItem = {
+      ...original,
+      id: generateId('t'),
+      name: `${original.name} (Copy)`,
+      order: insertIdx,
+      status: 'idle',
+      elapsedSeconds: 0,
+      remainingSeconds: original.durationSeconds,
+      laps: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    this.timers.set(newTimer.id, newTimer);
+    list.timerIds.splice(insertIdx, 0, newTimer.id);
+
+    // Update order values for all timers in the list
+    list.timerIds.forEach((tid, idx) => {
+      const t = this.timers.get(tid);
+      if (t) {
+        t.order = idx;
+        storageService.saveTimer(t);
+      }
+    });
+
+    storageService.saveList(list);
+    this.cue(newTimer.id);
+    this.notifySubscribers();
+    return newTimer;
+  }
+
+  private clipboardTimer: TimerItem | null = null;
+
+  public copySelectedTimer(id?: string): TimerItem | null {
+    const targetId = id || this.cuedTimerId || this.activeTimerId;
+    if (!targetId) return null;
+    const timer = this.timers.get(targetId);
+    if (!timer) return null;
+    this.clipboardTimer = { ...timer };
+    this.notifySubscribers();
+    return this.clipboardTimer;
+  }
+
+  public cutSelectedTimer(id?: string): TimerItem | null {
+    const targetId = id || this.cuedTimerId || this.activeTimerId;
+    if (!targetId) return null;
+    const copied = this.copySelectedTimer(targetId);
+    if (copied) {
+      this.deleteTimer(targetId);
+    }
+    return copied;
+  }
+
+  public pasteTimer(): TimerItem | null {
+    if (!this.clipboardTimer) return null;
+    return this.duplicateTimer(this.clipboardTimer.id);
+  }
+
+  public deleteSelectedTimer(id?: string): void {
+    const targetId = id || this.cuedTimerId || this.activeTimerId;
+    if (!targetId) return;
+    this.deleteTimer(targetId);
+  }
+
+  public hasClipboardTimer(): boolean {
+    return !!this.clipboardTimer;
+  }
+
+  public reorderTimers(sourceIndex: number, destinationIndex: number): void {
+    const list = this.lists.get(this.activeListId);
+    if (!list) return;
+
+    if (
+      sourceIndex < 0 || 
+      sourceIndex >= list.timerIds.length || 
+      destinationIndex < 0 || 
+      destinationIndex >= list.timerIds.length ||
+      sourceIndex === destinationIndex
+    ) {
+      return;
+    }
+
+    const [movedId] = list.timerIds.splice(sourceIndex, 1);
+    list.timerIds.splice(destinationIndex, 0, movedId);
+
+    // Update order field and persist
+    list.timerIds.forEach((tid, idx) => {
+      const t = this.timers.get(tid);
+      if (t) {
+        t.order = idx;
+        storageService.saveTimer(t);
+      }
+    });
+
+    storageService.saveList(list);
+    this.notifySubscribers();
+  }
+
+  public renameTimer(id: string, newName: string): void {
+    const timer = this.timers.get(id);
+    if (!timer) return;
+    timer.name = newName.trim();
+    timer.updatedAt = Date.now();
+    storageService.saveTimer(timer);
+    this.notifySubscribers();
+  }
+
+  /**
+   * Switch between lists WITHOUT stopping any running timers.
+   * Timers in all other lists continue to tick independently.
+   */
+  public switchList(listId: string): void {
+    if (!this.lists.has(listId)) return;
+    this.activeListId = listId;
+
+    const list = this.lists.get(listId)!;
+    
+    // Check if any timer in the newly selected list is currently running
+    const runningTimerInList = list.timerIds.find(tid => this.runningTimerIds.has(tid));
+    if (runningTimerInList) {
+      // Focus on the timer that is actively running in this list
+      this.activeTimerId = runningTimerInList;
+      this.cuedTimerId = runningTimerInList;
+    } else if (list.timerIds.length > 0) {
+      // Cue the first timer in this list, but do NOT make it active until started
+      this.activeTimerId = null;
+      this.cuedTimerId = list.timerIds[0];
+    } else {
+      this.activeTimerId = null;
+      this.cuedTimerId = null;
+    }
+
+    // Crucial: All timers in this.runningTimerIds remain active and continue ticking uninterrupted
+    this.notifySubscribers();
+  }
+
+  /**
+   * 1. Create a new list.
+   */
+  public addList(name?: string, description?: string): TimerList {
+    const sortedLists = this.getAllLists();
+    const listNumber = sortedLists.length + 1;
+    const finalName = (name && name.trim()) ? name.trim() : `List ${listNumber}`;
+    const id = generateId('list');
+    
+    const maxOrder = sortedLists.reduce((max, l) => Math.max(max, l.order ?? 0), -1);
+
+    const newList: TimerList = {
+      id,
+      name: finalName,
+      description: description || '',
+      order: maxOrder + 1,
+      timerIds: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    this.lists.set(id, newList);
+    storageService.saveList(newList);
+    this.switchList(id);
+    return newList;
+  }
+
+  /**
+   * 2. Rename list.
+   */
+  public renameList(listId: string, newName: string): void {
+    const list = this.lists.get(listId);
+    if (!list) return;
+    const trimmed = newName.trim();
+    if (!trimmed) return;
+
+    list.name = trimmed;
+    list.updatedAt = Date.now();
+    storageService.saveList(list);
+    this.notifySubscribers();
+  }
+
+  /**
+   * 3. Delete list (maintains at least 1 list at all times).
+   */
+  public deleteList(listId: string): boolean {
+    if (this.lists.size <= 1) {
+      return false; // Cannot delete the sole remaining list
+    }
+
+    const listToDelete = this.lists.get(listId);
+    if (!listToDelete) return false;
+
+    // If deleting the active list, switch to an adjacent list first
+    if (this.activeListId === listId) {
+      const allLists = this.getAllLists();
+      const currentIndex = allLists.findIndex(l => l.id === listId);
+      const nextIndex = currentIndex > 0 ? currentIndex - 1 : 1;
+      const targetList = allLists[nextIndex];
+      if (targetList) {
+        this.switchList(targetList.id);
+      }
+    }
+
+    // Remove all timers belonging to this list
+    listToDelete.timerIds.forEach(tid => {
+      this.runningTimerIds.delete(tid);
+      this.timers.delete(tid);
+      storageService.deleteTimer(tid);
+    });
+
+    this.lists.delete(listId);
+    storageService.deleteList(listId);
+
+    // Normalize remaining list orders
+    const remainingLists = this.getAllLists();
+    remainingLists.forEach((l, idx) => {
+      l.order = idx;
+    });
+    storageService.saveListsBatch(remainingLists);
+
+    this.checkStopTicker();
+    this.notifySubscribers();
+    return true;
+  }
+
+  /**
+   * 4. Duplicate list (deep clones list and all timers with new unique IDs).
+   */
+  public duplicateList(listId: string): TimerList | null {
+    const original = this.lists.get(listId);
+    if (!original) return null;
+
+    const sortedLists = this.getAllLists();
+    const originalIndex = sortedLists.findIndex(l => l.id === listId);
+
+    const newId = generateId('list');
+    const newTimerIds: string[] = [];
+    const newTimers: TimerItem[] = [];
+
+    // Clone all timers in the original list
+    original.timerIds.forEach((oldTimerId, idx) => {
+      const oldTimer = this.timers.get(oldTimerId);
+      if (oldTimer) {
+        const clonedTimerId = generateId('t');
+        const clonedTimer: TimerItem = {
+          ...oldTimer,
+          id: clonedTimerId,
+          order: idx,
+          status: 'idle',
+          elapsedSeconds: 0,
+          remainingSeconds: oldTimer.durationSeconds,
+          laps: [],
+          createdAt: Date.now() + idx,
+          updatedAt: Date.now() + idx,
+        };
+        this.timers.set(clonedTimerId, clonedTimer);
+        newTimers.push(clonedTimer);
+        newTimerIds.push(clonedTimerId);
+      }
+    });
+
+    if (newTimers.length > 0) {
+      storageService.saveTimersBatch(newTimers);
+    }
+
+    const duplicatedList: TimerList = {
+      id: newId,
+      name: `${original.name} (Copy)`,
+      description: original.description || '',
+      order: (original.order ?? originalIndex) + 1,
+      timerIds: newTimerIds,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    // Insert duplicated list right after original in list array
+    sortedLists.splice(originalIndex + 1, 0, duplicatedList);
+    sortedLists.forEach((l, idx) => {
+      l.order = idx;
+      this.lists.set(l.id, l);
+    });
+
+    storageService.saveListsBatch(sortedLists);
+    this.switchList(newId);
+    return duplicatedList;
+  }
+
+  /**
+   * 5. Rearrange lists (reorder list tabs).
+   */
+  public reorderLists(sourceIndex: number, destinationIndex: number): void {
+    const sorted = this.getAllLists();
+    if (
+      sourceIndex < 0 || 
+      sourceIndex >= sorted.length || 
+      destinationIndex < 0 || 
+      destinationIndex >= sorted.length ||
+      sourceIndex === destinationIndex
+    ) {
+      return;
+    }
+
+    const [moved] = sorted.splice(sourceIndex, 1);
+    sorted.splice(destinationIndex, 0, moved);
+
+    sorted.forEach((l, idx) => {
+      l.order = idx;
+      this.lists.set(l.id, l);
+    });
+
+    storageService.saveListsBatch(sorted);
+    this.notifySubscribers();
+  }
+
+  /**
+   * Move list left or right.
+   */
+  public moveList(listId: string, direction: 'left' | 'right'): void {
+    const sorted = this.getAllLists();
+    const currentIndex = sorted.findIndex(l => l.id === listId);
+    if (currentIndex === -1) return;
+
+    const targetIndex = direction === 'left' ? currentIndex - 1 : currentIndex + 1;
+    if (targetIndex >= 0 && targetIndex < sorted.length) {
+      this.reorderLists(currentIndex, targetIndex);
+    }
+  }
+
+  /**
+   * 7. Save / Export individual list to structured JSON.
+   */
+  public exportList(listId: string): ListExportData | null {
+    const list = this.lists.get(listId);
+    if (!list) return null;
+
+    const listTimers = list.timerIds
+      .map(tid => this.timers.get(tid))
+      .filter((t): t is TimerItem => Boolean(t));
+
+    return {
+      version: '1.0.0',
+      exportedAt: Date.now(),
+      type: 'single_list',
+      list,
+      timers: listTimers,
+    };
+  }
+
+  /**
+   * Download individual list JSON file.
+   */
+  public downloadListJson(listId: string): void {
+    const exportData = this.exportList(listId);
+    if (!exportData) return;
+
+    const safeName = exportData.list.name
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'timer-list';
+    
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `protimer-${safeName}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  /**
+   * Export active list to standard CSV file.
+   */
+  public downloadListCsv(targetListId?: string): void {
+    const listId = targetListId || this.activeListId;
+    const list = this.lists.get(listId);
+    if (!list) return;
+
+    const timers = list.timerIds
+      .map((id) => this.timers.get(id))
+      .filter((t): t is TimerItem => !!t);
+
+    const escapeCsv = (str: string) => `"${(str || '').replace(/"/g, '""')}"`;
+
+    let csvContent = 'Name,Duration,Type,End Action,Alert 1,Alert 2,Scheduled Start\r\n';
+
+    timers.forEach((t) => {
+      const durFormatted = formatSeconds(t.durationSeconds, true);
+      const a1Formatted = t.alert1 ? formatSeconds(t.alert1.timeSeconds, true) : '';
+      const a2Formatted = t.alert2 ? formatSeconds(t.alert2.timeSeconds, true) : '';
+      const sched = t.scheduledStartTime || '';
+
+      csvContent += [
+        escapeCsv(t.name),
+        escapeCsv(durFormatted),
+        escapeCsv(t.type),
+        escapeCsv(t.endAction),
+        escapeCsv(a1Formatted),
+        escapeCsv(a2Formatted),
+        escapeCsv(sched),
+      ].join(',') + '\r\n';
+    });
+
+    const safeName = list.name.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `protimer-${safeName}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  /**
+   * Import cues from CSV text into a list.
+   */
+  public async importCsv(
+    csvText: string,
+    targetListId?: string
+  ): Promise<{ success: boolean; count: number; message: string }> {
+    try {
+      const listId = targetListId || this.activeListId;
+      const list = this.lists.get(listId);
+      if (!list) return { success: false, count: 0, message: 'Target list not found.' };
+
+      const lines = csvText.split(/\r?\n/).filter((l) => l.trim().length > 0);
+      if (lines.length === 0) {
+        return { success: false, count: 0, message: 'Empty CSV file.' };
+      }
+
+      let startIndex = 0;
+      const firstLineLower = lines[0].toLowerCase();
+      if (firstLineLower.includes('name') || firstLineLower.includes('duration')) {
+        startIndex = 1;
+      }
+
+      const parseCsvLine = (line: string): string[] => {
+        const result: string[] = [];
+        let cur = '';
+        let insideQuote = false;
+        for (let i = 0; i < line.length; i++) {
+          const char = line[i];
+          if (char === '"') {
+            if (insideQuote && line[i + 1] === '"') {
+              cur += '"';
+              i++;
+            } else {
+              insideQuote = !insideQuote;
+            }
+          } else if (char === ',' && !insideQuote) {
+            result.push(cur.trim());
+            cur = '';
+          } else {
+            cur += char;
+          }
+        }
+        result.push(cur.trim());
+        return result;
+      };
+
+      const parseTimeToSec = (str: string): number => {
+        if (!str) return 300;
+        if (/^\d+$/.test(str)) return parseInt(str, 10);
+        const parts = str.split(':').map((p) => parseInt(p, 10) || 0);
+        if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+        if (parts.length === 2) return parts[0] * 60 + parts[1];
+        return 300;
+      };
+
+      let count = 0;
+      for (let i = startIndex; i < lines.length; i++) {
+        const cols = parseCsvLine(lines[i]);
+        if (cols.length === 0 || !cols[0]) continue;
+
+        const name = cols[0];
+        const durSec = parseTimeToSec(cols[1]);
+        const type = (cols[2] || 'countdown') as any;
+        const endAction = (cols[3] || 'stop') as any;
+        const a1Sec = cols[4] ? parseTimeToSec(cols[4]) : undefined;
+        const a2Sec = cols[5] ? parseTimeToSec(cols[5]) : undefined;
+        const scheduledStartTime = cols[6] || undefined;
+
+        const newTimer: TimerItem = {
+          id: generateId('t'),
+          name,
+          order: list.timerIds.length,
+          durationSeconds: durSec,
+          elapsedSeconds: 0,
+          remainingSeconds: durSec,
+          type: ['countdown', 'count_up', 'stopwatch', 'digital_clock', 'meeting_timer'].includes(type)
+            ? type
+            : 'countdown',
+          status: 'idle',
+          speed: 100,
+          endAction: ['stop', 'count_up', 'next_timer', 'loop', 'blackout'].includes(endAction)
+            ? endAction
+            : 'stop',
+          scheduledStartTime,
+          alert1: a1Sec !== undefined ? {
+            id: generateId('alt'),
+            timeSeconds: a1Sec,
+            color: '#eab308',
+            flash: false,
+            soundEnabled: true,
+            label: 'Warning',
+          } : undefined,
+          alert2: a2Sec !== undefined ? {
+            id: generateId('alt'),
+            timeSeconds: a2Sec,
+            color: '#ef4444',
+            flash: true,
+            soundEnabled: true,
+            label: 'Danger',
+          } : undefined,
+          createdAt: Date.now() + count,
+          updatedAt: Date.now() + count,
+        };
+
+        this.timers.set(newTimer.id, newTimer);
+        list.timerIds.push(newTimer.id);
+        await storageService.saveTimer(newTimer);
+        count++;
+      }
+
+      await storageService.saveList(list);
+      this.notifySubscribers();
+
+      return {
+        success: true,
+        count,
+        message: `Successfully imported ${count} cue${count === 1 ? '' : 's'}.`,
+      };
+    } catch (e: any) {
+      return { success: false, count: 0, message: e.message || 'CSV import failed.' };
+    }
+  }
+
+  /**
+   * 9. Export all lists & timers (full system backup).
+   */
+  public exportAllLists(): AllListsBackupData {
+    const allLists = this.getAllLists();
+    const allTimers = Array.from(this.timers.values());
+
+    return {
+      version: '1.0.0',
+      exportedAt: Date.now(),
+      type: 'all_lists',
+      activeListId: this.activeListId,
+      lists: allLists,
+      timers: allTimers,
+    };
+  }
+
+  /**
+   * Download full system backup JSON file.
+   */
+  public downloadAllListsBackup(): void {
+    const backupData = this.exportAllLists();
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `protimer-all-lists-${dateStr}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  /**
+   * 8. Import list from JSON string or object.
+   * Supports single list export or full backup file.
+   */
+  public async importList(
+    jsonData: string | object, 
+    mode: 'add' | 'replace' = 'add'
+  ): Promise<{ success: boolean; message: string; listId?: string }> {
+    try {
+      const data = typeof jsonData === 'string' ? JSON.parse(jsonData) : jsonData;
+      if (!data || typeof data !== 'object') {
+        return { success: false, message: 'Invalid JSON data provided.' };
+      }
+
+      // Check if this is an all-lists backup
+      if (data.type === 'all_lists' && Array.isArray(data.lists)) {
+        if (mode === 'replace') {
+          // Clear current lists (except running timers are stopped safely)
+          this.runningTimerIds.clear();
+          this.checkStopTicker();
+          this.timers.clear();
+          this.lists.clear();
+        }
+
+        const importedLists: TimerList[] = [];
+        const importedTimers: TimerItem[] = [];
+
+        for (const rawList of data.lists) {
+          const listId = mode === 'replace' ? rawList.id : generateId('list');
+          const listTimerIds: string[] = [];
+
+          // Map and clone associated timers
+          if (Array.isArray(data.timers)) {
+            const listOldTimers = data.timers.filter((t: TimerItem) => rawList.timerIds?.includes(t.id));
+            listOldTimers.forEach((oldTimer: TimerItem, idx: number) => {
+              const newTid = mode === 'replace' ? oldTimer.id : generateId('t');
+              const newTimer: TimerItem = {
+                ...oldTimer,
+                id: newTid,
+                order: idx,
+                status: 'idle',
+                elapsedSeconds: 0,
+                remainingSeconds: oldTimer.durationSeconds,
+                updatedAt: Date.now(),
+              };
+              this.timers.set(newTid, newTimer);
+              importedTimers.push(newTimer);
+              listTimerIds.push(newTid);
+            });
+          }
+
+          const newList: TimerList = {
+            ...rawList,
+            id: listId,
+            name: mode === 'replace' ? rawList.name : `${rawList.name} (Imported)`,
+            order: importedLists.length,
+            timerIds: listTimerIds,
+            updatedAt: Date.now(),
+          };
+
+          this.lists.set(listId, newList);
+          importedLists.push(newList);
+        }
+
+        await storageService.saveTimersBatch(importedTimers);
+        await storageService.saveListsBatch(importedLists);
+
+        if (importedLists.length > 0) {
+          this.switchList(importedLists[0].id);
+        }
+
+        return { 
+          success: true, 
+          message: `Successfully imported ${importedLists.length} lists with ${importedTimers.length} timers.`,
+          listId: importedLists[0]?.id
+        };
+      }
+
+      // Single list import
+      const listObj = data.list || (data.name && data.timerIds ? data : null);
+      if (!listObj || !listObj.name) {
+        return { success: false, message: 'Invalid list format: missing list name.' };
+      }
+
+      const sortedLists = this.getAllLists();
+      const newListId = generateId('list');
+      const importedTimers: TimerItem[] = [];
+      const newTimerIds: string[] = [];
+
+      const rawTimers: TimerItem[] = Array.isArray(data.timers) ? data.timers : [];
+
+      rawTimers.forEach((rawTimer, idx) => {
+        const newTid = generateId('t');
+        const duration = Number(rawTimer.durationSeconds) || 300;
+        const newTimer: TimerItem = {
+          ...rawTimer,
+          id: newTid,
+          order: idx,
+          durationSeconds: duration,
+          elapsedSeconds: 0,
+          remainingSeconds: duration,
+          status: 'idle',
+          speed: Math.max(1, Math.min(200, Number(rawTimer.speed) || 100)),
+          createdAt: Date.now() + idx,
+          updatedAt: Date.now() + idx,
+        };
+        this.timers.set(newTid, newTimer);
+        importedTimers.push(newTimer);
+        newTimerIds.push(newTid);
+      });
+
+      if (importedTimers.length > 0) {
+        await storageService.saveTimersBatch(importedTimers);
+      }
+
+      const newList: TimerList = {
+        id: newListId,
+        name: `${listObj.name} (Imported)`,
+        description: listObj.description || '',
+        order: sortedLists.length,
+        timerIds: newTimerIds,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+
+      this.lists.set(newListId, newList);
+      await storageService.saveList(newList);
+
+      this.switchList(newListId);
+      return {
+        success: true,
+        message: `Imported list "${newList.name}" with ${newTimerIds.length} timers.`,
+        listId: newListId,
+      };
+    } catch (err) {
+      console.error('Failed to import list:', err);
+      return { success: false, message: `Import error: ${err instanceof Error ? err.message : String(err)}` };
+    }
+  }
+
+  /**
+   * Get the number of timers currently running in a specific list.
+   */
+  public getRunningTimerCount(listId: string): number {
+    const list = this.lists.get(listId);
+    if (!list) return 0;
+    return list.timerIds.filter(tid => this.runningTimerIds.has(tid)).length;
+  }
+
+  /**
+   * Return all currently running timers across all lists with their parent list.
+   */
+  public getAllRunningTimers(): { timer: TimerItem; list: TimerList }[] {
+    const results: { timer: TimerItem; list: TimerList }[] = [];
+    this.runningTimerIds.forEach(tid => {
+      const timer = this.timers.get(tid);
+      if (timer && timer.status === 'running') {
+        const parentList = Array.from(this.lists.values()).find(l => l.timerIds.includes(tid));
+        if (parentList) {
+          results.push({ timer, list: parentList });
+        }
+      }
+    });
+    return results;
+  }
+
+  /**
+   * Automated verification test proving that:
+   * 1. Timers in List 1 and List 2 run simultaneously.
+   * 2. Switching between lists does NOT stop running timers.
+   */
+  public async runMultiListIndependenceTest(): Promise<{ success: boolean; message: string; logs: string[] }> {
+    const logs: string[] = [];
+    logs.push('[Test Start] Initiating Multi-List Independence and Concurrent Running Test...');
+
+    const sortedLists = this.getAllLists();
+    if (sortedLists.length < 2) {
+      this.addList('Test List 2');
+    }
+
+    const list1 = this.getAllLists()[0];
+    const list2 = this.getAllLists()[1];
+    logs.push(`[List Setup] List 1: "${list1.name}", List 2: "${list2.name}"`);
+
+    // Ensure both lists have at least one timer
+    if (list1.timerIds.length === 0) {
+      this.activeListId = list1.id;
+      this.addTimer({ name: 'List 1 Test Timer', durationSeconds: 600 });
+    }
+    if (list2.timerIds.length === 0) {
+      this.activeListId = list2.id;
+      this.addTimer({ name: 'List 2 Test Timer', durationSeconds: 600 });
+    }
+
+    const timer1Id = list1.timerIds[0];
+    const timer2Id = list2.timerIds[0];
+
+    // Step 1: Switch to List 1 and start its timer
+    this.switchList(list1.id);
+    this.start(timer1Id);
+    logs.push(`[Step 1] Started timer in List 1 (${timer1Id}). Status: ${this.timers.get(timer1Id)?.status}`);
+
+    // Step 2: Switch to List 2 and verify timer 1 is STILL running in the background!
+    this.switchList(list2.id);
+    const timer1StillRunning = this.runningTimerIds.has(timer1Id);
+    logs.push(`[Step 2] Switched to List 2. Is List 1 timer still running in background? ${timer1StillRunning ? 'YES (PASS)' : 'NO (FAIL)'}`);
+
+    // Step 3: Start timer in List 2 simultaneously
+    this.start(timer2Id);
+    logs.push(`[Step 3] Started timer in List 2 (${timer2Id}). Status: ${this.timers.get(timer2Id)?.status}`);
+
+    // Step 4: Verify both timers are concurrently in running set
+    const bothRunning = this.runningTimerIds.has(timer1Id) && this.runningTimerIds.has(timer2Id);
+    logs.push(`[Step 4] Are both timers running concurrently in different lists? ${bothRunning ? 'YES (PASS)' : 'NO (FAIL)'}`);
+
+    // Step 5: Wait 350ms to allow tick updates
+    const initialElapsed1 = this.timers.get(timer1Id)?.elapsedSeconds || 0;
+    const initialElapsed2 = this.timers.get(timer2Id)?.elapsedSeconds || 0;
+
+    await new Promise(r => setTimeout(r, 350));
+
+    const finalElapsed1 = this.timers.get(timer1Id)?.elapsedSeconds || 0;
+    const finalElapsed2 = this.timers.get(timer2Id)?.elapsedSeconds || 0;
+
+    const timer1Advanced = finalElapsed1 > initialElapsed1;
+    const timer2Advanced = finalElapsed2 > initialElapsed2;
+
+    logs.push(`[Step 5] Wall-clock advancement verification:`);
+    logs.push(`   List 1 Timer: ${initialElapsed1.toFixed(2)}s -> ${finalElapsed1.toFixed(2)}s (Advanced: ${timer1Advanced})`);
+    logs.push(`   List 2 Timer: ${initialElapsed2.toFixed(2)}s -> ${finalElapsed2.toFixed(2)}s (Advanced: ${timer2Advanced})`);
+
+    const passed = bothRunning && timer1StillRunning && timer1Advanced && timer2Advanced;
+
+    logs.push(passed 
+      ? '[Test Result] SUCCESS: Timers in separate lists run simultaneously with independent drift-free wall-clock tickers.' 
+      : '[Test Result] FAILURE: Timers did not run independently.'
+    );
+
+    return {
+      success: passed,
+      message: passed 
+        ? 'Multi-list independence verified: All timers in background and foreground lists run simultaneously and drift-free.' 
+        : 'Multi-list test failed.',
+      logs,
+    };
+  }
+
+  public resetCompletedTimers(): void {
+    const list = this.lists.get(this.activeListId);
+    if (!list) return;
+    list.timerIds.forEach(id => {
+      const t = this.timers.get(id);
+      if (t) {
+        t.elapsedSeconds = 0;
+        t.status = 'idle';
+        t.remainingSeconds = t.durationSeconds;
+        storageService.saveTimer(t);
+      }
+    });
+    this.runningTimerIds.clear();
+    this.checkStopTicker();
+    this.notifySubscribers();
+  }
+
+  // ===========================================================================
+  // OBSERVER & SNAPSHOT
+  // ===========================================================================
+
+  public subscribe(cb: TimerManagerSubscriber): () => void {
+    this.subscribers.add(cb);
+    cb(this.getSnapshot(), this.getActiveListTimers());
+
+    return () => {
+      this.subscribers.delete(cb);
+    };
+  }
+
+  private notifySubscribers(): void {
+    const snapshot = this.getSnapshot();
+    const timers = this.getActiveListTimers();
+    this.subscribers.forEach(cb => {
+      try {
+        cb(snapshot, timers);
+      } catch (err) {
+        console.error('Error notifying timer subscriber:', err);
+      }
+    });
+  }
+
+  public getSnapshot(): TimerSnapshot {
+    const active = this.activeTimerId ? this.timers.get(this.activeTimerId) : null;
+    const cued = this.cuedTimerId ? this.timers.get(this.cuedTimerId) : null;
+    const displayTarget = active || cued;
+
+    const dur = displayTarget?.durationSeconds || 1;
+    const currentRemaining = active ? active.remainingSeconds : (cued ? cued.remainingSeconds : 0);
+    const isOvertime = active ? (active.status === 'overtime' || currentRemaining < 0) : false;
+    const progressPercent = active?.durationSeconds 
+      ? Math.min(100, Math.max(0, (active.elapsedSeconds / active.durationSeconds) * 100))
+      : 0;
+
+    // Compute alert colors based on active timer status and threshold
+    const alertInfo = computeActiveAlert(active || cued, currentRemaining, active?.status || 'idle');
+    const alertColor = alertInfo.color;
+    const isFlash = alertInfo.flash;
+    const isOnOff = alertInfo.onOff;
+
+    return {
+      activeTimerId: this.activeTimerId,
+      cuedTimerId: this.cuedTimerId,
+      activeListId: this.activeListId,
+      status: active?.status || 'idle',
+      currentSeconds: currentRemaining,
+      durationSeconds: dur,
+      progressPercent,
+      isOvertime,
+      overtimeSeconds: isOvertime ? Math.abs(currentRemaining) : 0,
+      speed: displayTarget?.speed || 100,
+      alertColor,
+      isFlash,
+      isOnOff,
+      timestamp: Date.now(),
+    };
+  }
+
+  public getActiveTimer(): TimerItem | null {
+    return this.activeTimerId ? this.timers.get(this.activeTimerId) || null : null;
+  }
+
+  public getCuedTimer(): TimerItem | null {
+    return this.cuedTimerId ? this.timers.get(this.cuedTimerId) || null : null;
+  }
+
+  public getNextTimer(): TimerItem | null {
+    const list = this.lists.get(this.activeListId);
+    if (!list) return null;
+    if (this.cuedTimerId && this.cuedTimerId !== this.activeTimerId) {
+      return this.timers.get(this.cuedTimerId) || null;
+    }
+    if (this.activeTimerId) {
+      const idx = list.timerIds.indexOf(this.activeTimerId);
+      if (idx !== -1 && idx + 1 < list.timerIds.length) {
+        return this.timers.get(list.timerIds[idx + 1]) || null;
+      }
+    }
+    return null;
+  }
+
+  public getActiveListTimers(): TimerItem[] {
+    const list = this.lists.get(this.activeListId);
+    if (!list) return [];
+    return list.timerIds.map(id => this.timers.get(id)!).filter(Boolean);
+  }
+
+  public getAllLists(): TimerList[] {
+    return Array.from(this.lists.values()).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  }
+
+  public getTimerById(id: string): TimerItem | null {
+    return this.timers.get(id) || null;
+  }
+}
+
+export const timerManagerService = new TimerManagerService();
