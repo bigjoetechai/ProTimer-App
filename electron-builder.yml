@@ -42,7 +42,6 @@ nsis:
   shortcutName: ProTimer
   runAfterFinish: true
   deleteAppDataOnUninstall: false
-  license: build/license.txt
   artifactName: ProTimer-Setup.exe
   uninstallDisplayName: ProTimer
 

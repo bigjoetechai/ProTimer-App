@@ -107,6 +107,20 @@ export interface AllListsBackupData {
   timers: TimerItem[];
 }
 
+export interface TimerRunLogEntry {
+  id: string;
+  timerId: string;
+  timerName: string;
+  timerType: TimerType;
+  listId: string;
+  listName: string;
+  plannedDurationSeconds: number;
+  startTimestamp: number;
+  stopTimestamp: number | null;
+  elapsedSeconds: number;
+  status: 'running' | 'paused' | 'stopped' | 'completed';
+}
+
 export interface TimerSnapshot {
   activeTimerId: string | null;
   cuedTimerId: string | null;
@@ -123,3 +137,4 @@ export interface TimerSnapshot {
   isOnOff?: boolean;
   timestamp: number;
 }
+

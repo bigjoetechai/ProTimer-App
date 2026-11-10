@@ -2,26 +2,63 @@
  * Formatting and parsing utilities for production timers and clock displays.
  */
 
+import { DEFAULT_PREFERENCES, AppPreferences } from '../types/settings';
+
+function getActiveFormattingPrefs(): AppPreferences {
+  if (typeof window === 'undefined') return DEFAULT_PREFERENCES;
+  try {
+    const raw = localStorage.getItem('protimer_preferences');
+    if (raw) {
+      return { ...DEFAULT_PREFERENCES, ...JSON.parse(raw) };
+    }
+  } catch {
+    // Ignore storage read error
+  }
+  return DEFAULT_PREFERENCES;
+}
+
 /**
- * Formats seconds into HH:MM:SS or MM:SS
+ * Formats seconds into HH:MM:SS or MM:SS respecting user Countdown & General Preferences.
  */
 export function formatSeconds(seconds: number, forceHours = true, forceOvertimePlus = false): string {
+  const prefs = getActiveFormattingPrefs();
   const isOvertime = seconds < 0 || forceOvertimePlus;
   const absSeconds = Math.abs(Math.round(seconds));
 
+  const hideZeros = prefs.hideLeadingZeros ?? false;
+  const displayHours = prefs.displayHours ?? true;
+  const displaySeconds = prefs.displaySeconds ?? true;
+  const hideHoursUnderOneHour = prefs.hideHoursUnderOneHour ?? false;
+  const sumHoursIntoMinutes = prefs.sumHoursIntoMinutes ?? false;
+
   const hours = Math.floor(absSeconds / 3600);
-  const minutes = Math.floor((absSeconds % 3600) / 60);
+  const minutes = sumHoursIntoMinutes
+    ? Math.floor(absSeconds / 60)
+    : Math.floor((absSeconds % 3600) / 60);
   const remainingSecs = absSeconds % 60;
 
   const pad = (n: number) => n.toString().padStart(2, '0');
+  const formatLead = (n: number) => (hideZeros ? n.toString() : pad(n));
 
-  let result = '';
-  if (hours > 0 || forceHours) {
-    result = `${pad(hours)}:${pad(minutes)}:${pad(remainingSecs)}`;
+  const showHoursField =
+    !sumHoursIntoMinutes &&
+    displayHours &&
+    (hours > 0 || (forceHours && !hideHoursUnderOneHour));
+
+  const parts: string[] = [];
+
+  if (showHoursField) {
+    parts.push(formatLead(hours));
+    parts.push(pad(minutes));
   } else {
-    result = `${pad(minutes)}:${pad(remainingSecs)}`;
+    parts.push(formatLead(minutes));
   }
 
+  if (displaySeconds) {
+    parts.push(pad(remainingSecs));
+  }
+
+  const result = parts.join(':');
   return isOvertime ? `+${result}` : result;
 }
 
@@ -40,17 +77,23 @@ export function parseTimeToSeconds(timeStr: string): number {
     // MM:SS
     return parts[0] * 60 + parts[1];
   } else if (parts.length === 1) {
-    // SS or Minutes? Usually minutes in production inputs if single number
     return parts[0] * 60;
   }
   return 0;
 }
 
 /**
- * Formats current Date into HH:MM:SS
+ * Formats current Date into HH:MM:SS or HH:MM respecting Clock Options in Preferences.
  */
-export function formatClock(date: Date = new Date(), is24h = true): string {
+export function formatClock(date: Date = new Date(), is24hOverride?: boolean): string {
+  const prefs = getActiveFormattingPrefs();
+  const is24h = is24hOverride !== undefined ? is24hOverride : (prefs.timeFormat24h ?? true);
+  const showSeconds = prefs.clockDisplaySeconds ?? false;
+  const hideZeros = prefs.hideLeadingZeros ?? false;
+
   const pad = (n: number) => n.toString().padStart(2, '0');
+  const formatLead = (n: number) => (hideZeros ? n.toString() : pad(n));
+
   let hours = date.getHours();
   const minutes = pad(date.getMinutes());
   const seconds = pad(date.getSeconds());
@@ -58,10 +101,14 @@ export function formatClock(date: Date = new Date(), is24h = true): string {
   if (!is24h) {
     const ampm = hours >= 12 ? 'PM' : 'AM';
     hours = hours % 12 || 12;
-    return `${pad(hours)}:${minutes}:${seconds} ${ampm}`;
+    return showSeconds
+      ? `${formatLead(hours)}:${minutes}:${seconds} ${ampm}`
+      : `${formatLead(hours)}:${minutes} ${ampm}`;
   }
 
-  return `${pad(hours)}:${minutes}:${seconds}`;
+  return showSeconds
+    ? `${formatLead(hours)}:${minutes}:${seconds}`
+    : `${formatLead(hours)}:${minutes}`;
 }
 
 /**
@@ -69,5 +116,5 @@ export function formatClock(date: Date = new Date(), is24h = true): string {
  */
 export function calculateEndTime(durationSeconds: number, fromDate: Date = new Date()): string {
   const endDate = new Date(fromDate.getTime() + durationSeconds * 1000);
-  return formatClock(endDate, true);
+  return formatClock(endDate);
 }

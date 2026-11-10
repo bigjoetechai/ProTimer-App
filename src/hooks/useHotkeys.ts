@@ -26,13 +26,34 @@ export function useHotkeys(keyMap: HotkeyMap, enabled = true) {
 
       let keyIdentifier = e.key;
       if (e.code === 'Space') keyIdentifier = 'Space';
+
+      const modifiers: string[] = [];
+      if (e.ctrlKey || e.metaKey) {
+        modifiers.push('Ctrl');
+      }
       if (e.shiftKey && keyIdentifier !== 'Shift') {
-        keyIdentifier = `Shift+${keyIdentifier}`;
+        modifiers.push('Shift');
       }
 
-      if (keyMap[keyIdentifier] || keyMap[keyIdentifier.toLowerCase()]) {
+      if (
+        modifiers.length > 0 &&
+        keyIdentifier !== 'Control' &&
+        keyIdentifier !== 'Meta' &&
+        keyIdentifier !== 'Shift'
+      ) {
+        keyIdentifier = `${modifiers.join('+')}+${keyIdentifier}`;
+      }
+
+      const handler =
+        keyMap[keyIdentifier] ||
+        keyMap[keyIdentifier.toLowerCase()] ||
+        (modifiers.length > 0
+          ? keyMap[`${modifiers.join('+')}+${e.key.toLowerCase()}`] ||
+            keyMap[`${modifiers.join('+')}+${e.key.toUpperCase()}`]
+          : undefined);
+
+      if (handler) {
         e.preventDefault();
-        const handler = keyMap[keyIdentifier] || keyMap[keyIdentifier.toLowerCase()];
         handler();
       }
     };

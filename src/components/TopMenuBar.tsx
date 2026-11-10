@@ -16,7 +16,7 @@ import {
   ChevronDown,
   User,
   Copy,
-  Volume2,
+  Bell,
   Monitor,
   Keyboard,
   Check,
@@ -41,6 +41,10 @@ interface TopMenuBarProps {
   onQuickAddDuration: (durationSec: number, name: string) => void;
   onUndo: () => void;
   onRedo: () => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
+  undoLabel?: string | null;
+  redoLabel?: string | null;
   onCopy?: () => void;
   onCut?: () => void;
   onPaste?: () => void;
@@ -69,6 +73,10 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
   onQuickAddDuration,
   onUndo,
   onRedo,
+  canUndo = false,
+  canRedo = false,
+  undoLabel,
+  redoLabel,
   onCopy,
   onCut,
   onPaste,
@@ -365,25 +373,31 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
 
               <button
                 type="button"
+                disabled={!canUndo}
                 onClick={() => {
                   onUndo();
                   setActiveMenu(null);
                 }}
-                className={`${dropdownItemClass} justify-between`}
+                className={`${dropdownItemClass} justify-between ${!canUndo ? 'opacity-40 cursor-not-allowed' : ''}`}
               >
-                <span>Undo</span>
+                <span className="truncate max-w-[140px]">
+                  {undoLabel ? `Undo (${undoLabel})` : 'Undo'}
+                </span>
                 <span className={`text-[11px] font-mono ${isDark ? 'text-neutral-400' : 'text-slate-500'}`}>Ctrl+Z</span>
               </button>
 
               <button
                 type="button"
+                disabled={!canRedo}
                 onClick={() => {
                   onRedo();
                   setActiveMenu(null);
                 }}
-                className={`${dropdownItemClass} justify-between`}
+                className={`${dropdownItemClass} justify-between ${!canRedo ? 'opacity-40 cursor-not-allowed' : ''}`}
               >
-                <span>Redo</span>
+                <span className="truncate max-w-[140px]">
+                  {redoLabel ? `Redo (${redoLabel})` : 'Redo'}
+                </span>
                 <span className={`text-[11px] font-mono ${isDark ? 'text-neutral-400' : 'text-slate-500'}`}>Ctrl+Y</span>
               </button>
             </div>
@@ -564,8 +578,8 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
                 }}
                 className={`${dropdownItemClass} gap-2`}
               >
-                <Volume2 className="w-3.5 h-3.5 text-cyan-400" />
-                <span>Audio Cues & Synthesizer</span>
+                <Bell className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Alerts Configuration...</span>
               </button>
               <button
                 onClick={() => {
@@ -664,20 +678,30 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
         <div className={`flex items-center gap-0.5 ml-1 pl-2 border-l ${separatorBorder}`}>
           <button
             type="button"
+            disabled={!canUndo}
             onClick={onUndo}
-            title="Undo (Ctrl+Z)"
-            className={`p-1 rounded transition-colors cursor-pointer ${
-              isDark ? 'hover:bg-[#1a202c] text-neutral-400 hover:text-white' : 'hover:bg-slate-100 text-slate-500 hover:text-slate-900'
+            title={undoLabel ? `Undo: ${undoLabel} (Ctrl+Z)` : 'Undo (Ctrl+Z)'}
+            className={`p-1 rounded transition-colors ${
+              !canUndo
+                ? 'opacity-35 cursor-not-allowed text-neutral-500'
+                : isDark
+                  ? 'hover:bg-[#1a202c] text-neutral-300 hover:text-white cursor-pointer'
+                  : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900 cursor-pointer'
             }`}
           >
             <Undo2 className="w-3.5 h-3.5" />
           </button>
           <button
             type="button"
+            disabled={!canRedo}
             onClick={onRedo}
-            title="Redo (Ctrl+Y)"
-            className={`p-1 rounded transition-colors cursor-pointer ${
-              isDark ? 'hover:bg-[#1a202c] text-neutral-400 hover:text-white' : 'hover:bg-slate-100 text-slate-500 hover:text-slate-900'
+            title={redoLabel ? `Redo: ${redoLabel} (Ctrl+Y)` : 'Redo (Ctrl+Y)'}
+            className={`p-1 rounded transition-colors ${
+              !canRedo
+                ? 'opacity-35 cursor-not-allowed text-neutral-500'
+                : isDark
+                  ? 'hover:bg-[#1a202c] text-neutral-300 hover:text-white cursor-pointer'
+                  : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900 cursor-pointer'
             }`}
           >
             <Redo2 className="w-3.5 h-3.5" />

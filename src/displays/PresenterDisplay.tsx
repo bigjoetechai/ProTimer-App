@@ -1,142 +1,114 @@
 /**
- * Presenter Display (Confidence Monitor).
- * Designed for speaker-facing screens and teleprompters.
- * Syncs seamlessly via BroadcastChannel with zero lag.
+ * Presenter Pop-Out Display (Confidence Monitor).
+ * Designed for 360x240 compact always-on-top presenter windows and scales smoothly when resized.
+ * Has NO playback/duration controls at the top (clean confidence view for the speaker).
  */
 
 import React from 'react';
 import { useDisplaySync } from '../hooks/useDisplaySync';
 import { MessageOverlay } from '../messages/MessageOverlay';
-import { AlertIndicator } from '../alerts/AlertIndicator';
+import { Pin } from 'lucide-react';
 
 export const PresenterDisplay: React.FC = () => {
   const { payload } = useDisplaySync(true);
 
   if (!payload) {
     return (
-      <div className="h-screen w-screen bg-black text-neutral-400 flex flex-col items-center justify-center font-mono select-none">
-        <div className="w-8 h-8 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin mb-4" />
-        <span>WAITING FOR PROTIMER MASTER CONNECTION...</span>
-      </div>
-    );
-  }
-
-  // Blackout mode
-  if (payload.isBlackout) {
-    return <div className="h-screen w-screen bg-black" />;
-  }
-
-  // Clock mode
-  if (payload.isClockMode) {
-    return (
-      <div className="h-screen w-screen bg-black text-white flex flex-col items-center justify-center select-none font-mono">
-        <span className="text-xl text-neutral-400 tracking-widest uppercase mb-4">CURRENT TIME</span>
-        <div className="text-7xl md:text-9xl font-bold tracking-tight text-cyan-400">
-          {payload.clockTimeFormatted}
-        </div>
+      <div className="h-screen w-screen bg-black text-neutral-400 flex items-center justify-center font-mono text-xs select-none">
+        Loading Presenter...
       </div>
     );
   }
 
   const isOvertime = payload.isOvertime;
-  const isDanger = payload.activeAlertLevel === 'danger';
-  const isWarning = payload.activeAlertLevel === 'warning';
+  const isRunning = payload.status === 'running' || payload.status === 'overtime';
+  const isPaused = payload.status === 'paused';
 
-  // Background tint during alerts
-  let bgStyle = 'bg-black';
-  if (isOvertime || (isDanger && payload.alertFlash)) {
-    bgStyle = 'bg-[#2a0c0c]';
-  } else if (isWarning && payload.alertFlash) {
-    bgStyle = 'bg-[#20170a]';
-  }
+  const displayTime = payload.isClockMode
+    ? payload.clockTimeFormatted
+    : isOvertime
+    ? `+${payload.formattedTime.replace(/^[+-]/, '')}`
+    : payload.formattedTime.replace(/^-/, '+');
 
   return (
-    <div className={`h-screen w-screen ${bgStyle} text-white flex flex-col justify-between p-8 md:p-12 select-none overflow-hidden transition-colors duration-200`}>
-      {/* Top Header: Current Cue Name & Alert Indicator */}
-      <div className="flex items-center justify-between border-b border-neutral-800 pb-4">
-        <div className="flex flex-col">
-          <span className="text-xs uppercase tracking-widest text-neutral-400 font-semibold">
-            CUE
+    <div className="h-screen w-screen bg-black text-white flex flex-col justify-between p-3 font-mono select-none overflow-hidden relative border border-[#222d3d]">
+      {/* Clean Header Bar (Cue Name & Time of Day — NO playback controls) */}
+      <div className="flex items-center justify-between gap-2 pb-1.5 border-b border-[#1c2536] shrink-0">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <Pin className="w-3 h-3 text-cyan-400 shrink-0" />
+          <span className="text-[11px] font-bold text-white uppercase tracking-wider truncate">
+            {payload.activeTimer?.name || 'STANDBY'}
           </span>
-          <h1 className="text-2xl md:text-4xl font-bold tracking-tight text-white mt-1">
-            {payload.activeTimer ? payload.activeTimer.name : 'STANDBY'}
-          </h1>
-          {payload.activeTimer?.endTime && (
-            <span className="text-xs text-neutral-400 font-mono mt-0.5">
-              Ends at <span className="text-neutral-200 font-bold">{payload.activeTimer.endTime}</span>
-            </span>
-          )}
         </div>
 
-        <div className="flex items-center gap-4">
-          <AlertIndicator
-            level={payload.activeAlertLevel}
-            color={payload.alertColor}
-            flash={payload.alertFlash}
-          />
-          <div className="font-mono text-sm md:text-base text-neutral-400 bg-neutral-900 px-3 py-1.5 rounded border border-neutral-800">
-            {payload.clockTimeFormatted}
-          </div>
-        </div>
+        <span className="text-[11px] text-neutral-400 tabular-nums shrink-0">
+          {payload.clockTimeFormatted}
+        </span>
       </div>
 
-      {/* Center: Hero Timer Display */}
-      <div className="flex-1 flex flex-col items-center justify-center my-auto">
-        <div
-          className={`font-mono font-black text-8xl sm:text-9xl md:text-[14rem] tracking-tight tabular-nums select-none ${
-            isOvertime || payload.alertOnOff
-              ? 'animate-overtime-blink'
-              : payload.alertFlash
-              ? 'animate-pulse'
-              : ''
-          } ${
-            isOvertime
-              ? 'text-red-500'
-              : !payload.alertColor
-              ? isDanger
-                ? 'text-red-500'
-                : isWarning
+      {/* Main Active Time Display */}
+      <div className="flex-1 flex flex-col items-center justify-center min-h-0 my-1 bg-black">
+        {payload.isBlackout ? (
+          <div className="w-full h-full bg-black" />
+        ) : (
+          <div
+            style={{
+              fontSize: 'clamp(2.25rem, 15vw, 9rem)',
+              ...(payload.alertColor ? { color: payload.alertColor } : {}),
+            }}
+            className={`font-black tracking-tighter tabular-nums leading-none ${
+              isOvertime
+                ? 'text-red-500 animate-overtime-blink'
+                : payload.alertOnOff
+                ? 'text-white animate-overtime-blink'
+                : payload.alertFlash
+                ? 'text-white animate-pulse'
+                : isPaused
                 ? 'text-amber-400'
                 : 'text-white'
-              : ''
-          }`}
-          style={payload.alertColor ? { color: payload.alertColor } : undefined}
-        >
-          {isOvertime ? `+${payload.formattedTime.replace(/^[+-]/, '')}` : payload.formattedTime.replace(/^-/, '+')}
-        </div>
-
-        {isOvertime && (
-          <div className="text-xl md:text-3xl font-extrabold text-red-400 tracking-widest uppercase mt-2">
-            OVERTIME: <span className="animate-overtime-blink">+{payload.overtimeFormatted.replace(/^[+-]/, '')}</span>
+            }`}
+          >
+            {displayTime}
           </div>
         )}
       </div>
 
-      {/* Progress Bar */}
-      <div className="w-full bg-neutral-900 h-3 rounded-full overflow-hidden my-4 border border-neutral-800">
-        <div
-          className={`h-full transition-all duration-300 ${
-            isOvertime ? 'bg-red-500' : isDanger ? 'bg-red-500' : isWarning ? 'bg-amber-400' : 'bg-emerald-500'
-          }`}
-          style={{ width: `${payload.progressPercent}%` }}
-        />
-      </div>
-
-      {/* Bottom Footer: Next Cue Up */}
-      <div className="flex items-center justify-between border-t border-neutral-800 pt-4 text-xs md:text-sm text-neutral-400">
-        <div className="flex items-center gap-2">
-          <span className="text-neutral-500 uppercase tracking-wider font-semibold">NEXT CUE:</span>
-          <span className="text-neutral-200 font-medium">
-            {payload.nextTimer ? payload.nextTimer.name : 'End of Run'}
+      {/* Bottom Progress Bar & Next Cue */}
+      <div className="pt-1.5 border-t border-[#1c2536] shrink-0">
+        <div className="w-full h-1.5 bg-neutral-900 rounded-full overflow-hidden mb-1.5">
+          <div
+            className={`h-full transition-all duration-200 ${
+              isOvertime || payload.activeAlertLevel === 'danger'
+                ? 'bg-red-500'
+                : payload.activeAlertLevel === 'warning'
+                ? 'bg-amber-500'
+                : isRunning
+                ? 'bg-emerald-500'
+                : 'bg-cyan-500/60'
+            }`}
+            style={{ width: `${Math.min(100, Math.max(0, payload.progressPercent))}%` }}
+          />
+        </div>
+        <div className="flex items-center justify-between text-[10px] text-neutral-400">
+          <span
+            className={`uppercase font-bold ${
+              isOvertime
+                ? 'text-red-400'
+                : isRunning
+                ? 'text-emerald-400'
+                : isPaused
+                ? 'text-amber-400'
+                : 'text-cyan-400'
+            }`}
+          >
+            {payload.status}
+          </span>
+          <span className="truncate max-w-[65%]">
+            Next: <span className="text-neutral-200">{payload.nextTimer?.name || 'End'}</span>
           </span>
         </div>
-
-        <div className="font-mono text-neutral-500">
-          STATUS: <span className="text-cyan-400 uppercase font-semibold">{payload.status}</span>
-        </div>
       </div>
 
-      {/* Stage Message Banner */}
       <MessageOverlay message={payload.activeMessage} />
     </div>
   );

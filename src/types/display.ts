@@ -10,6 +10,7 @@ export type DisplayTarget =
   | 'preview' 
   | 'stage' 
   | 'fullscreen' 
+  | 'multi_fullscreen'
   | 'ndi' 
   | 'lan_control' 
   | 'lan_display';
@@ -28,7 +29,29 @@ export interface DisplayConfig {
   textColor?: string;
 }
 
+export interface ListActiveCueSummary {
+  listId: string;
+  listName: string;
+  isCurrentOperatorList: boolean;
+  activeTimer: TimerItem | null;
+  nextTimer: TimerItem | null;
+  status: TimerStatus;
+  formattedTime: string;
+  secondsRemaining: number;
+  totalDurationSeconds: number;
+  progressPercent: number;
+  isOvertime: boolean;
+  activeAlertLevel: 'none' | 'warning' | 'danger';
+  alertColor?: string;
+  alertFlash: boolean;
+  alertOnOff?: boolean;
+  totalCuesCount: number;
+  runningCuesCount: number;
+  backgroundImageUrl?: string;
+}
+
 export interface DisplaySyncPayload {
+  activeListId?: string;
   activeTimer: TimerItem | null;
   nextTimer: TimerItem | null;
   status: TimerStatus;
@@ -48,6 +71,10 @@ export interface DisplaySyncPayload {
   isClockMode: boolean;
   speed: number;
   timestamp: number;
+  backgroundImageUrl?: string;
+  backgroundFit?: 'cover' | 'contain';
+  backgroundImageOpacity?: number;
+  logoImageUrl?: string;
   timerList?: Array<{
     id: string;
     name: string;
@@ -55,6 +82,7 @@ export interface DisplaySyncPayload {
     status: TimerStatus;
     isCued: boolean;
   }>;
+  listActiveCues?: ListActiveCueSummary[];
 }
 
 export interface DetectedMonitor {
@@ -99,6 +127,14 @@ export interface ElectronAPI {
   isFullscreenOutputActive: () => Promise<boolean>;
   onDisplaysChanged: (callback: (displays: DetectedMonitor[]) => void) => () => void;
   onOutputClosed: (callback: () => void) => () => void;
+
+  // Independent Multi Fullscreen Output
+  openMultiFullscreenOutput?: (options?: {
+    monitorId?: string | number;
+  }) => Promise<{ success: boolean; displayId: number | string; error?: string }>;
+  closeMultiFullscreenOutput?: () => Promise<boolean>;
+  isMultiFullscreenOutputActive?: () => Promise<boolean>;
+  onMultiOutputClosed?: (callback: () => void) => () => void;
   
   // Window Size & Resolution Management
   minimizeWindow: () => Promise<boolean>;
@@ -118,12 +154,14 @@ export interface ElectronAPI {
     timers?: TimerItem[];
     lists?: unknown[];
     preferences?: unknown;
+    runLogs?: unknown[];
     updatedAt?: number;
   } | null>;
   writeUserData: (data: {
     timers?: TimerItem[];
     lists?: unknown[];
     preferences?: unknown;
+    runLogs?: unknown[];
     updatedAt?: number;
   }) => Promise<boolean>;
   getAppInfo: () => Promise<{
@@ -140,4 +178,3 @@ declare global {
     electronAPI?: ElectronAPI;
   }
 }
-

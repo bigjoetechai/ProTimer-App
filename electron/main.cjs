@@ -49,6 +49,7 @@ if (process.platform === 'win32') {
 
 let mainWindow = null;
 let outputWindow = null;
+let multiOutputWindow = null;
 let currentOutputDisplayId = null;
 const secondaryWindows = new Set();
 
@@ -616,6 +617,12 @@ function notifyOutputClosed() {
   }
 }
 
+function notifyMultiOutputClosed() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('multi-output-closed');
+  }
+}
+
 function notifyWindowStateChanged() {
   if (mainWindow && !mainWindow.isDestroyed()) {
     const bounds = mainWindow.getBounds();
@@ -662,12 +669,22 @@ function createMainWindow() {
   // Intercept window.open calls (Presenter, Stage, Preview, NDI, etc.)
   // so they open as native ProTimer windows instead of launching an external browser
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    const isPreviewWindow = typeof url === 'string' && url.includes('display=preview');
+    const isPresenterWindow = typeof url === 'string' && url.includes('display=presenter');
+    const isCompactAlwaysOnTop = isPreviewWindow || isPresenterWindow;
+
     const childWin = new BrowserWindow({
-      width: 1100,
-      height: 720,
-      minWidth: 640,
-      minHeight: 400,
-      title: 'ProTimer - Display Output',
+      width: isCompactAlwaysOnTop ? 360 : 1100,
+      height: isCompactAlwaysOnTop ? 240 : 720,
+      minWidth: isCompactAlwaysOnTop ? 200 : 640,
+      minHeight: isCompactAlwaysOnTop ? 130 : 400,
+      resizable: true,
+      alwaysOnTop: isCompactAlwaysOnTop,
+      title: isPreviewWindow
+        ? 'ProTimer - Preview'
+        : isPresenterWindow
+        ? 'ProTimer - Presenter'
+        : 'ProTimer - Display Output',
       icon: iconPath,
       backgroundColor: '#000000',
       autoHideMenuBar: true,
@@ -677,6 +694,10 @@ function createMainWindow() {
         nodeIntegration: false,
       },
     });
+
+    if (isCompactAlwaysOnTop) {
+      childWin.setAlwaysOnTop(true, 'floating');
+    }
 
     secondaryWindows.add(childWin);
     childWin.loadURL(url);
@@ -742,6 +763,10 @@ function createMainWindow() {
       outputWindow.close();
       outputWindow = null;
     }
+    if (multiOutputWindow && !multiOutputWindow.isDestroyed()) {
+      multiOutputWindow.close();
+      multiOutputWindow = null;
+    }
     for (const win of secondaryWindows) {
       if (!win.isDestroyed()) {
         win.close();
@@ -752,23 +777,25 @@ function createMainWindow() {
 }
 
 // =============================================================================
-// MODE B: TIMER OUTPUT FULLSCREEN (Dedicated Output on Target Monitor)
+// MODE B: TIMER OUTPUT FULLSCREEN (Dedicated Output on Target External Monitor)
 // =============================================================================
 
-function openFullscreenOutput(monitorId, displayTarget = 'fullscreen') {
+function resolveTargetDisplay(monitorId) {
   const displays = screen.getAllDisplays();
   const primary = screen.getPrimaryDisplay();
 
-  let targetDisplay = null;
   if (!monitorId || monitorId === 'Auto' || monitorId === 'auto') {
-    targetDisplay = primary;
-  } else {
-    targetDisplay = displays.find((d) => String(d.id) === String(monitorId));
-    if (!targetDisplay) {
-      targetDisplay = primary;
-    }
+    // Prefer a connected external (non-primary) display if available, otherwise primary
+    const externalDisplay = displays.find((d) => d.id !== primary.id);
+    return externalDisplay || primary;
   }
 
+  const matched = displays.find((d) => String(d.id) === String(monitorId));
+  return matched || primary;
+}
+
+function openFullscreenOutput(monitorId, displayTarget = 'fullscreen') {
+  const targetDisplay = resolveTargetDisplay(monitorId);
   const { x, y, width, height } = targetDisplay.bounds;
   currentOutputDisplayId = targetDisplay.id;
 
@@ -828,6 +855,73 @@ function closeFullscreenOutput() {
     outputWindow = null;
     currentOutputDisplayId = null;
     notifyOutputClosed();
+    return true;
+  }
+  return false;
+}
+
+// =============================================================================
+// INDEPENDENT MULTI FULLSCREEN OUTPUT (All List Tabs Active Cue Multiview)
+// =============================================================================
+
+function openMultiFullscreenOutput(monitorId) {
+  const targetDisplay = resolveTargetDisplay(monitorId);
+  const { x, y, width, height } = targetDisplay.bounds;
+
+  if (multiOutputWindow && !multiOutputWindow.isDestroyed()) {
+    multiOutputWindow.setFullScreen(false);
+    multiOutputWindow.setBounds({ x, y, width, height });
+    multiOutputWindow.setFullScreen(true);
+    multiOutputWindow.show();
+    multiOutputWindow.focus();
+    return { success: true, displayId: targetDisplay.id };
+  }
+
+  multiOutputWindow = new BrowserWindow({
+    x,
+    y,
+    width,
+    height,
+    frame: false,
+    fullscreen: true,
+    alwaysOnTop: true,
+    autoHideMenuBar: true,
+    icon: getAppIconPath(),
+    backgroundColor: '#000000',
+    title: 'ProTimer - Multi Fullscreen Output (All Lists)',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  multiOutputWindow.webContents.on('before-input-event', (_event, input) => {
+    if (input.key === 'Escape' && input.type === 'keyDown') {
+      closeMultiFullscreenOutput();
+    }
+  });
+
+  const baseUrl = getBaseUrl();
+  const separator = baseUrl.includes('?') ? '&' : '?';
+  const outputUrl = `${baseUrl}${separator}display=multi_fullscreen`;
+
+  multiOutputWindow.loadURL(outputUrl);
+  multiOutputWindow.setFullScreen(true);
+
+  multiOutputWindow.on('closed', () => {
+    multiOutputWindow = null;
+    notifyMultiOutputClosed();
+  });
+
+  return { success: true, displayId: targetDisplay.id };
+}
+
+function closeMultiFullscreenOutput() {
+  if (multiOutputWindow && !multiOutputWindow.isDestroyed()) {
+    multiOutputWindow.close();
+    multiOutputWindow = null;
+    notifyMultiOutputClosed();
     return true;
   }
   return false;
@@ -922,6 +1016,23 @@ ipcMain.handle('close-fullscreen-output', async () => {
 
 ipcMain.handle('is-fullscreen-output-active', async () => {
   return Boolean(outputWindow && !outputWindow.isDestroyed());
+});
+
+ipcMain.handle('open-multi-fullscreen-output', async (_event, options = {}) => {
+  const safeOptions = options && typeof options === 'object' ? options : {};
+  const monitorId =
+    typeof safeOptions.monitorId === 'string' || typeof safeOptions.monitorId === 'number'
+      ? safeOptions.monitorId
+      : 'Auto';
+  return openMultiFullscreenOutput(monitorId);
+});
+
+ipcMain.handle('close-multi-fullscreen-output', async () => {
+  return closeMultiFullscreenOutput();
+});
+
+ipcMain.handle('is-multi-fullscreen-output-active', async () => {
+  return Boolean(multiOutputWindow && !multiOutputWindow.isDestroyed());
 });
 
 ipcMain.handle('window-minimize', async () => {

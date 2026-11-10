@@ -6,6 +6,7 @@
 
 import React, { useState } from 'react';
 import { useDisplaySync } from '../hooks/useDisplaySync';
+import { storageService } from '../services/storageService';
 import { Radio, Layers } from 'lucide-react';
 
 export const NdiDisplay: React.FC = () => {
@@ -16,6 +17,14 @@ export const NdiDisplay: React.FC = () => {
   if (!payload || payload.isBlackout) {
     return <div className="h-screen w-screen bg-transparent" />;
   }
+
+  const prefs = storageService.getPreferences();
+  const ndiRes = prefs.ndiResolution || 'HD - 1920 x 1080';
+  const ndiFps = prefs.ndiFrameRate || 30;
+  const ndiGroupLabel =
+    prefs.ndiUseCustomGroups && prefs.ndiCustomGroups
+      ? `Groups: ${prefs.ndiCustomGroups}`
+      : 'Groups: Public';
 
   const bgClasses = {
     transparent: 'bg-transparent',
@@ -37,7 +46,9 @@ export const NdiDisplay: React.FC = () => {
         <div className="flex items-center gap-2 text-xs">
           <Radio className="w-4 h-4 text-red-500 animate-pulse" />
           <span className="font-bold text-red-400">NDI|HX OUT: PROTIMER_PGM_1</span>
-          <span className="text-neutral-400">1080p60 • Alpha: Enabled</span>
+          <span className="text-neutral-400">
+            {ndiRes} @ {ndiFps} FPS • {ndiGroupLabel}
+          </span>
         </div>
 
         <div className="flex items-center gap-2 text-xs">

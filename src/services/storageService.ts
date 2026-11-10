@@ -6,7 +6,7 @@
  */
 
 import { openDB, IDBPDatabase } from 'idb';
-import { TimerItem, TimerList, AppPreferences, DEFAULT_PREFERENCES } from '../types';
+import { TimerItem, TimerList, TimerRunLogEntry, AppPreferences, DEFAULT_PREFERENCES } from '../types';
 
 const DB_NAME = 'protimer_local_db';
 const LEGACY_DB_NAME = 'cuetimer_local_db';
@@ -15,11 +15,13 @@ const TIMERS_STORE = 'timers';
 const LISTS_STORE = 'lists';
 const PREFS_KEY = 'protimer_preferences';
 const LEGACY_PREFS_KEY = 'cuetimer_preferences';
+const RUN_LOGS_KEY = 'protimer_run_logs';
 
 class StorageService {
   private dbPromise: Promise<IDBPDatabase> | null = null;
   private syncTimeout: ReturnType<typeof setTimeout> | null = null;
   private nativeHydratedPromise: Promise<void> | null = null;
+  private cachedPreferences: AppPreferences | null = null;
 
   constructor() {
     this.initDB();
@@ -27,6 +29,13 @@ class StorageService {
 
   private initDB() {
     if (typeof window === 'undefined') return;
+
+    window.addEventListener('storage', (e) => {
+      if (e.key === PREFS_KEY) {
+        this.cachedPreferences = null;
+        window.dispatchEvent(new CustomEvent('protimer-prefs-updated'));
+      }
+    });
 
     // Migrate legacy preferences if needed
     try {
@@ -73,6 +82,9 @@ class StorageService {
         if (nativeData) {
           if (nativeData.preferences && !localStorage.getItem(PREFS_KEY)) {
             localStorage.setItem(PREFS_KEY, JSON.stringify(nativeData.preferences));
+          }
+          if (Array.isArray((nativeData as { runLogs?: unknown }).runLogs) && !localStorage.getItem(RUN_LOGS_KEY)) {
+            localStorage.setItem(RUN_LOGS_KEY, JSON.stringify((nativeData as { runLogs?: unknown }).runLogs));
           }
           if (existingLists.length === 0 && Array.isArray(nativeData.lists) && nativeData.lists.length > 0) {
             const tx = db.transaction(LISTS_STORE, 'readwrite');
@@ -140,10 +152,12 @@ class StorageService {
           db.getAll(LISTS_STORE),
         ]);
         const preferences = this.getPreferences();
+        const runLogs = this.getRunLogs();
         await window.electronAPI?.writeUserData({
           timers,
           lists,
           preferences,
+          runLogs,
           updatedAt: Date.now(),
         });
       } catch (e) {
@@ -155,24 +169,59 @@ class StorageService {
   // --- PREFERENCES (localStorage + Electron AppData) ---
   public getPreferences(): AppPreferences {
     if (typeof window === 'undefined') return DEFAULT_PREFERENCES;
+    if (this.cachedPreferences) {
+      return this.cachedPreferences;
+    }
     try {
       const raw = localStorage.getItem(PREFS_KEY);
       if (raw) {
-        return { ...DEFAULT_PREFERENCES, ...JSON.parse(raw) };
+        const merged: AppPreferences = { ...DEFAULT_PREFERENCES, ...JSON.parse(raw) };
+        this.cachedPreferences = merged;
+        return merged;
       }
     } catch (e) {
       console.warn('Failed to read preferences from localStorage:', e);
     }
-    return DEFAULT_PREFERENCES;
+    this.cachedPreferences = { ...DEFAULT_PREFERENCES };
+    return this.cachedPreferences;
   }
 
   public savePreferences(prefs: AppPreferences): void {
     if (typeof window === 'undefined') return;
+    this.cachedPreferences = { ...DEFAULT_PREFERENCES, ...prefs };
     try {
-      localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
-      this.scheduleNativeSync();
+      localStorage.setItem(PREFS_KEY, JSON.stringify(this.cachedPreferences));
     } catch (e) {
       console.warn('Failed to save preferences to localStorage:', e);
+    }
+    window.dispatchEvent(new CustomEvent('protimer-prefs-updated'));
+    this.scheduleNativeSync();
+  }
+
+  // --- TIMER RUN LOGS (localStorage + Electron AppData) ---
+  public getRunLogs(): TimerRunLogEntry[] {
+    if (typeof window === 'undefined') return [];
+    try {
+      const raw = localStorage.getItem(RUN_LOGS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          return parsed;
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to read timer run logs from localStorage:', e);
+    }
+    return [];
+  }
+
+  public saveRunLogs(logs: TimerRunLogEntry[]): void {
+    if (typeof window === 'undefined') return;
+    try {
+      localStorage.setItem(RUN_LOGS_KEY, JSON.stringify(logs));
+      this.scheduleNativeSync();
+    } catch (e) {
+      console.warn('Failed to save timer run logs to localStorage:', e);
     }
   }
 
@@ -254,6 +303,24 @@ class StorageService {
     if (!this.dbPromise) return;
     const db = await this.dbPromise;
     await db.delete(LISTS_STORE, id);
+    this.scheduleNativeSync();
+  }
+
+  public async replaceAllListsAndTimers(lists: TimerList[], timers: TimerItem[]): Promise<void> {
+    if (!this.dbPromise) return;
+    const db = await this.dbPromise;
+    const tx = db.transaction([LISTS_STORE, TIMERS_STORE], 'readwrite');
+    const listStore = tx.objectStore(LISTS_STORE);
+    const timerStore = tx.objectStore(TIMERS_STORE);
+    await listStore.clear();
+    await timerStore.clear();
+    for (const l of lists) {
+      await listStore.put(l);
+    }
+    for (const t of timers) {
+      await timerStore.put(t);
+    }
+    await tx.done;
     this.scheduleNativeSync();
   }
 }

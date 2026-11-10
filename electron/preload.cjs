@@ -12,6 +12,7 @@ const VALID_DISPLAY_TARGETS = new Set([
   'preview',
   'stage',
   'fullscreen',
+  'multi_fullscreen',
   'ndi',
   'lan_control',
   'lan_display',
@@ -43,7 +44,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   // ===========================================================================
-  // 2. MODE B: TIMER OUTPUT FULLSCREEN
+  // 2. MODE B: TIMER OUTPUT FULLSCREEN & INDEPENDENT MULTI FULLSCREEN
   // ===========================================================================
 
   /**
@@ -84,6 +85,39 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('output-closed', handler);
     return () => {
       ipcRenderer.removeListener('output-closed', handler);
+    };
+  },
+
+  /**
+   * Open independent Multi Fullscreen output window showing active cues across all list tabs.
+   */
+  openMultiFullscreenOutput: (options = {}) => {
+    const monitorId =
+      options && (typeof options.monitorId === 'string' || typeof options.monitorId === 'number')
+        ? options.monitorId
+        : 'Auto';
+    return ipcRenderer.invoke('open-multi-fullscreen-output', { monitorId });
+  },
+
+  /**
+   * Close the independent Multi Fullscreen output window.
+   */
+  closeMultiFullscreenOutput: () => ipcRenderer.invoke('close-multi-fullscreen-output'),
+
+  /**
+   * Check if the Multi Fullscreen output window is currently active.
+   */
+  isMultiFullscreenOutputActive: () => ipcRenderer.invoke('is-multi-fullscreen-output-active'),
+
+  /**
+   * Listen for when the Multi Fullscreen output window is closed.
+   */
+  onMultiOutputClosed: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const handler = () => callback();
+    ipcRenderer.on('multi-output-closed', handler);
+    return () => {
+      ipcRenderer.removeListener('multi-output-closed', handler);
     };
   },
 

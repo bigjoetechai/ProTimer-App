@@ -19,7 +19,8 @@ import {
   ArrowRight,
   Check,
   X,
-  Wifi
+  Wifi,
+  History
 } from 'lucide-react';
 import { TimerList, DisplayTarget, DetectedMonitor } from '../types';
 import { useTheme } from '../hooks';
@@ -43,6 +44,13 @@ interface BottomBarProps {
   detectedMonitors?: DetectedMonitor[];
   isFullscreenActive?: boolean;
   onCloseFullscreen?: () => void;
+  isMultiFullscreenActive?: boolean;
+  onCloseMultiFullscreen?: () => void;
+  isPreviewActive?: boolean;
+  isPresenterActive?: boolean;
+  isHistoryTabActive?: boolean;
+  onSelectHistoryTab?: () => void;
+  historyCount?: number;
 }
 
 export const BottomBar: React.FC<BottomBarProps> = ({
@@ -64,6 +72,13 @@ export const BottomBar: React.FC<BottomBarProps> = ({
   detectedMonitors = [],
   isFullscreenActive = false,
   onCloseFullscreen,
+  isMultiFullscreenActive = false,
+  onCloseMultiFullscreen,
+  isPreviewActive = false,
+  isPresenterActive = false,
+  isHistoryTabActive = false,
+  onSelectHistoryTab,
+  historyCount = 0,
 }) => {
   const { isDark } = useTheme();
 
@@ -122,15 +137,15 @@ export const BottomBar: React.FC<BottomBarProps> = ({
       isDark ? 'bg-[#0b0e14] border-[#1a2333] text-neutral-300' : 'bg-slate-50 border-slate-200 text-slate-700'
     }`}>
       {/* =========================================================================
-          ROW 1: TIMER LIST TABS
-          List 1 | List 2 | List 3 | + | [Manage Lists]
+          ROW 1: TIMER LIST TABS & HISTORY TAB
+          List 1 | List 2 | List 3 | + | History | [Manage Lists]
          ========================================================================= */}
       <div className={`h-8 px-2 flex items-center justify-between border-b transition-colors ${
         isDark ? 'border-[#141a26] bg-[#090b10]' : 'border-slate-200 bg-slate-100/80'
       }`}>
         <div className="flex items-center gap-1 overflow-x-auto py-0.5">
           {lists.map((list) => {
-            const isActive = list.id === activeListId;
+            const isActive = !isHistoryTabActive && list.id === activeListId;
             const runningCount = getRunningTimerCount ? getRunningTimerCount(list.id) : 0;
             const isEditing = inlineEditingId === list.id;
 
@@ -213,6 +228,41 @@ export const BottomBar: React.FC<BottomBarProps> = ({
           >
             <Plus className="w-3.5 h-3.5" />
           </button>
+
+          {/* History Tab */}
+          {onSelectHistoryTab && (
+            <>
+              <div className={`h-4 w-px mx-1 ${isDark ? 'bg-[#1b2434]' : 'bg-slate-300'}`} />
+              <button
+                type="button"
+                onClick={onSelectHistoryTab}
+                title="Timer Run History (Start & Stop Timestamps)"
+                className={`px-3 py-1 rounded-t text-xs font-semibold tracking-wide transition-all flex items-center gap-1.5 cursor-pointer ${
+                  isHistoryTabActive
+                    ? isDark
+                      ? 'bg-[#151c28] text-cyan-300 border-b-2 border-cyan-400 shadow-xs'
+                    : 'bg-white text-cyan-800 border-b-2 border-cyan-600 shadow-xs'
+                    : isDark
+                    ? 'text-neutral-400 hover:text-neutral-200 hover:bg-[#121620]'
+                    : 'text-slate-500 hover:text-slate-900 hover:bg-slate-200'
+                }`}
+              >
+                <History className="w-3.5 h-3.5 text-cyan-500" />
+                <span>History</span>
+                {historyCount > 0 && (
+                  <span
+                    className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
+                      isDark
+                        ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
+                        : 'bg-cyan-100 text-cyan-800 border border-cyan-300'
+                    }`}
+                  >
+                    {historyCount}
+                  </span>
+                )}
+              </button>
+            </>
+          )}
         </div>
 
         {/* Manage Lists Button */}
@@ -246,22 +296,25 @@ export const BottomBar: React.FC<BottomBarProps> = ({
           {[
             { label: 'Presenter', target: 'presenter' as DisplayTarget, tooltip: 'Open Speaker Confidence Display' },
             { label: 'Preview', target: 'preview' as DisplayTarget, tooltip: 'Open Control Room Preview Window' },
-            { label: 'Fullscreen', target: 'fullscreen' as DisplayTarget, tooltip: 'TIMER OUTPUT FULLSCREEN (Mode B): Send Live Output to Selected Monitor' },
+            { label: 'Fullscreen', target: 'fullscreen' as DisplayTarget, tooltip: 'Display Active Timer on Selected Fullscreen Monitor' },
             { label: 'NDI', target: 'ndi' as DisplayTarget, tooltip: 'NDI IP Video Stream' },
             { label: 'NDI Multi', target: 'ndi' as DisplayTarget, tooltip: 'Multi-Channel NDI Stream' },
             { label: 'Multi Preview', target: 'preview' as DisplayTarget, tooltip: 'Multiview Stage Preview' },
-            { label: 'Multi FS', target: 'fullscreen' as DisplayTarget, tooltip: 'TIMER OUTPUT FULLSCREEN (Mode B): Multi-Display Output' },
+            { label: 'Multi FS', target: 'multi_fullscreen' as DisplayTarget, tooltip: 'Multi Fullscreen: Display Active Cue of All List Tabs' },
             { label: 'LAN Control', target: 'lan_control' as DisplayTarget, tooltip: 'Local Network Web Remote Control' },
             { label: 'LAN Display', target: 'lan_display' as DisplayTarget, tooltip: 'Local Network Remote Stage Output' },
           ].map((item) => {
-            const isFsButton = item.label === 'Fullscreen' || item.label === 'Multi FS';
-            const isActive = isFsButton && isFullscreenActive;
+            const isActive =
+              (item.label === 'Presenter' && isPresenterActive) ||
+              (item.label === 'Preview' && isPreviewActive) ||
+              (item.label === 'Fullscreen' && isFullscreenActive) ||
+              (item.label === 'Multi FS' && isMultiFullscreenActive);
             return (
               <button
                 key={item.label}
                 type="button"
                 onClick={() => onOpenDisplay(item.target)}
-                title={isActive ? `${item.label} Active (Click to Switch Monitor or Toggle)` : item.tooltip}
+                title={isActive ? `${item.label} Active (Click to Toggle)` : item.tooltip}
                 className={`px-2.5 py-1 border rounded text-[11px] font-medium transition-all shadow-xs flex items-center gap-1.5 cursor-pointer ${
                   isActive
                     ? isDark 
@@ -297,7 +350,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
             </button>
           )}
 
-          {/* Quick Exit Fullscreen Button if Output is currently Active */}
+          {/* Quick Exit Fullscreen Button if Single Output is currently Active */}
           {isFullscreenActive && onCloseFullscreen && (
             <button
               type="button"
@@ -306,7 +359,20 @@ export const BottomBar: React.FC<BottomBarProps> = ({
               className="px-2 py-1 bg-red-950/60 hover:bg-red-900 border border-red-800/80 rounded text-[11px] font-medium text-red-300 hover:text-white transition-all shadow-xs flex items-center gap-1 cursor-pointer"
             >
               <X className="w-3 h-3" />
-              <span>Exit Output</span>
+              <span>Exit Fullscreen</span>
+            </button>
+          )}
+
+          {/* Quick Exit Multi FS Button if Multi FS Output is currently Active */}
+          {isMultiFullscreenActive && onCloseMultiFullscreen && (
+            <button
+              type="button"
+              onClick={onCloseMultiFullscreen}
+              title="Close Multi FS Output Window"
+              className="px-2 py-1 bg-red-950/60 hover:bg-red-900 border border-red-800/80 rounded text-[11px] font-medium text-red-300 hover:text-white transition-all shadow-xs flex items-center gap-1 cursor-pointer"
+            >
+              <X className="w-3 h-3" />
+              <span>Exit Multi FS</span>
             </button>
           )}
         </div>
@@ -324,12 +390,16 @@ export const BottomBar: React.FC<BottomBarProps> = ({
                   : 'bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-900'
               }`}
             >
-              <option value="Auto">Auto (Primary Monitor)</option>
+              <option value="Auto">
+                {detectedMonitors.some((m) => !m.isPrimary)
+                  ? 'Auto (External Monitor)'
+                  : 'Auto (Primary Monitor)'}
+              </option>
               {detectedMonitors.map((m) => {
                 const displayName = m.name?.startsWith('Display') ? m.name : `Display ${m.displayIndex}`;
                 return (
                   <option key={String(m.id)} value={String(m.id)}>
-                    {displayName} – {m.resolution}{m.isPrimary ? ' (Primary)' : ''}
+                    {displayName} – {m.resolution}{m.isPrimary ? ' (Primary)' : ' (External)'}
                   </option>
                 );
               })}

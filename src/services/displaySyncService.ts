@@ -7,10 +7,11 @@
  * 2. Cross-device LAN networks via /api/lan (SSE & HTTP API)
  */
 
-import { DisplaySyncPayload, DisplayTarget, StageMessage, TimerItem, TimerStatus } from '../types';
+import { DisplaySyncPayload, DisplayTarget, StageMessage, TimerItem, TimerStatus, resolveBackgroundImageForList } from '../types';
 import { CrossWindowBus } from '../utilities/broadcast';
 import { formatSeconds, formatClock } from '../utilities/timeFormatters';
 import { timerManagerService, computeActiveAlert } from './timerManager';
+import { storageService } from './storageService';
 import { generateId } from '../utilities/idGenerator';
 
 export type DisplaySyncListener = (payload: DisplaySyncPayload) => void;
@@ -29,6 +30,9 @@ class DisplaySyncService {
 
   constructor() {
     this.bus = new CrossWindowBus('protimer_sync_v1');
+    // Seed initial payload immediately from timerManagerService
+    const initialSnap = timerManagerService.getSnapshot();
+    this.lastPayload = this.buildPayload(initialSnap.status, initialSnap.currentSeconds);
     this.setupListeners();
     this.startMasterPolling();
   }
@@ -39,6 +43,11 @@ class DisplaySyncService {
       clearInterval(this.masterPollInterval);
       this.masterPollInterval = null;
     }
+    // Seed local state immediately and request fresh sync frame from Master window
+    const snap = timerManagerService.getSnapshot();
+    this.lastPayload = this.buildPayload(snap.status, snap.currentSeconds);
+    this.notifyListeners(this.lastPayload);
+    this.bus.post('REQUEST_SYNC', { timestamp: Date.now() });
     this.setupClientLanSync();
   }
 
@@ -47,6 +56,14 @@ class DisplaySyncService {
     this.bus.subscribe<DisplaySyncPayload>('SYNC_FRAME', (envelope) => {
       this.lastPayload = envelope.payload;
       this.notifyListeners(envelope.payload);
+    });
+
+    // Listen for sync requests from newly opened Preview / Secondary windows
+    this.bus.subscribe('REQUEST_SYNC', () => {
+      if (this.isMaster) {
+        const snap = timerManagerService.getSnapshot();
+        this.broadcastCurrentState(snap.status, snap.currentSeconds);
+      }
     });
 
     // Listen for remote control commands (same-device)
@@ -69,6 +86,31 @@ class DisplaySyncService {
         this.setBlackout(blackout);
       }
     });
+
+    // Immediately broadcast updated background images / style preferences when saved
+    if (typeof window !== 'undefined') {
+      window.addEventListener('protimer-prefs-updated', () => {
+        if (this.isMaster) {
+          this.notifyPreferencesUpdated();
+        } else if (this.lastPayload) {
+          const prefs = storageService.getPreferences();
+          const activeListId = this.lastPayload.activeListId || timerManagerService.getSnapshot().activeListId;
+          const updatedPayload: DisplaySyncPayload = {
+            ...this.lastPayload,
+            backgroundImageUrl: resolveBackgroundImageForList(prefs, activeListId),
+            backgroundFit: prefs.backgroundFit || 'cover',
+            backgroundImageOpacity: prefs.backgroundImageOpacity ?? 100,
+            logoImageUrl: prefs.logoImageDataUrl || '',
+            listActiveCues: this.lastPayload.listActiveCues?.map((item) => ({
+              ...item,
+              backgroundImageUrl: resolveBackgroundImageForList(prefs, item.listId),
+            })),
+          };
+          this.lastPayload = updatedPayload;
+          this.notifyListeners(updatedPayload);
+        }
+      });
+    }
   }
 
   /**
@@ -209,12 +251,16 @@ class DisplaySyncService {
     }
   }
 
-  public broadcastCurrentState(status: TimerStatus, currentSeconds: number) {
-    const activeTimer = timerManagerService.getActiveTimer();
+  private buildPayload(status: TimerStatus, currentSeconds: number): DisplaySyncPayload {
+    const snap = timerManagerService.getSnapshot();
+    const activeListId = snap.activeListId;
+    const runningOrActiveTimer = timerManagerService.getActiveTimer();
+    const cuedTimer = timerManagerService.getCuedTimer();
+    const displayTarget = runningOrActiveTimer || cuedTimer;
     const nextTimer = timerManagerService.getNextTimer();
     const isOvertime = status === 'overtime' || currentSeconds < 0;
 
-    const alertInfo = computeActiveAlert(activeTimer, currentSeconds, status);
+    const alertInfo = computeActiveAlert(displayTarget, currentSeconds, status);
     const activeAlertLevel: 'none' | 'warning' | 'danger' = 
       alertInfo.level === 'alert2' || alertInfo.level === 'overtime'
         ? 'danger'
@@ -223,9 +269,8 @@ class DisplaySyncService {
     const alertFlash = alertInfo.flash;
     const alertOnOff = alertInfo.onOff;
 
-    const displayTarget = activeTimer || timerManagerService.getCuedTimer();
     const totalDur = displayTarget?.durationSeconds || 1;
-    const progressPercent = activeTimer
+    const progressPercent = runningOrActiveTimer
       ? Math.min(100, Math.max(0, ((totalDur - currentSeconds) / totalDur) * 100))
       : 0;
 
@@ -236,11 +281,19 @@ class DisplaySyncService {
       name: t.name,
       durationFormatted: formatSeconds(t.durationSeconds, true),
       status: t.status || 'idle',
-      isCued: t.id === timerManagerService.getSnapshot().cuedTimerId,
+      isCued: t.id === snap.cuedTimerId,
     }));
 
-    const payload: DisplaySyncPayload = {
-      activeTimer,
+    // Get active cues across all Cue List tabs for independent Multi FS display
+    const listActiveCues = timerManagerService.getAllListsActiveCues();
+
+    // Resolve background image for the active list (or global default if set; empty string for pure black)
+    const prefs = storageService.getPreferences();
+    const backgroundImageUrl = resolveBackgroundImageForList(prefs, activeListId);
+
+    return {
+      activeListId,
+      activeTimer: displayTarget,
       nextTimer,
       status,
       formattedTime: formatSeconds(currentSeconds, true, isOvertime),
@@ -257,21 +310,45 @@ class DisplaySyncService {
       clockTimeFormatted: formatClock(new Date(), true),
       isBlackout: this.isBlackout,
       isClockMode: this.isClockMode,
-      speed: timerManagerService.getSnapshot().speed,
+      speed: snap.speed,
       timestamp: Date.now(),
+      backgroundImageUrl,
+      backgroundFit: prefs.backgroundFit || 'cover',
+      backgroundImageOpacity: prefs.backgroundImageOpacity ?? 100,
+      logoImageUrl: prefs.logoImageDataUrl || '',
       timerList,
+      listActiveCues,
     };
+  }
+
+  public notifyPreferencesUpdated(): void {
+    const snap = timerManagerService.getSnapshot();
+    this.broadcastCurrentState(snap.status, snap.currentSeconds);
+  }
+
+  public broadcastCurrentState(status: TimerStatus, currentSeconds: number) {
+    const payload = this.buildPayload(status, currentSeconds);
+    const allActiveTimers = timerManagerService.getActiveListTimers();
 
     this.lastPayload = payload;
     this.bus.post('SYNC_FRAME', payload);
     this.notifyListeners(payload);
 
-    // Push to LAN API for remote smartphones & tablets
+    // Push lightweight state to LAN API for remote smartphones & tablets
     if (this.isMaster && typeof window !== 'undefined') {
+      const lanPayload: DisplaySyncPayload = {
+        ...payload,
+        backgroundImageUrl: undefined,
+        logoImageUrl: undefined,
+        listActiveCues: payload.listActiveCues?.map((item) => ({
+          ...item,
+          backgroundImageUrl: undefined,
+        })),
+      };
       fetch('/api/lan/state', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ state: payload, timers: allActiveTimers }),
+        body: JSON.stringify({ state: lanPayload, timers: allActiveTimers }),
       }).catch(() => {});
     }
   }
@@ -387,11 +464,27 @@ class DisplaySyncService {
 
   // --- WINDOW LAUNCHER ---
 
-  public openDisplayWindow(target: DisplayTarget): void {
+  public openDisplayWindow(
+    target: DisplayTarget,
+    bounds?: { x: number; y: number; width: number; height: number }
+  ): Window | null {
     const url = `${window.location.origin}${window.location.pathname}?display=${target}`;
     const windowName = `ProTimer_${target}_Window`;
-    const features = 'width=1024,height=600,menubar=no,toolbar=no,location=no,status=no';
-    window.open(url, windowName, features);
+    const isCompactPopout = target === 'preview' || target === 'presenter';
+    const width = bounds?.width || (isCompactPopout ? 360 : 1280);
+    const height = bounds?.height || (isCompactPopout ? 240 : 720);
+    const left = bounds?.x ?? (target === 'preview' ? Math.max(20, window.screen.availWidth - 390) : 28);
+    const top = bounds?.y ?? (isCompactPopout ? 60 : 0);
+    const features = `width=${width},height=${height},left=${left},top=${top},resizable=yes,menubar=no,toolbar=no,location=no,status=no`;
+    const win = window.open(url, windowName, features);
+    // Broadcast current state multiple times as the child window boots so it never misses initial sync
+    for (const delay of [100, 300, 700]) {
+      setTimeout(() => {
+        const snap = timerManagerService.getSnapshot();
+        this.broadcastCurrentState(snap.status, snap.currentSeconds);
+      }, delay);
+    }
+    return win;
   }
 }
 

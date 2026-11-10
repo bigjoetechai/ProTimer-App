@@ -5,21 +5,34 @@
  */
 
 import React, { useState, useMemo } from 'react';
+import { ListOrdered, History } from 'lucide-react';
 import { MainLayout } from '../layouts';
-import { TopMenuBar, ControlPanel, BottomBar, ListManagerModal, LanModal } from '../components';
+import {
+  TopMenuBar,
+  ControlPanel,
+  BottomBar,
+  ListManagerModal,
+  LanModal,
+  FloatingPreviewWindow,
+  FloatingPresenterWindow,
+  TimerHistoryLogView,
+} from '../components';
 import { TimerTable, TimerEditorModal } from '../timers';
 import { MessageEditorModal } from '../messages';
 import { SettingsModal } from '../settings';
+import { FullscreenDisplay, MultiFullscreenDisplay } from '../displays';
 import { useTimerManager, useDisplaySync, useHotkeys, useMonitorDetection, useWindowManager, useTheme } from '../hooks';
 import { formatSeconds } from '../utilities/timeFormatters';
 import { TimerItem, DisplayTarget, AppPreferences } from '../types';
 import { storageService } from '../services/storageService';
+import { displaySyncService } from '../services/displaySyncService';
 
 export const MainConsolePage: React.FC = () => {
   const {
     snapshot,
     timers,
     lists,
+    runLogs,
     activeTimer,
     cuedTimer,
     start,
@@ -63,6 +76,15 @@ export const MainConsolePage: React.FC = () => {
     pasteTimer,
     deleteSelectedTimer,
     hasClipboard,
+    undo,
+    redo,
+    canUndo,
+    canRedo,
+    undoLabel,
+    redoLabel,
+    deleteRunLog,
+    clearRunLogs,
+    exportRunLogsCsv,
   } = useTimerManager();
 
   const {
@@ -75,6 +97,9 @@ export const MainConsolePage: React.FC = () => {
     openDisplayWindow,
   } = useDisplaySync(false);
 
+  // Main Console active workspace tab ('cues' vs 'history')
+  const [activeConsoleTab, setActiveConsoleTab] = useState<'cues' | 'history'>('cues');
+
   // Modals state
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [editingTimer, setEditingTimer] = useState<TimerItem | null>(null);
@@ -82,6 +107,8 @@ export const MainConsolePage: React.FC = () => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isListManagerOpen, setIsListManagerOpen] = useState(false);
   const [isLanModalOpen, setIsLanModalOpen] = useState(false);
+  const [isPreviewPopoutOpen, setIsPreviewPopoutOpen] = useState(false);
+  const [isPresenterPopoutOpen, setIsPresenterPopoutOpen] = useState(false);
 
   // UI preferences & Theme
   const { theme, isDark, toggleTheme, setTheme } = useTheme();
@@ -96,6 +123,10 @@ export const MainConsolePage: React.FC = () => {
     isFullscreenActive,
     openFullscreen,
     closeFullscreen,
+    toggleFullscreen,
+    isMultiFullscreenActive,
+    closeMultiFullscreen,
+    toggleMultiFullscreen,
   } = useMonitorDetection();
   const { toggleAppFullscreen } = useWindowManager();
 
@@ -108,7 +139,15 @@ export const MainConsolePage: React.FC = () => {
   useHotkeys(
     {
       Space: () => togglePlayPause(),
-      Escape: () => stop(),
+      Escape: () => {
+        if (isFullscreenActive) {
+          closeFullscreen();
+        } else if (isMultiFullscreenActive) {
+          closeMultiFullscreen();
+        } else {
+          stop();
+        }
+      },
       r: () => restart(),
       c: () => cueNext(),
       'Shift+C': () => cuePrev(),
@@ -119,6 +158,9 @@ export const MainConsolePage: React.FC = () => {
       m: () => setIsMessageModalOpen(true),
       l: () => setIsListManagerOpen(true),
       F11: () => toggleAppFullscreen(),
+      'Ctrl+z': () => undo(),
+      'Ctrl+y': () => redo(),
+      'Ctrl+Shift+z': () => redo(),
     },
     preferences.hotkeysEnabled
   );
@@ -171,6 +213,7 @@ export const MainConsolePage: React.FC = () => {
   const handleAddList = () => {
     const listNum = lists.length + 1;
     addList(`List ${listNum}`);
+    setActiveConsoleTab('cues');
   };
 
   const handleAddTimerType = (
@@ -294,12 +337,12 @@ export const MainConsolePage: React.FC = () => {
         onNewTimer={handleAddNewTimer}
         onAddTimerType={handleAddTimerType}
         onQuickAddDuration={handleQuickAdd}
-        onUndo={() => {
-          adjustDuration(-60);
-        }}
-        onRedo={() => {
-          adjustDuration(60);
-        }}
+        onUndo={() => undo()}
+        onRedo={() => redo()}
+        canUndo={canUndo}
+        canRedo={canRedo}
+        undoLabel={undoLabel}
+        redoLabel={redoLabel}
         onCopy={() => copyTimer()}
         onCut={() => cutTimer()}
         onPaste={() => pasteTimer()}
@@ -357,33 +400,107 @@ export const MainConsolePage: React.FC = () => {
         onToggleMessageShow={() => toggleMessageVisibility()}
       />
 
-      {/* 3. TIMER LIST TABLE */}
-      <TimerTable
-        timers={timers}
-        activeTimerId={snapshot.activeTimerId}
-        cuedTimerId={snapshot.cuedTimerId}
-        status={snapshot.status}
-        currentSeconds={snapshot.currentSeconds}
-        onCue={(id) => cue(id)}
-        onStart={(id) => start(id)}
-        onPause={(id) => pause(id)}
-        onStop={(id) => stop(id)}
-        onRestart={(id) => restart(id)}
-        onEdit={handleEditTimer}
-        onDuplicate={(id) => duplicateTimer(id)}
-        onDelete={(id) => deleteTimer(id)}
-        onRename={(id, newName) => renameTimer(id, newName)}
-        onChangeType={(id, type) => updateTimer(id, { type })}
-        onChangeEndAction={(id, endAction) => updateTimer(id, { endAction })}
-        onReorder={(src, dest) => reorderTimers(src, dest)}
-        onAddNew={handleAddNewTimer}
-      />
+      {/* 3. MAIN CONSOLE VIEW TABS (Cue List | History) */}
+      <div
+        className={`h-8 px-3 flex items-center gap-1 border-b select-none transition-colors ${
+          isDark ? 'bg-[#090c13] border-[#1b2333]' : 'bg-slate-200/70 border-slate-300'
+        }`}
+      >
+        <button
+          type="button"
+          onClick={() => setActiveConsoleTab('cues')}
+          className={`px-3 py-1 rounded-t text-xs font-semibold tracking-wide flex items-center gap-1.5 transition-all cursor-pointer ${
+            activeConsoleTab === 'cues'
+              ? isDark
+                ? 'bg-[#0c1017] text-white border-b-2 border-cyan-400'
+                : 'bg-slate-100 text-slate-900 border-b-2 border-cyan-600'
+              : isDark
+              ? 'text-neutral-400 hover:text-neutral-200 hover:bg-[#111622]'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
+          }`}
+        >
+          <ListOrdered className="w-3.5 h-3.5 text-cyan-500" />
+          <span>{currentList.name}</span>
+          <span
+            className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
+              isDark ? 'bg-[#172030] text-neutral-300' : 'bg-slate-200 text-slate-700'
+            }`}
+          >
+            {timers.length}
+          </span>
+        </button>
 
-      {/* 4. BOTTOM BAR */}
+        <button
+          type="button"
+          onClick={() => setActiveConsoleTab('history')}
+          className={`px-3 py-1 rounded-t text-xs font-semibold tracking-wide flex items-center gap-1.5 transition-all cursor-pointer ${
+            activeConsoleTab === 'history'
+              ? isDark
+                ? 'bg-[#0c1017] text-cyan-300 border-b-2 border-cyan-400'
+                : 'bg-slate-100 text-cyan-800 border-b-2 border-cyan-600'
+              : isDark
+              ? 'text-neutral-400 hover:text-neutral-200 hover:bg-[#111622]'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
+          }`}
+        >
+          <History className="w-3.5 h-3.5 text-cyan-500" />
+          <span>History</span>
+          <span
+            className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
+              activeConsoleTab === 'history'
+                ? isDark
+                  ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
+                  : 'bg-cyan-100 text-cyan-800 border border-cyan-300'
+                : isDark
+                ? 'bg-[#172030] text-neutral-300'
+                : 'bg-slate-200 text-slate-700'
+            }`}
+          >
+            {runLogs.length}
+          </span>
+        </button>
+      </div>
+
+      {/* 4. ACTIVE WORKSPACE: TIMER LIST TABLE OR HISTORY LOG VIEW */}
+      {activeConsoleTab === 'history' ? (
+        <TimerHistoryLogView
+          logs={runLogs}
+          lists={lists}
+          onDeleteLog={(id) => deleteRunLog(id)}
+          onClearLogs={() => clearRunLogs()}
+          onExportCsv={() => exportRunLogsCsv()}
+        />
+      ) : (
+        <TimerTable
+          timers={timers}
+          activeTimerId={snapshot.activeTimerId}
+          cuedTimerId={snapshot.cuedTimerId}
+          status={snapshot.status}
+          currentSeconds={snapshot.currentSeconds}
+          onCue={(id) => cue(id)}
+          onStart={(id) => start(id)}
+          onPause={(id) => pause(id)}
+          onStop={(id) => stop(id)}
+          onRestart={(id) => restart(id)}
+          onEdit={handleEditTimer}
+          onDuplicate={(id) => duplicateTimer(id)}
+          onDelete={(id) => deleteTimer(id)}
+          onRename={(id, newName) => renameTimer(id, newName)}
+          onChangeType={(id, type) => updateTimer(id, { type })}
+          onChangeEndAction={(id, endAction) => updateTimer(id, { endAction })}
+          onReorder={(src, dest) => reorderTimers(src, dest)}
+          onAddNew={handleAddNewTimer}
+        />
+      )}
+
+      {/* 5. BOTTOM BAR */}
       <BottomBar
         lists={lists}
         activeListId={snapshot.activeListId}
-        onSelectList={(id) => switchList(id)}
+        onSelectList={(id) => {
+          switchList(id);
+          setActiveConsoleTab('cues');
+        }}
         onAddList={handleAddList}
         onRenameList={(id, newName) => renameList(id, newName)}
         onDuplicateList={(id) => duplicateList(id)}
@@ -392,9 +509,26 @@ export const MainConsolePage: React.FC = () => {
         onExportList={(id) => downloadListJson(id)}
         onOpenListManager={() => setIsListManagerOpen(true)}
         getRunningTimerCount={(id) => getRunningTimerCount(id)}
+        isHistoryTabActive={activeConsoleTab === 'history'}
+        onSelectHistoryTab={() =>
+          setActiveConsoleTab((prev) => (prev === 'history' ? 'cues' : 'history'))
+        }
+        historyCount={runLogs.length}
         onOpenDisplay={(target: DisplayTarget) => {
           if (target === 'fullscreen') {
-            openFullscreen(selectedMonitorId, 'fullscreen');
+            toggleFullscreen(selectedMonitorId);
+          } else if (target === 'multi_fullscreen') {
+            toggleMultiFullscreen(selectedMonitorId);
+          } else if (target === 'presenter') {
+            setIsPresenterPopoutOpen((prev) => !prev);
+            if (typeof window !== 'undefined' && window.electronAPI?.isElectron) {
+              openDisplayWindow('presenter', { x: 28, y: 60, width: 360, height: 240 });
+            }
+          } else if (target === 'preview') {
+            setIsPreviewPopoutOpen((prev) => !prev);
+            if (typeof window !== 'undefined' && window.electronAPI?.isElectron) {
+              openDisplayWindow('preview', { x: 40, y: 60, width: 360, height: 240 });
+            }
           } else if (target === 'lan_control' || target === 'lan_display') {
             setIsLanModalOpen(true);
             openDisplayWindow(target);
@@ -413,6 +547,53 @@ export const MainConsolePage: React.FC = () => {
         detectedMonitors={displays}
         isFullscreenActive={isFullscreenActive}
         onCloseFullscreen={closeFullscreen}
+        isMultiFullscreenActive={isMultiFullscreenActive}
+        onCloseMultiFullscreen={closeMultiFullscreen}
+        isPreviewActive={isPreviewPopoutOpen}
+        isPresenterActive={isPresenterPopoutOpen}
+      />
+
+      {/* ALWAYS-ON-TOP RESIZABLE PRESENTER POP-OUT SCREEN (360 x 240 px, NO top controls) */}
+      <FloatingPresenterWindow
+        isOpen={isPresenterPopoutOpen}
+        onClose={() => setIsPresenterPopoutOpen(false)}
+        onPopOutWindow={() => openDisplayWindow('presenter', { x: 28, y: 60, width: 360, height: 240 })}
+        timeStr={formatSeconds(snapshot.currentSeconds, true, snapshot.isOvertime)}
+        status={snapshot.status}
+        isOvertime={snapshot.isOvertime}
+        alertColor={snapshot.alertColor}
+        isFlash={snapshot.isFlash}
+        isOnOff={snapshot.isOnOff}
+        activeTimer={activeTimer || cuedTimer}
+        nextTimerName={payload?.nextTimer?.name}
+        progressPercent={payload?.progressPercent ?? 0}
+        isBlackout={payload?.isBlackout ?? false}
+        isClockMode={payload?.isClockMode ?? false}
+        clockTimeFormatted={payload?.clockTimeFormatted}
+      />
+
+      {/* ALWAYS-ON-TOP RESIZABLE PREVIEW POP-OUT SCREEN (360 x 240 px) */}
+      <FloatingPreviewWindow
+        isOpen={isPreviewPopoutOpen}
+        onClose={() => setIsPreviewPopoutOpen(false)}
+        onPopOutWindow={() => openDisplayWindow('preview', { x: 40, y: 60, width: 360, height: 240 })}
+        timeStr={formatSeconds(snapshot.currentSeconds, true, snapshot.isOvertime)}
+        status={snapshot.status}
+        isOvertime={snapshot.isOvertime}
+        alertColor={snapshot.alertColor}
+        isFlash={snapshot.isFlash}
+        isOnOff={snapshot.isOnOff}
+        activeTimer={activeTimer || cuedTimer}
+        nextTimerName={payload?.nextTimer?.name}
+        progressPercent={payload?.progressPercent ?? 0}
+        isBlackout={payload?.isBlackout ?? false}
+        isClockMode={payload?.isClockMode ?? false}
+        clockTimeFormatted={payload?.clockTimeFormatted}
+        onStart={() => start()}
+        onPause={() => pause()}
+        onStop={() => stop()}
+        onNextCue={() => skipEvent()}
+        onAdjustDuration={(delta) => adjustDuration(delta)}
       />
 
       {/* 5. MODALS */}
@@ -440,6 +621,12 @@ export const MainConsolePage: React.FC = () => {
         getRunningTimerCount={getRunningTimerCount}
         getAllRunningTimers={getAllRunningTimers}
         onRunIndependenceTest={runMultiListIndependenceTest}
+        onUndo={() => undo()}
+        onRedo={() => redo()}
+        canUndo={canUndo}
+        canRedo={canRedo}
+        undoLabel={undoLabel}
+        redoLabel={redoLabel}
       />
 
       <MessageEditorModal
@@ -453,6 +640,8 @@ export const MainConsolePage: React.FC = () => {
       <SettingsModal
         isOpen={isSettingsOpen}
         preferences={preferences}
+        lists={lists}
+        activeListId={snapshot.activeListId}
         onClose={() => setIsSettingsOpen(false)}
         onSave={(newPrefs) => {
           setPreferences(newPrefs);
@@ -460,6 +649,7 @@ export const MainConsolePage: React.FC = () => {
             setTheme(newPrefs.theme);
           }
           storageService.savePreferences(newPrefs);
+          displaySyncService.notifyPreferencesUpdated();
         }}
       />
 
@@ -467,6 +657,20 @@ export const MainConsolePage: React.FC = () => {
         isOpen={isLanModalOpen}
         onClose={() => setIsLanModalOpen(false)}
       />
+
+      {/* FULLSCREEN OUTPUT WINDOW OVERLAY (Web / Preview Window) */}
+      {isFullscreenActive && !(typeof window !== 'undefined' && window.electronAPI?.isElectron) && (
+        <div className="fixed inset-0 z-[9998]">
+          <FullscreenDisplay isClient={false} onClose={() => closeFullscreen()} />
+        </div>
+      )}
+
+      {/* MULTI FS OUTPUT WINDOW OVERLAY (Web / Preview Window) */}
+      {isMultiFullscreenActive && !(typeof window !== 'undefined' && window.electronAPI?.isElectron) && (
+        <div className="fixed inset-0 z-[9997]">
+          <MultiFullscreenDisplay isClient={false} onClose={() => closeMultiFullscreen()} />
+        </div>
+      )}
     </MainLayout>
   );
 };

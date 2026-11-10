@@ -1,5 +1,5 @@
 /**
- * Secondary Display Route for Presenter, Stage, Preview, Fullscreen, NDI, and LAN views.
+ * Secondary Display Route for Presenter, Stage, Preview, Fullscreen, Multi FS, NDI, and LAN views.
  */
 
 import React from 'react';
@@ -8,6 +8,7 @@ import {
   StageDisplay, 
   PreviewDisplay, 
   FullscreenDisplay,
+  MultiFullscreenDisplay,
   LanControlDisplay,
   NdiDisplay,
 } from '../displays';
@@ -26,6 +27,8 @@ export const DisplayPage: React.FC<DisplayPageProps> = ({ target }) => {
       return <StageDisplay />;
     case 'fullscreen':
       return <FullscreenDisplay />;
+    case 'multi_fullscreen':
+      return <MultiFullscreenDisplay />;
     case 'lan_control':
       return <LanControlDisplay />;
     case 'ndi':

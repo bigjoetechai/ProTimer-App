@@ -24,7 +24,10 @@ import {
   StopwatchLap,
   TimerAlert,
   ListExportData,
-  AllListsBackupData
+  AllListsBackupData,
+  ListActiveCueSummary,
+  TimerRunLogEntry,
+  resolveBackgroundImageForList
 } from '../types';
 import { generateId } from '../utilities/idGenerator';
 import { formatSeconds } from '../utilities/timeFormatters';
@@ -124,6 +127,10 @@ class TimerManagerService {
 
   // Set of IDs of timers currently running concurrently
   private runningTimerIds: Set<string> = new Set();
+
+  // Timer execution history logs (Start & Stop timestamps)
+  private runLogs: TimerRunLogEntry[] = [];
+  private activeLogIdByTimerId: Map<string, string> = new Map();
 
   // Central high-resolution tick interval
   private intervalHandle: number | null = null;
@@ -242,6 +249,26 @@ class TimerManagerService {
       this.seedInitialTimers();
     }
 
+    // Load persisted timer run history logs
+    const savedLogs = storageService.getRunLogs();
+    if (Array.isArray(savedLogs)) {
+      let modified = false;
+      this.runLogs = savedLogs.map((entry) => {
+        if (entry.status === 'running' || entry.status === 'paused') {
+          modified = true;
+          return {
+            ...entry,
+            status: 'stopped' as const,
+            stopTimestamp: entry.stopTimestamp || Date.now(),
+          };
+        }
+        return entry;
+      });
+      if (modified) {
+        storageService.saveRunLogs(this.runLogs);
+      }
+    }
+
     // Auto-cue first timer in active list
     const activeList = this.lists.get(this.activeListId);
     if (activeList && activeList.timerIds.length > 0) {
@@ -251,6 +278,145 @@ class TimerManagerService {
 
     this.isInitialized = true;
     this.notifySubscribers();
+  }
+
+  // ===========================================================================
+  // TIMER RUN HISTORY LOGGING (START & STOP TIMESTAMPS)
+  // ===========================================================================
+
+  private findParentListForTimer(timerId: string): TimerList | undefined {
+    for (const list of this.lists.values()) {
+      if (list.timerIds.includes(timerId)) {
+        return list;
+      }
+    }
+    return this.lists.get(this.activeListId);
+  }
+
+  private recordTimerStart(timer: TimerItem, isResumingFromPause: boolean = false): void {
+    const existingLogId = this.activeLogIdByTimerId.get(timer.id);
+    if (isResumingFromPause && existingLogId) {
+      const entry = this.runLogs.find((l) => l.id === existingLogId);
+      if (entry) {
+        entry.status = 'running';
+        entry.stopTimestamp = null;
+        storageService.saveRunLogs(this.runLogs);
+        return;
+      }
+    }
+
+    if (existingLogId) {
+      this.recordTimerStop(timer, 'stopped');
+    }
+
+    const parentList = this.findParentListForTimer(timer.id);
+    const now = Date.now();
+    const newEntry: TimerRunLogEntry = {
+      id: generateId('log'),
+      timerId: timer.id,
+      timerName: timer.name || 'Untitled Timer',
+      timerType: timer.type,
+      listId: parentList?.id || this.activeListId,
+      listName: parentList?.name || 'Cue List',
+      plannedDurationSeconds: timer.durationSeconds || 0,
+      startTimestamp: now,
+      stopTimestamp: null,
+      elapsedSeconds: Math.max(0, Math.round(timer.elapsedSeconds || 0)),
+      status: 'running',
+    };
+
+    this.runLogs.unshift(newEntry);
+    if (this.runLogs.length > 500) {
+      this.runLogs = this.runLogs.slice(0, 500);
+    }
+    this.activeLogIdByTimerId.set(timer.id, newEntry.id);
+    storageService.saveRunLogs(this.runLogs);
+  }
+
+  private recordTimerPause(timer: TimerItem): void {
+    const activeLogId = this.activeLogIdByTimerId.get(timer.id);
+    if (!activeLogId) return;
+    const entry = this.runLogs.find((l) => l.id === activeLogId);
+    if (entry) {
+      entry.status = 'paused';
+      entry.elapsedSeconds = Math.max(0, Math.round(timer.elapsedSeconds || 0));
+      storageService.saveRunLogs(this.runLogs);
+    }
+  }
+
+  private recordTimerStop(timer: TimerItem, finalStatus: 'stopped' | 'completed' = 'stopped'): void {
+    const activeLogId = this.activeLogIdByTimerId.get(timer.id);
+    if (!activeLogId) return;
+    const entry = this.runLogs.find((l) => l.id === activeLogId);
+    if (entry) {
+      entry.stopTimestamp = Date.now();
+      entry.elapsedSeconds = Math.max(0, Math.round(timer.elapsedSeconds || 0));
+      entry.status = finalStatus;
+    }
+    this.activeLogIdByTimerId.delete(timer.id);
+    storageService.saveRunLogs(this.runLogs);
+  }
+
+  public getRunLogs(): TimerRunLogEntry[] {
+    return this.runLogs;
+  }
+
+  public deleteRunLog(logId: string): void {
+    this.runLogs = this.runLogs.filter((l) => l.id !== logId);
+    for (const [timerId, activeLogId] of this.activeLogIdByTimerId.entries()) {
+      if (activeLogId === logId) {
+        this.activeLogIdByTimerId.delete(timerId);
+      }
+    }
+    storageService.saveRunLogs(this.runLogs);
+    this.notifySubscribers();
+  }
+
+  public clearRunLogs(): void {
+    this.runLogs = [];
+    this.activeLogIdByTimerId.clear();
+    storageService.saveRunLogs(this.runLogs);
+    this.notifySubscribers();
+  }
+
+  public exportRunLogsCsv(): void {
+    const escapeCsv = (str: string) => `"${(str || '').replace(/"/g, '""')}"`;
+    let csvContent =
+      'Timer Name,Cue List,Timer Type,Planned Duration,Actual Elapsed,Start Timestamp,Stop Timestamp,Status\r\n';
+
+    this.runLogs.forEach((entry) => {
+      const startDateStr = new Date(entry.startTimestamp).toLocaleString();
+      const stopDateStr = entry.stopTimestamp
+        ? new Date(entry.stopTimestamp).toLocaleString()
+        : entry.status === 'running'
+        ? 'RUNNING'
+        : 'PAUSED';
+      const plannedStr = formatSeconds(entry.plannedDurationSeconds, true);
+      const elapsedStr = formatSeconds(entry.elapsedSeconds, true);
+
+      csvContent +=
+        [
+          escapeCsv(entry.timerName),
+          escapeCsv(entry.listName),
+          escapeCsv(entry.timerType),
+          escapeCsv(plannedStr),
+          escapeCsv(elapsedStr),
+          escapeCsv(startDateStr),
+          escapeCsv(stopDateStr),
+          escapeCsv(entry.status.toUpperCase()),
+        ].join(',') + '\r\n';
+    });
+
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `protimer-history-logs-${dateStr}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }
 
   private seedInitialTimers() {
@@ -545,7 +711,8 @@ class TimerManagerService {
     // Transition previous running timer(s) to completed so the next cue takes over
     if (this.activeTimerId && this.activeTimerId !== idToStart) {
       const prevTimer = this.timers.get(this.activeTimerId);
-      if (prevTimer && prevTimer.status === 'running') {
+      if (prevTimer && (prevTimer.status === 'running' || prevTimer.status === 'overtime')) {
+        this.recordTimerStop(prevTimer, 'stopped');
         prevTimer.status = 'completed';
         this.runningTimerIds.delete(this.activeTimerId);
         this.saveTimerToStorage(prevTimer);
@@ -553,6 +720,7 @@ class TimerManagerService {
     }
 
     this.activeTimerId = idToStart;
+    const wasPaused = timer.status === 'paused';
 
     // START should use the system time using the DURATION to determine the END
     const now = new Date();
@@ -575,6 +743,7 @@ class TimerManagerService {
 
     this.runningTimerIds.add(idToStart);
     this.ensureTickerRunning();
+    this.recordTimerStart(timer, wasPaused);
     this.saveTimerToStorage(timer);
 
     // Advance cuedTimerId to the NEXT playable cue in sequence so the operator's next click of START starts the subsequent cue
@@ -607,6 +776,16 @@ class TimerManagerService {
 
     const timer = this.timers.get(idToStop);
     if (!timer) return;
+
+    // Record stop timestamp before resetting elapsed time
+    if (
+      this.activeLogIdByTimerId.has(idToStop) ||
+      timer.status === 'running' ||
+      timer.status === 'paused' ||
+      timer.status === 'overtime'
+    ) {
+      this.recordTimerStop(timer, 'stopped');
+    }
 
     timer.status = 'idle';
     timer.triggeredAlertIds = [];
@@ -661,6 +840,7 @@ class TimerManagerService {
       this.activeTimerId = idToPause;
       this.runningTimerIds.add(idToPause);
       this.ensureTickerRunning();
+      this.recordTimerStart(timer, true);
 
       this.saveTimerToStorage(timer);
       this.notifySubscribers();
@@ -683,6 +863,7 @@ class TimerManagerService {
 
     this.runningTimerIds.delete(idToPause);
     this.checkStopTicker();
+    this.recordTimerPause(timer);
 
     this.saveTimerToStorage(timer);
     this.notifySubscribers();
@@ -698,6 +879,15 @@ class TimerManagerService {
 
     const timer = this.timers.get(idToRestart);
     if (!timer) return;
+
+    if (
+      this.activeLogIdByTimerId.has(idToRestart) ||
+      timer.status === 'running' ||
+      timer.status === 'paused' ||
+      timer.status === 'overtime'
+    ) {
+      this.recordTimerStop(timer, 'stopped');
+    }
 
     const now = new Date();
     timer.startTime = formatClock(now, true);
@@ -723,6 +913,7 @@ class TimerManagerService {
     this.activeTimerId = idToRestart;
     this.runningTimerIds.add(idToRestart);
     this.ensureTickerRunning();
+    this.recordTimerStart(timer, false);
 
     this.saveTimerToStorage(timer);
     this.notifySubscribers();
@@ -1083,6 +1274,15 @@ class TimerManagerService {
       timer.elapsedSeconds += virtualDeltaSec;
       const isComplete = this.updateComputedSeconds(timer);
 
+      // Update live elapsed seconds in active run log entry
+      const activeLogId = this.activeLogIdByTimerId.get(timer.id);
+      if (activeLogId) {
+        const logEntry = this.runLogs.find((l) => l.id === activeLogId);
+        if (logEntry) {
+          logEntry.elapsedSeconds = Math.max(0, Math.round(timer.elapsedSeconds));
+        }
+      }
+
       if (!isComplete && timer.status === 'overtime') {
         timer.status = 'running';
       }
@@ -1158,12 +1358,14 @@ class TimerManagerService {
     // Process standard end action
     switch (timer.endAction) {
       case 'blackout':
+        this.recordTimerStop(timer, 'completed');
         timer.status = 'completed';
         this.runningTimerIds.delete(timer.id);
         this.checkStopTicker();
         this.triggerBlackout(true);
         break;
       case 'next_timer':
+        this.recordTimerStop(timer, 'completed');
         timer.status = 'completed';
         this.runningTimerIds.delete(timer.id);
         this.moveNextCue();
@@ -1174,10 +1376,12 @@ class TimerManagerService {
         }
         break;
       case 'loop':
+        this.recordTimerStop(timer, 'completed');
         this.restart(timer.id);
         break;
       case 'stop':
         // If explicitly requested to stop, complete and stop ticker
+        this.recordTimerStop(timer, 'completed');
         timer.status = 'completed';
         this.runningTimerIds.delete(timer.id);
         this.checkStopTicker();
@@ -1199,40 +1403,221 @@ class TimerManagerService {
   }
 
   // ===========================================================================
+  // UNDO / REDO HISTORY ENGINE (Cue Lists & Cues)
+  // ===========================================================================
+
+  private undoStack: Array<{
+    actionLabel: string;
+    lists: TimerList[];
+    timers: TimerItem[];
+    activeListId: string;
+    activeTimerId: string | null;
+    cuedTimerId: string | null;
+  }> = [];
+
+  private redoStack: Array<{
+    actionLabel: string;
+    lists: TimerList[];
+    timers: TimerItem[];
+    activeListId: string;
+    activeTimerId: string | null;
+    cuedTimerId: string | null;
+  }> = [];
+
+  private readonly MAX_HISTORY = 50;
+
+  private captureHistoryState(actionLabel: string) {
+    const clonedLists: TimerList[] = Array.from(this.lists.values()).map((l) => ({
+      ...l,
+      timerIds: [...l.timerIds],
+    }));
+
+    const clonedTimers: TimerItem[] = Array.from(this.timers.values()).map((t) => ({
+      ...t,
+      alert1: t.alert1 ? { ...t.alert1 } : undefined,
+      alert2: t.alert2 ? { ...t.alert2 } : undefined,
+      laps: t.laps ? t.laps.map((lap) => ({ ...lap })) : [],
+      triggeredAlertIds: t.triggeredAlertIds ? [...t.triggeredAlertIds] : undefined,
+    }));
+
+    return {
+      actionLabel,
+      lists: clonedLists,
+      timers: clonedTimers,
+      activeListId: this.activeListId,
+      activeTimerId: this.activeTimerId,
+      cuedTimerId: this.cuedTimerId,
+    };
+  }
+
+  private pushHistory(actionLabel: string): void {
+    if (!this.isInitialized) return;
+    this.undoStack.push(this.captureHistoryState(actionLabel));
+    if (this.undoStack.length > this.MAX_HISTORY) {
+      this.undoStack.shift();
+    }
+    this.redoStack = [];
+  }
+
+  private applyHistoryState(entry: {
+    actionLabel: string;
+    lists: TimerList[];
+    timers: TimerItem[];
+    activeListId: string;
+    activeTimerId: string | null;
+    cuedTimerId: string | null;
+  }): void {
+    const previousRunningTimers = new Map<string, TimerItem>();
+    this.runningTimerIds.forEach((tid) => {
+      const t = this.timers.get(tid);
+      if (t) previousRunningTimers.set(tid, t);
+    });
+
+    this.lists.clear();
+    entry.lists.forEach((l) => {
+      this.lists.set(l.id, { ...l, timerIds: [...l.timerIds] });
+    });
+
+    this.timers.clear();
+    entry.timers.forEach((t) => {
+      const liveTimer = previousRunningTimers.get(t.id);
+      if (liveTimer && (liveTimer.status === 'running' || liveTimer.status === 'overtime')) {
+        // Preserve live ticking progress for timers that remained running across the undo/redo
+        this.timers.set(t.id, {
+          ...t,
+          status: liveTimer.status,
+          elapsedSeconds: liveTimer.elapsedSeconds,
+          remainingSeconds: liveTimer.remainingSeconds,
+        });
+      } else {
+        this.timers.set(t.id, {
+          ...t,
+          status: t.status === 'running' || t.status === 'overtime' ? 'paused' : t.status,
+          alert1: t.alert1 ? { ...t.alert1 } : undefined,
+          alert2: t.alert2 ? { ...t.alert2 } : undefined,
+          laps: t.laps ? t.laps.map((lap) => ({ ...lap })) : [],
+        });
+      }
+    });
+
+    // Clean up runningTimerIds for any timer that no longer exists
+    Array.from(this.runningTimerIds).forEach((tid) => {
+      if (!this.timers.has(tid)) {
+        this.runningTimerIds.delete(tid);
+      }
+    });
+    this.checkStopTicker();
+
+    if (this.lists.has(entry.activeListId)) {
+      this.activeListId = entry.activeListId;
+    } else {
+      const firstList = this.getAllLists()[0];
+      this.activeListId = firstList ? firstList.id : 'list_1';
+    }
+
+    const activeList = this.lists.get(this.activeListId);
+    this.activeTimerId =
+      entry.activeTimerId && this.timers.has(entry.activeTimerId) ? entry.activeTimerId : null;
+    this.cuedTimerId =
+      entry.cuedTimerId && this.timers.has(entry.cuedTimerId)
+        ? entry.cuedTimerId
+        : activeList?.timerIds[0] || null;
+
+    storageService.replaceAllListsAndTimers(
+      this.getAllLists(),
+      Array.from(this.timers.values())
+    );
+
+    this.notifySubscribers();
+  }
+
+  public undo(): boolean {
+    if (this.undoStack.length === 0) return false;
+    const entry = this.undoStack.pop()!;
+    this.redoStack.push(this.captureHistoryState(entry.actionLabel));
+    this.applyHistoryState(entry);
+    return true;
+  }
+
+  public redo(): boolean {
+    if (this.redoStack.length === 0) return false;
+    const entry = this.redoStack.pop()!;
+    this.undoStack.push(this.captureHistoryState(entry.actionLabel));
+    this.applyHistoryState(entry);
+    return true;
+  }
+
+  public canUndo(): boolean {
+    return this.undoStack.length > 0;
+  }
+
+  public canRedo(): boolean {
+    return this.redoStack.length > 0;
+  }
+
+  public getUndoLabel(): string | null {
+    return this.undoStack.length > 0
+      ? this.undoStack[this.undoStack.length - 1].actionLabel
+      : null;
+  }
+
+  public getRedoLabel(): string | null {
+    return this.redoStack.length > 0
+      ? this.redoStack[this.redoStack.length - 1].actionLabel
+      : null;
+  }
+
+  // ===========================================================================
   // CRUD & LIST MANAGEMENT
   // ===========================================================================
 
   public addTimer(timerData: Partial<TimerItem>): TimerItem {
+    this.pushHistory(`Add Cue "${timerData.name || timerData.type || 'Timer'}"`);
+    const prefs = storageService.getPreferences();
     const list = this.lists.get(this.activeListId);
     const order = list ? list.timerIds.length : 0;
-    const isSpecialRow = timerData.type === 'empty' || timerData.type === 'spacer';
-    const durSec = timerData.durationSeconds ?? (isSpecialRow ? 0 : 300);
+
+    const resolvedType =
+      timerData.type ||
+      (prefs.defaultNewTimerType === 'end_time'
+        ? 'countdown'
+        : prefs.defaultNewTimerType) ||
+      'countdown';
+
+    const isSpecialRow = resolvedType === 'empty' || resolvedType === 'spacer';
+    const prefDefaultDur =
+      prefs.defaultDurationEnabled !== false ? (prefs.defaultDurationSeconds ?? 600) : 0;
+    const durSec = timerData.durationSeconds ?? (isSpecialRow ? 0 : prefDefaultDur);
 
     const defaultAlert1: TimerAlert | undefined = isSpecialRow
       ? undefined
-      : (timerData.alert1 !== undefined 
-          ? timerData.alert1 
-          : (durSec >= 60 ? {
-              id: generateId('alt'),
-              timeSeconds: Math.min(durSec - 10, Math.max(30, Math.round(durSec * 0.4))),
-              color: '#eab308',
-              flash: false,
-              soundEnabled: false,
-              label: 'Alert 1 (Warning)',
-            } : undefined));
+      : timerData.alert1 !== undefined
+      ? timerData.alert1
+      : prefs.defaultAlert1Enabled !== false
+      ? {
+          id: generateId('alt'),
+          timeSeconds: prefs.defaultWarningSeconds ?? 90,
+          color: '#eab308',
+          flash: false,
+          soundEnabled: false,
+          label: 'Alert 1 (Warning)',
+        }
+      : undefined;
 
     const defaultAlert2: TimerAlert | undefined = isSpecialRow
       ? undefined
-      : (timerData.alert2 !== undefined 
-          ? timerData.alert2 
-          : (durSec >= 30 ? {
-              id: generateId('alt'),
-              timeSeconds: Math.min(durSec - 5, Math.max(10, Math.round(durSec * 0.2))),
-              color: '#ef4444',
-              flash: true,
-              soundEnabled: false,
-              label: 'Alert 2 (Danger)',
-            } : undefined));
+      : timerData.alert2 !== undefined
+      ? timerData.alert2
+      : prefs.defaultAlert2Enabled
+      ? {
+          id: generateId('alt'),
+          timeSeconds: prefs.defaultDangerSeconds ?? 30,
+          color: '#ef4444',
+          flash: true,
+          soundEnabled: false,
+          label: 'Alert 2 (Danger)',
+        }
+      : undefined;
 
     const newTimer: TimerItem = {
       id: generateId('t'),
@@ -1241,12 +1626,14 @@ class TimerManagerService {
       durationSeconds: durSec,
       elapsedSeconds: 0,
       remainingSeconds: durSec,
-      type: timerData.type || 'countdown',
+      type: resolvedType,
       status: 'idle',
       speed: isSpecialRow ? (timerData.speed ?? 0) : Math.max(1, Math.min(200, timerData.speed || 100)),
       alert1: defaultAlert1,
       alert2: defaultAlert2,
-      endAction: timerData.endAction || (isSpecialRow ? 'none' : 'count_up'),
+      endAction:
+        timerData.endAction ||
+        (isSpecialRow ? 'none' : prefs.defaultNewTimerEndAction || 'count_up'),
       laps: [],
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -1273,6 +1660,7 @@ class TimerManagerService {
   public updateTimer(id: string, updates: Partial<TimerItem>): void {
     const existing = this.timers.get(id);
     if (!existing) return;
+    this.pushHistory(`Edit Cue "${existing.name || 'Cue'}"`);
 
     const updated: TimerItem = {
       ...existing,
@@ -1318,6 +1706,10 @@ class TimerManagerService {
   }
 
   public deleteTimer(id: string): void {
+    const existing = this.timers.get(id);
+    if (!existing) return;
+    this.pushHistory(`Delete Cue "${existing.name || 'Cue'}"`);
+
     this.runningTimerIds.delete(id);
     this.checkStopTicker();
 
@@ -1346,6 +1738,8 @@ class TimerManagerService {
 
     const list = this.lists.get(this.activeListId);
     if (!list) return null;
+
+    this.pushHistory(`Duplicate Cue "${original.name || 'Cue'}"`);
 
     const originalIdx = list.timerIds.indexOf(id);
     const insertIdx = originalIdx >= 0 ? originalIdx + 1 : list.timerIds.length;
@@ -1432,6 +1826,7 @@ class TimerManagerService {
       return;
     }
 
+    this.pushHistory('Reorder Cues');
     const [movedId] = list.timerIds.splice(sourceIndex, 1);
     list.timerIds.splice(destinationIndex, 0, movedId);
 
@@ -1451,6 +1846,8 @@ class TimerManagerService {
   public renameTimer(id: string, newName: string): void {
     const timer = this.timers.get(id);
     if (!timer) return;
+    if (timer.name === newName.trim()) return;
+    this.pushHistory(`Rename Cue "${timer.name}"`);
     timer.name = newName.trim();
     timer.updatedAt = Date.now();
     storageService.saveTimer(timer);
@@ -1493,6 +1890,7 @@ class TimerManagerService {
     const sortedLists = this.getAllLists();
     const listNumber = sortedLists.length + 1;
     const finalName = (name && name.trim()) ? name.trim() : `List ${listNumber}`;
+    this.pushHistory(`Add Cue List "${finalName}"`);
     const id = generateId('list');
     
     const maxOrder = sortedLists.reduce((max, l) => Math.max(max, l.order ?? 0), -1);
@@ -1520,8 +1918,9 @@ class TimerManagerService {
     const list = this.lists.get(listId);
     if (!list) return;
     const trimmed = newName.trim();
-    if (!trimmed) return;
+    if (!trimmed || list.name === trimmed) return;
 
+    this.pushHistory(`Rename Cue List "${list.name}"`);
     list.name = trimmed;
     list.updatedAt = Date.now();
     storageService.saveList(list);
@@ -1538,6 +1937,8 @@ class TimerManagerService {
 
     const listToDelete = this.lists.get(listId);
     if (!listToDelete) return false;
+
+    this.pushHistory(`Delete Cue List "${listToDelete.name}"`);
 
     // If deleting the active list, switch to an adjacent list first
     if (this.activeListId === listId) {
@@ -1579,6 +1980,7 @@ class TimerManagerService {
     const original = this.lists.get(listId);
     if (!original) return null;
 
+    this.pushHistory(`Duplicate Cue List "${original.name}"`);
     const sortedLists = this.getAllLists();
     const originalIndex = sortedLists.findIndex(l => l.id === listId);
 
@@ -1649,6 +2051,7 @@ class TimerManagerService {
       return;
     }
 
+    this.pushHistory('Reorder Cue Lists');
     const [moved] = sorted.splice(sourceIndex, 1);
     sorted.splice(destinationIndex, 0, moved);
 
@@ -1779,6 +2182,8 @@ class TimerManagerService {
       if (lines.length === 0) {
         return { success: false, count: 0, message: 'Empty CSV file.' };
       }
+
+      this.pushHistory(`Import CSV into "${list.name}"`);
 
       let startIndex = 0;
       const firstLineLower = lines[0].toLowerCase();
@@ -1934,6 +2339,8 @@ class TimerManagerService {
       if (!data || typeof data !== 'object') {
         return { success: false, message: 'Invalid JSON data provided.' };
       }
+
+      this.pushHistory('Import Cue List');
 
       // Check if this is an all-lists backup
       if (data.type === 'all_lists' && Array.isArray(data.lists)) {
@@ -2174,6 +2581,9 @@ class TimerManagerService {
     list.timerIds.forEach(id => {
       const t = this.timers.get(id);
       if (t) {
+        if (this.activeLogIdByTimerId.has(id)) {
+          this.recordTimerStop(t, 'stopped');
+        }
         t.elapsedSeconds = 0;
         t.status = 'idle';
         t.remainingSeconds = t.durationSeconds;
@@ -2281,6 +2691,110 @@ class TimerManagerService {
 
   public getTimerById(id: string): TimerItem | null {
     return this.timers.get(id) || null;
+  }
+
+  /**
+   * Returns the active (or cued) cue summary for every Cue List tab for Multi FS display.
+   */
+  public getAllListsActiveCues(): ListActiveCueSummary[] {
+    const allLists = this.getAllLists();
+    const prefs = storageService.getPreferences();
+    return allLists.map((list) => {
+      const listTimers = list.timerIds
+        .map((id) => this.timers.get(id))
+        .filter((t): t is TimerItem => Boolean(t));
+
+      const nonSpacerTimers = listTimers.filter((t) => t.type !== 'spacer');
+
+      // 1. Running / overtime timer in this list
+      let activeTimer: TimerItem | null =
+        listTimers.find((t) => this.runningTimerIds.has(t.id)) || null;
+
+      // 2. If active operator list, check activeTimerId or cuedTimerId
+      if (!activeTimer && this.activeListId === list.id) {
+        if (this.activeTimerId && list.timerIds.includes(this.activeTimerId)) {
+          activeTimer = this.timers.get(this.activeTimerId) || null;
+        } else if (this.cuedTimerId && list.timerIds.includes(this.cuedTimerId)) {
+          activeTimer = this.timers.get(this.cuedTimerId) || null;
+        }
+      }
+
+      // 3. Paused or explicitly cued timer in this list
+      if (!activeTimer) {
+        activeTimer =
+          nonSpacerTimers.find((t) => t.status === 'paused') ||
+          nonSpacerTimers.find((t) => t.status === 'cued') ||
+          nonSpacerTimers[0] ||
+          null;
+      }
+
+      // Determine next cue in this list
+      let nextTimer: TimerItem | null = null;
+      if (activeTimer) {
+        const idx = nonSpacerTimers.findIndex((t) => t.id === activeTimer!.id);
+        if (idx !== -1 && idx + 1 < nonSpacerTimers.length) {
+          nextTimer = nonSpacerTimers[idx + 1];
+        }
+      }
+
+      const status: TimerStatus = activeTimer?.status || 'idle';
+      const isCountUp =
+        activeTimer?.type === 'count_up' || activeTimer?.type === 'stopwatch';
+      const currentSeconds = activeTimer
+        ? isCountUp
+          ? activeTimer.elapsedSeconds
+          : activeTimer.remainingSeconds
+        : 0;
+      const totalDurationSeconds = activeTimer?.durationSeconds || 0;
+      const isOvertime =
+        status === 'overtime' || (!isCountUp && currentSeconds < 0 && (status === 'running' || status === 'paused'));
+
+      let formattedTime = '00:00:00';
+      if (activeTimer?.type === 'digital_clock') {
+        formattedTime = formatClock(new Date());
+      } else if (activeTimer?.type === 'empty') {
+        formattedTime = '--:--:--';
+      } else {
+        formattedTime = formatSeconds(currentSeconds, true, isOvertime);
+      }
+
+      const progressPercent =
+        activeTimer && totalDurationSeconds > 0
+          ? Math.min(100, Math.max(0, (activeTimer.elapsedSeconds / totalDurationSeconds) * 100))
+          : 0;
+
+      const alertInfo = computeActiveAlert(activeTimer, currentSeconds, status);
+      const activeAlertLevel: 'none' | 'warning' | 'danger' =
+        alertInfo.level === 'alert2' || alertInfo.level === 'overtime'
+          ? 'danger'
+          : alertInfo.level === 'alert1'
+          ? 'warning'
+          : 'none';
+
+      const runningCuesCount = list.timerIds.filter((tid) => this.runningTimerIds.has(tid)).length;
+      const backgroundImageUrl = resolveBackgroundImageForList(prefs, list.id);
+
+      return {
+        listId: list.id,
+        listName: list.name,
+        isCurrentOperatorList: list.id === this.activeListId,
+        activeTimer,
+        nextTimer,
+        status,
+        formattedTime,
+        secondsRemaining: currentSeconds,
+        totalDurationSeconds,
+        progressPercent,
+        isOvertime,
+        activeAlertLevel,
+        alertColor: alertInfo.color,
+        alertFlash: alertInfo.flash,
+        alertOnOff: alertInfo.onOff,
+        totalCuesCount: nonSpacerTimers.length,
+        runningCuesCount,
+        backgroundImageUrl,
+      };
+    });
   }
 }
 

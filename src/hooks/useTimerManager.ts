@@ -3,13 +3,14 @@
  */
 
 import { useState, useEffect } from 'react';
-import { TimerItem, TimerList, TimerSnapshot } from '../types';
+import { TimerItem, TimerList, TimerSnapshot, TimerRunLogEntry } from '../types';
 import { timerManagerService } from '../services/timerManager';
 
 export function useTimerManager() {
   const [snapshot, setSnapshot] = useState<TimerSnapshot>(timerManagerService.getSnapshot());
   const [timers, setTimers] = useState<TimerItem[]>(timerManagerService.getActiveListTimers());
   const [lists, setLists] = useState<TimerList[]>(timerManagerService.getAllLists());
+  const [runLogs, setRunLogs] = useState<TimerRunLogEntry[]>(timerManagerService.getRunLogs());
   const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
@@ -19,6 +20,7 @@ export function useTimerManager() {
       if (isMounted) {
         setIsReady(true);
         setLists(timerManagerService.getAllLists());
+        setRunLogs([...timerManagerService.getRunLogs()]);
       }
     });
 
@@ -27,6 +29,7 @@ export function useTimerManager() {
         setSnapshot(newSnapshot);
         setTimers([...newTimers]);
         setLists(timerManagerService.getAllLists());
+        setRunLogs([...timerManagerService.getRunLogs()]);
       }
     });
 
@@ -41,6 +44,7 @@ export function useTimerManager() {
     snapshot,
     timers,
     lists,
+    runLogs,
     activeTimer: timerManagerService.getActiveTimer(),
     cuedTimer: timerManagerService.getCuedTimer(),
     nextTimer: timerManagerService.getNextTimer(),
@@ -96,5 +100,15 @@ export function useTimerManager() {
     pasteTimer: () => timerManagerService.pasteTimer(),
     deleteSelectedTimer: (id?: string) => timerManagerService.deleteSelectedTimer(id),
     hasClipboard: () => timerManagerService.hasClipboardTimer(),
+    undo: () => timerManagerService.undo(),
+    redo: () => timerManagerService.redo(),
+    canUndo: timerManagerService.canUndo(),
+    canRedo: timerManagerService.canRedo(),
+    undoLabel: timerManagerService.getUndoLabel(),
+    redoLabel: timerManagerService.getRedoLabel(),
+    deleteRunLog: (logId: string) => timerManagerService.deleteRunLog(logId),
+    clearRunLogs: () => timerManagerService.clearRunLogs(),
+    exportRunLogsCsv: () => timerManagerService.exportRunLogsCsv(),
   };
 }
+
