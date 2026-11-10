@@ -7,9 +7,17 @@
  * 2. Cross-device LAN networks via /api/lan (SSE & HTTP API)
  */
 
-import { DisplaySyncPayload, DisplayTarget, StageMessage, TimerItem, TimerStatus, resolveBackgroundImageForList } from '../types';
+import {
+  DisplaySyncPayload,
+  DisplayTarget,
+  StageMessage,
+  TimerItem,
+  TimerStatus,
+  resolveBackgroundImageForList,
+  resolveLogoImageForList,
+} from '../types';
 import { CrossWindowBus } from '../utilities/broadcast';
-import { formatSeconds, formatClock } from '../utilities/timeFormatters';
+import { formatSeconds, formatClock, formatDate } from '../utilities/timeFormatters';
 import { timerManagerService, computeActiveAlert } from './timerManager';
 import { storageService } from './storageService';
 import { generateId } from '../utilities/idGenerator';
@@ -97,13 +105,24 @@ class DisplaySyncService {
           const activeListId = this.lastPayload.activeListId || timerManagerService.getSnapshot().activeListId;
           const updatedPayload: DisplaySyncPayload = {
             ...this.lastPayload,
+            formattedTime: formatSeconds(
+              this.lastPayload.secondsRemaining,
+              true,
+              this.lastPayload.isOvertime,
+              prefs
+            ),
+            clockTimeFormatted: formatClock(new Date(), undefined, prefs),
+            dateFormatted: formatDate(new Date(), prefs),
             backgroundImageUrl: resolveBackgroundImageForList(prefs, activeListId),
             backgroundFit: prefs.backgroundFit || 'cover',
             backgroundImageOpacity: prefs.backgroundImageOpacity ?? 100,
-            logoImageUrl: prefs.logoImageDataUrl || '',
+            logoImageUrl: resolveLogoImageForList(prefs, activeListId),
+            preferences: prefs,
             listActiveCues: this.lastPayload.listActiveCues?.map((item) => ({
               ...item,
+              formattedTime: formatSeconds(item.secondsRemaining, true, item.isOvertime, prefs),
               backgroundImageUrl: resolveBackgroundImageForList(prefs, item.listId),
+              logoImageUrl: resolveLogoImageForList(prefs, item.listId),
             })),
           };
           this.lastPayload = updatedPayload;
@@ -287,27 +306,29 @@ class DisplaySyncService {
     // Get active cues across all Cue List tabs for independent Multi FS display
     const listActiveCues = timerManagerService.getAllListsActiveCues();
 
-    // Resolve background image for the active list (or global default if set; empty string for pure black)
+    // Resolve background and logo image for the active list
     const prefs = storageService.getPreferences();
     const backgroundImageUrl = resolveBackgroundImageForList(prefs, activeListId);
+    const logoImageUrl = resolveLogoImageForList(prefs, activeListId);
 
     return {
       activeListId,
       activeTimer: displayTarget,
       nextTimer,
       status,
-      formattedTime: formatSeconds(currentSeconds, true, isOvertime),
+      formattedTime: formatSeconds(currentSeconds, true, isOvertime, prefs),
       secondsRemaining: currentSeconds,
       totalDurationSeconds: totalDur,
       progressPercent,
       isOvertime,
-      overtimeFormatted: isOvertime ? formatSeconds(Math.abs(currentSeconds), true, true) : '00:00:00',
+      overtimeFormatted: isOvertime ? formatSeconds(Math.abs(currentSeconds), true, true, prefs) : '00:00:00',
       activeAlertLevel,
       alertColor,
       alertFlash,
       alertOnOff,
       activeMessage: this.activeMessage?.visible ? this.activeMessage : null,
-      clockTimeFormatted: formatClock(new Date(), true),
+      clockTimeFormatted: formatClock(new Date(), undefined, prefs),
+      dateFormatted: formatDate(new Date(), prefs),
       isBlackout: this.isBlackout,
       isClockMode: this.isClockMode,
       speed: snap.speed,
@@ -315,7 +336,8 @@ class DisplaySyncService {
       backgroundImageUrl,
       backgroundFit: prefs.backgroundFit || 'cover',
       backgroundImageOpacity: prefs.backgroundImageOpacity ?? 100,
-      logoImageUrl: prefs.logoImageDataUrl || '',
+      logoImageUrl,
+      preferences: prefs,
       timerList,
       listActiveCues,
     };
@@ -336,13 +358,24 @@ class DisplaySyncService {
 
     // Push lightweight state to LAN API for remote smartphones & tablets
     if (this.isMaster && typeof window !== 'undefined') {
+      const lanPrefs = payload.preferences
+        ? {
+            ...payload.preferences,
+            backgroundImageDataUrl: '',
+            logoImageDataUrl: '',
+            listBackgroundImages: {},
+            listLogoImages: {},
+          }
+        : undefined;
       const lanPayload: DisplaySyncPayload = {
         ...payload,
         backgroundImageUrl: undefined,
         logoImageUrl: undefined,
+        preferences: lanPrefs,
         listActiveCues: payload.listActiveCues?.map((item) => ({
           ...item,
           backgroundImageUrl: undefined,
+          logoImageUrl: undefined,
         })),
       };
       fetch('/api/lan/state', {

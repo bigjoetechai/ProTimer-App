@@ -1,9 +1,21 @@
 /**
- * Precision Digital Timer Display.
- * Renders large broadcast-grade tabular digits.
+ * Precision Digital Timer Display (Main Operator Console).
+ * Renders large broadcast-grade tabular digits and applies user Preferences:
+ * - Countdown Font family & Font style ('Normal', 'Bold', 'Italic', 'Bold Italic')
+ * - Colon vertical offset (`colon.vert`)
+ * - Digit colors (`normalDigitsColor`, `warningDigitsColor`, `dangerDigitsColor`, `overtimeDigitsColor`)
+ * - Smooth transitions & flash alert toggles
  */
 
 import React from 'react';
+import {
+  getTargetElements,
+  renderTimeWithColonOffset,
+  resolveDisplayDigitColor,
+  resolveFontFamily,
+  resolveFontStyleCss,
+  useLivePreferences,
+} from '../utilities/displayStyleHelper';
 
 interface DigitDisplayProps {
   timeStr: string;
@@ -28,6 +40,10 @@ export const DigitDisplay: React.FC<DigitDisplayProps> = ({
   onClick,
   title,
 }) => {
+  const localPrefs = useLivePreferences();
+  const fsElements = getTargetElements(localPrefs, 'fullscreen_ndi_preview');
+  const countdownCfg = fsElements.countdown;
+
   const sizeClasses = {
     sm: 'text-2xl px-3 py-1',
     md: 'text-4xl px-4 py-2',
@@ -42,28 +58,46 @@ export const DigitDisplay: React.FC<DigitDisplayProps> = ({
   const showPlus = isOvertime || rawTime.startsWith('+') || rawTime.startsWith('-');
   const displayTime = showPlus ? `+${cleanTime}` : cleanTime;
 
-  // Dynamic text color: alertColor takes priority, then overtime red, then paused amber, else white
-  const effectiveColor = alertColor || (isOvertime ? '#ef4444' : undefined);
+  const resolvedDigitColor = isPaused && !alertColor && !isOvertime
+    ? '#fbbf24'
+    : resolveDisplayDigitColor({
+        isOvertime,
+        isPaused,
+        alertColor,
+        prefs: localPrefs,
+      });
+
+  const borderGlowColor = alertColor || (isOvertime ? localPrefs.overtimeDigitsColor || '#ef4444' : undefined);
 
   return (
     <div
       onClick={onClick}
       title={title}
-      className={`relative inline-flex items-center justify-center bg-black rounded-sm border font-mono font-bold select-none tabular-nums shadow-inner transition-colors duration-200 ${
-        onClick ? 'cursor-pointer hover:border-cyan-500 transition-colors' : ''
-      } ${sizeClasses[size]}`}
+      className={`relative inline-flex items-center justify-center bg-black rounded-sm border select-none tabular-nums shadow-inner ${
+        localPrefs.smoothTransitions !== false ? 'transition-colors duration-200' : ''
+      } ${onClick ? 'cursor-pointer hover:border-cyan-500 transition-colors' : ''} ${sizeClasses[size]}`}
       style={{
-        borderColor: effectiveColor ? `${effectiveColor}99` : '#2b2f38',
-        boxShadow: effectiveColor ? `inset 0 0 16px ${effectiveColor}25, 0 0 12px ${effectiveColor}33` : undefined,
+        borderColor: borderGlowColor ? `${borderGlowColor}99` : '#2b2f38',
+        boxShadow: borderGlowColor
+          ? `inset 0 0 16px ${borderGlowColor}25, 0 0 12px ${borderGlowColor}33`
+          : undefined,
       }}
     >
       <span
-        className={`${!effectiveColor ? (isPaused ? 'text-amber-400' : 'text-white') : ''} ${
-          isOvertime || isOnOff ? 'animate-overtime-blink' : isFlash ? 'animate-pulse' : ''
+        className={`${
+          isOvertime || isOnOff
+            ? 'animate-overtime-blink'
+            : isFlash && localPrefs.flashAlertsEnabled !== false
+            ? 'animate-pulse'
+            : ''
         }`}
-        style={effectiveColor ? { color: effectiveColor } : undefined}
+        style={{
+          color: resolvedDigitColor,
+          fontFamily: resolveFontFamily(countdownCfg?.font),
+          ...resolveFontStyleCss(countdownCfg?.fontStyle),
+        }}
       >
-        {displayTime}
+        {renderTimeWithColonOffset(displayTime, fsElements.colon?.vert)}
       </span>
     </div>
   );

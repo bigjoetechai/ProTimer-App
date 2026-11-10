@@ -2,15 +2,33 @@
  * Preview Pop-Out Display.
  * Designed for 360x240 compact always-on-top preview windows and scales smoothly when resized.
  * Includes Start, Pause, Stop, Next Cue, +1, -1, and Step controls.
+ * Applies all Preferences: Fonts, Font Styles, Sizes & Positions, Colon Offset, Shadow,
+ * Crop & Scale, Colors & Animations, Progress Bar, Background Image, and Logo.
  */
 
 import React, { useState, useRef, useEffect } from 'react';
 import { useDisplaySync } from '../hooks/useDisplaySync';
 import { Play, Pause, Square, ChevronRight, Plus, Minus, Sliders, Pin } from 'lucide-react';
 import { MessageOverlay } from '../messages/MessageOverlay';
+import { resolveBackgroundImageForList, resolveLogoImageForList } from '../types';
+import { formatClock, formatDate, formatSeconds } from '../utilities/timeFormatters';
+import {
+  getElementOffsetTransform,
+  getLogoLocationClasses,
+  getTargetCanvasStyles,
+  getTargetElements,
+  getTargetExtras,
+  getTargetShadowCss,
+  renderTimeWithColonOffset,
+  resolveDisplayDigitColor,
+  resolveFontFamily,
+  resolveFontStyleCss,
+  useLivePreferences,
+} from '../utilities/displayStyleHelper';
 
 export const PreviewDisplay: React.FC = () => {
   const { payload, sendRemoteCommand } = useDisplaySync(true);
+  const localPrefs = useLivePreferences(payload?.preferences);
   const [incrementSeconds, setIncrementSeconds] = useState(60);
   const [showStepMenu, setShowStepMenu] = useState(false);
   const [stepMenuPos, setStepMenuPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
@@ -45,11 +63,73 @@ export const PreviewDisplay: React.FC = () => {
   const isRunning = payload.status === 'running' || payload.status === 'overtime';
   const isPaused = payload.status === 'paused';
 
+  const fsElements = getTargetElements(localPrefs, 'fullscreen_ndi_preview');
+  const fsExtras = getTargetExtras(localPrefs, 'fullscreen_ndi_preview');
+  const textShadowStyle = getTargetShadowCss(fsExtras);
+
+  const countdownCfg = fsElements.countdown;
+  const nameCfg = fsElements.name;
+  const clockCfg = fsElements.clock;
+  const dateCfg = fsElements.date;
+  const progressBarCfg = fsElements.progress_bar;
+  const logoCfg = fsElements.logo;
+  const slideTextCfg = fsElements.slide_text;
+
+  const formattedClock = formatClock(new Date(), undefined, localPrefs);
+  const formattedDate = payload.dateFormatted || formatDate(new Date(), localPrefs);
+  const formattedCountdown = formatSeconds(
+    payload.secondsRemaining,
+    true,
+    isOvertime,
+    localPrefs
+  );
+
   const displayTime = payload.isClockMode
-    ? payload.clockTimeFormatted
+    ? formattedClock
     : isOvertime
-    ? `+${payload.formattedTime.replace(/^[+-]/, '')}`
-    : payload.formattedTime.replace(/^-/, '+');
+    ? `+${formattedCountdown.replace(/^[+-]/, '')}`
+    : formattedCountdown.replace(/^-/, '+');
+
+  const countdownScale = Math.max(0.2, (countdownCfg?.sizePercent ?? 113) / 113);
+  const nameScale = Math.max(0.2, (nameCfg?.sizePercent ?? 33) / 33);
+  const clockScale = Math.max(0.2, (clockCfg?.sizePercent ?? 33) / 33);
+  const dateScale = Math.max(0.2, (dateCfg?.sizePercent ?? 33) / 33);
+  const logoScale = Math.max(0.2, (logoCfg?.sizePercent ?? 20) / 20);
+
+  const resolvedDigitColor = resolveDisplayDigitColor({
+    isOvertime,
+    isPaused,
+    activeAlertLevel: payload.activeAlertLevel,
+    alertColor: payload.alertColor,
+    prefs: localPrefs,
+  });
+
+  const activeListId = payload.activeListId || 'list_1';
+  const resolvedFromPrefs = resolveBackgroundImageForList(localPrefs, activeListId);
+  const hasLocalListBgMap = Boolean(
+    localPrefs.listBackgroundImages && Object.keys(localPrefs.listBackgroundImages).length > 0
+  );
+  const activeBackgroundImageUrl =
+    resolvedFromPrefs || (!hasLocalListBgMap ? payload.backgroundImageUrl || '' : '');
+  const backgroundFit = payload.backgroundFit || localPrefs.backgroundFit || 'cover';
+  const backgroundOpacity =
+    payload.backgroundImageOpacity ?? localPrefs.backgroundImageOpacity ?? 100;
+  const resolvedLogoFromPrefs = resolveLogoImageForList(localPrefs, activeListId);
+  const hasLocalListLogoMap = Boolean(
+    localPrefs.listLogoImages && Object.keys(localPrefs.listLogoImages).length > 0
+  );
+  const activeLogoUrl =
+    resolvedLogoFromPrefs || (!hasLocalListLogoMap ? payload.logoImageUrl || '' : '');
+
+  const { outerStyle, innerTransformStyle } = getTargetCanvasStyles(
+    fsExtras,
+    Boolean(activeBackgroundImageUrl)
+  );
+
+  const showProgressBar =
+    localPrefs.showProgressBar !== undefined
+      ? localPrefs.showProgressBar || Boolean(progressBarCfg?.visible)
+      : true;
 
   const formatStepShort = (sec: number) => {
     if (sec < 60) return `${sec}s`;
@@ -62,14 +142,27 @@ export const PreviewDisplay: React.FC = () => {
   };
 
   return (
-    <div className="h-screen w-screen bg-black text-white flex flex-col justify-between p-2.5 font-mono select-none overflow-hidden relative border border-[#222d3d]">
+    <div
+      className={`h-screen w-screen bg-black text-white flex flex-col justify-between p-2.5 font-mono select-none overflow-hidden relative border ${
+        fsElements.border?.visible ? 'border-2 border-cyan-400' : 'border-[#222d3d]'
+      }`}
+    >
       {/* Compact Header & Controls Bar */}
-      <div className="flex items-center justify-between gap-1.5 pb-1.5 border-b border-[#1c2536] shrink-0">
+      <div className="flex items-center justify-between gap-1.5 pb-1.5 border-b border-[#1c2536] shrink-0 z-20">
         <div className="flex items-center gap-1 min-w-0">
           <Pin className="w-3 h-3 text-cyan-400 shrink-0" />
-          <span className="text-[11px] font-bold text-cyan-400 uppercase tracking-wider truncate">
-            {payload.activeTimer?.name || 'STANDBY'}
-          </span>
+          {nameCfg?.visible !== false && (
+            <span
+              className="text-cyan-400 uppercase tracking-wider truncate"
+              style={{
+                fontFamily: resolveFontFamily(nameCfg?.font),
+                ...resolveFontStyleCss(nameCfg?.fontStyle),
+                fontSize: `${Math.max(9, Math.min(16, Math.round(11 * nameScale)))}px`,
+              }}
+            >
+              {payload.activeTimer?.name || 'STANDBY'}
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-1 shrink-0">
@@ -158,51 +251,151 @@ export const PreviewDisplay: React.FC = () => {
       </div>
 
       {/* Main Active Time Display */}
-      <div className="flex-1 flex flex-col items-center justify-center min-h-0 my-1">
+      <div
+        className="relative flex-1 flex flex-col items-center justify-center min-h-0 my-1 overflow-hidden rounded"
+        style={outerStyle}
+      >
+        {activeBackgroundImageUrl && (
+          <img
+            src={activeBackgroundImageUrl}
+            alt=""
+            className={`absolute inset-0 w-full h-full pointer-events-none select-none z-0 ${
+              backgroundFit === 'contain' ? 'object-contain' : 'object-cover'
+            }`}
+            style={{
+              opacity: Math.min(1, Math.max(0, backgroundOpacity / 100)),
+            }}
+          />
+        )}
+
+        {activeLogoUrl && (
+          <img
+            src={activeLogoUrl}
+            alt="Logo"
+            className={`absolute z-10 object-contain pointer-events-none select-none ${getLogoLocationClasses(
+              logoCfg?.location
+            )}`}
+            style={{
+              height: `${Math.round(24 * logoScale)}px`,
+              maxWidth: `${Math.round(90 * logoScale)}px`,
+              transform: getElementOffsetTransform(logoCfg, 1),
+            }}
+          />
+        )}
+
         {payload.isBlackout ? (
-          <span className="text-xs uppercase tracking-widest text-red-400 font-semibold">
+          <span className="relative z-10 text-xs uppercase tracking-widest text-red-400 font-semibold">
             BLACKOUT ACTIVE
           </span>
         ) : (
           <div
-            style={{
-              fontSize: 'clamp(2.25rem, 15vw, 9rem)',
-              ...(payload.alertColor ? { color: payload.alertColor } : {}),
-            }}
-            className={`font-black tracking-tighter tabular-nums leading-none ${
-              isOvertime
-                ? 'text-red-500 animate-overtime-blink'
-                : payload.alertOnOff
-                ? 'text-white animate-overtime-blink'
-                : payload.alertFlash
-                ? 'text-white animate-pulse'
-                : isPaused
-                ? 'text-amber-400'
-                : 'text-white'
-            }`}
+            className="relative z-10 flex flex-col items-center justify-center w-full"
+            style={innerTransformStyle}
           >
-            {displayTime}
+            {(clockCfg?.visible || dateCfg?.visible) && (
+              <div className="flex items-center justify-center gap-2 mb-0.5">
+                {clockCfg?.visible && (
+                  <span
+                    className="text-neutral-200 tabular-nums"
+                    style={{
+                      fontFamily: resolveFontFamily(clockCfg?.font),
+                      ...resolveFontStyleCss(clockCfg?.fontStyle),
+                      fontSize: `${Math.max(9, Math.round(11 * clockScale))}px`,
+                      textShadow: textShadowStyle,
+                    }}
+                  >
+                    {formattedClock}
+                  </span>
+                )}
+                {dateCfg?.visible && (
+                  <span
+                    className="text-neutral-300"
+                    style={{
+                      fontFamily: resolveFontFamily(dateCfg?.font),
+                      ...resolveFontStyleCss(dateCfg?.fontStyle),
+                      fontSize: `${Math.max(9, Math.round(10 * dateScale))}px`,
+                      textShadow: textShadowStyle,
+                    }}
+                  >
+                    {formattedDate}
+                  </span>
+                )}
+              </div>
+            )}
+
+            {countdownCfg?.visible !== false && (
+              <div
+                style={{
+                  fontSize: `calc(clamp(2.25rem, 15vw, 9rem) * ${countdownScale})`,
+                  color: resolvedDigitColor,
+                  fontFamily: resolveFontFamily(countdownCfg?.font),
+                  ...resolveFontStyleCss(countdownCfg?.fontStyle),
+                  textShadow: textShadowStyle,
+                  transform: getElementOffsetTransform(countdownCfg, 1.5),
+                }}
+                className={`tracking-tighter tabular-nums leading-none ${
+                  localPrefs.smoothTransitions !== false ? 'transition-colors duration-300' : ''
+                } ${
+                  isOvertime
+                    ? 'animate-overtime-blink'
+                    : payload.alertOnOff
+                    ? 'animate-overtime-blink'
+                    : payload.alertFlash && localPrefs.flashAlertsEnabled !== false
+                    ? 'animate-pulse'
+                    : ''
+                }`}
+              >
+                {renderTimeWithColonOffset(displayTime, fsElements.colon?.vert)}
+              </div>
+            )}
+
+            {slideTextCfg?.visible && payload.activeTimer?.notes && (
+              <div
+                className="text-cyan-300 truncate max-w-full mt-0.5"
+                style={{
+                  fontFamily: resolveFontFamily(slideTextCfg?.font),
+                  ...resolveFontStyleCss(slideTextCfg?.fontStyle),
+                  fontSize: `${Math.max(9, Math.round(11 * ((slideTextCfg.sizePercent ?? 33) / 33)))}px`,
+                  textShadow: textShadowStyle,
+                }}
+              >
+                {payload.activeTimer.notes}
+              </div>
+            )}
           </div>
         )}
       </div>
 
       {/* Bottom Status & Progress Bar */}
-      <div className="pt-1.5 border-t border-[#1c2536] shrink-0">
-        <div className="w-full h-1.5 bg-neutral-900 rounded-full overflow-hidden mb-1.5">
+      <div className="pt-1.5 border-t border-[#1c2536] shrink-0 z-20">
+        {showProgressBar && (
           <div
-            className={`h-full transition-all duration-200 ${
-              isOvertime || payload.activeAlertLevel === 'danger'
-                ? 'bg-red-500'
-                : payload.activeAlertLevel === 'warning'
-                ? 'bg-amber-500'
-                : isRunning
-                ? 'bg-emerald-500'
-                : 'bg-cyan-500/60'
-            }`}
-            style={{ width: `${Math.min(100, Math.max(0, payload.progressPercent))}%` }}
-          />
-        </div>
-        <div className="flex items-center justify-between text-[10px] text-neutral-400">
+            className="bg-neutral-900 rounded-full overflow-hidden mb-1.5 mx-auto"
+            style={{
+              height: `${Math.max(4, Math.min(12, Math.round((localPrefs.progressBarHeightPx ?? 12) * 0.5)))}px`,
+              width: `${Math.min(100, Math.max(15, progressBarCfg?.sizePercent ?? 100))}%`,
+            }}
+          >
+            <div
+              className={`h-full transition-all duration-200 ${
+                isOvertime || payload.activeAlertLevel === 'danger'
+                  ? 'bg-red-500'
+                  : payload.activeAlertLevel === 'warning'
+                  ? 'bg-amber-500'
+                  : isRunning
+                  ? 'bg-emerald-500'
+                  : 'bg-cyan-500/60'
+              }`}
+              style={{ width: `${Math.min(100, Math.max(0, payload.progressPercent))}%` }}
+            />
+          </div>
+        )}
+        <div
+          className="flex items-center justify-between text-[10px] text-neutral-400"
+          style={{
+            fontFamily: resolveFontFamily(nameCfg?.font),
+          }}
+        >
           <span
             className={`uppercase font-bold ${
               isOvertime
@@ -257,7 +450,12 @@ export const PreviewDisplay: React.FC = () => {
         </div>
       )}
 
-      <MessageOverlay message={payload.activeMessage} />
+      <MessageOverlay
+        message={payload.activeMessage}
+        config={fsElements.message}
+        compact
+        textShadow={textShadowStyle}
+      />
     </div>
   );
 };

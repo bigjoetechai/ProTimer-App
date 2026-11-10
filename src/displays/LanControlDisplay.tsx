@@ -12,6 +12,14 @@
 
 import React, { useState, useEffect } from 'react';
 import { useDisplaySync } from '../hooks/useDisplaySync';
+import {
+  getTargetElements,
+  renderTimeWithColonOffset,
+  resolveDisplayDigitColor,
+  resolveFontFamily,
+  resolveFontStyleCss,
+  useLivePreferences,
+} from '../utilities/displayStyleHelper';
 import { 
   Play, 
   Pause, 
@@ -34,6 +42,7 @@ import {
 
 export const LanControlDisplay: React.FC = () => {
   const { payload, sendRemoteCommand } = useDisplaySync(true);
+  const localPrefs = useLivePreferences(payload?.preferences);
   
   // Pairing & PIN authentication state
   const [isPaired, setIsPaired] = useState<boolean>(false);
@@ -312,61 +321,89 @@ export const LanControlDisplay: React.FC = () => {
       {activeTab === 'control' && (
         <>
           {/* Active Cue Card */}
-          <div className="border rounded-2xl p-4 mb-3 shadow-xl bg-[#0f1420] border-[#1f2b3e]">
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-[10px] font-bold tracking-widest text-cyan-400 uppercase">
-                ACTIVE CUE
-              </span>
-              {payload.activeTimer?.endTime && (
-                <span className="text-[10px] text-neutral-400 font-mono">
-                  Target End: <span className="text-white font-bold">{payload.activeTimer.endTime}</span>
-                </span>
-              )}
-            </div>
+          {(() => {
+            const webElements = getTargetElements(localPrefs, 'web_display_lan');
+            const countdownCfg = webElements.countdown;
+            const nameCfg = webElements.name;
+            const resolvedColor = resolveDisplayDigitColor({
+              isOvertime: payload.isOvertime,
+              isPaused: payload.status === 'paused',
+              activeAlertLevel: payload.activeAlertLevel,
+              alertColor: payload.alertColor,
+              prefs: localPrefs,
+            });
+            const formattedStr = payload.isClockMode
+              ? payload.clockTimeFormatted
+              : payload.isOvertime
+              ? `+${payload.formattedTime.replace(/^[+-]/, '')}`
+              : payload.formattedTime.replace(/^-/, '+');
 
-            <div className="text-xl font-black text-white truncate mb-2">
-              {payload.activeTimer?.name || 'No Active Timer'}
-            </div>
+            return (
+              <div className="border rounded-2xl p-4 mb-3 shadow-xl bg-[#0f1420] border-[#1f2b3e]">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[10px] font-bold tracking-widest text-cyan-400 uppercase">
+                    ACTIVE CUE
+                  </span>
+                  {payload.activeTimer?.endTime && (
+                    <span className="text-[10px] text-neutral-400 font-mono">
+                      Target End: <span className="text-white font-bold">{payload.activeTimer.endTime}</span>
+                    </span>
+                  )}
+                </div>
 
-            {/* Big Digits Display */}
-            <div className="bg-[#080b11] border border-[#182232] rounded-xl py-4 px-2 text-center my-2 shadow-inner">
-              <div
-                className={`text-5xl sm:text-6xl font-mono font-black tracking-tight tabular-nums ${
-                  payload.isOvertime || payload.alertOnOff
-                    ? 'animate-overtime-blink'
-                    : payload.alertFlash
-                    ? 'animate-pulse'
-                    : ''
-                } ${
-                  payload.isOvertime ? 'text-red-500' : (!payload.alertColor ? 'text-cyan-400' : '')
-                }`}
-                style={payload.alertColor ? { color: payload.alertColor } : undefined}
-              >
-                {payload.isClockMode
-                  ? payload.clockTimeFormatted
-                  : payload.isOvertime
-                  ? `+${payload.formattedTime.replace(/^[+-]/, '')}`
-                  : payload.formattedTime.replace(/^-/, '+')}
+                {nameCfg?.visible !== false && (
+                  <div
+                    className="text-xl text-white truncate mb-2"
+                    style={{
+                      fontFamily: resolveFontFamily(nameCfg?.font),
+                      ...resolveFontStyleCss(nameCfg?.fontStyle || 'Bold'),
+                    }}
+                  >
+                    {payload.activeTimer?.name || 'No Active Timer'}
+                  </div>
+                )}
+
+                {/* Big Digits Display */}
+                <div className="bg-[#080b11] border border-[#182232] rounded-xl py-4 px-2 text-center my-2 shadow-inner">
+                  {countdownCfg?.visible !== false && (
+                    <div
+                      className={`text-5xl sm:text-6xl tracking-tight tabular-nums ${
+                        payload.isOvertime || payload.alertOnOff
+                          ? 'animate-overtime-blink'
+                          : payload.alertFlash && localPrefs.flashAlertsEnabled !== false
+                          ? 'animate-pulse'
+                          : ''
+                      }`}
+                      style={{
+                        color: resolvedColor,
+                        fontFamily: resolveFontFamily(countdownCfg?.font),
+                        ...resolveFontStyleCss(countdownCfg?.fontStyle),
+                      }}
+                    >
+                      {renderTimeWithColonOffset(formattedStr, webElements.colon?.vert)}
+                    </div>
+                  )}
+                  <div className="flex items-center justify-center gap-2 text-xs text-neutral-400 mt-2 font-mono">
+                    <span className="uppercase text-neutral-200 font-bold tracking-wider">{payload.status}</span>
+                    <span>•</span>
+                    <span>Speed: {payload.speed}%</span>
+                    <span>•</span>
+                    <span>{Math.round(payload.progressPercent)}%</span>
+                  </div>
+                </div>
+
+                {/* Progress Bar */}
+                <div className="w-full h-2 bg-[#182232] rounded-full overflow-hidden mt-2">
+                  <div
+                    className={`h-full transition-all duration-300 ${
+                      payload.isOvertime ? 'bg-red-500' : 'bg-cyan-500'
+                    }`}
+                    style={{ width: `${Math.min(100, Math.max(0, payload.progressPercent))}%` }}
+                  />
+                </div>
               </div>
-              <div className="flex items-center justify-center gap-2 text-xs text-neutral-400 mt-2 font-mono">
-                <span className="uppercase text-neutral-200 font-bold tracking-wider">{payload.status}</span>
-                <span>•</span>
-                <span>Speed: {payload.speed}%</span>
-                <span>•</span>
-                <span>{Math.round(payload.progressPercent)}%</span>
-              </div>
-            </div>
-
-            {/* Progress Bar */}
-            <div className="w-full h-2 bg-[#182232] rounded-full overflow-hidden mt-2">
-              <div
-                className={`h-full transition-all duration-300 ${
-                  payload.isOvertime ? 'bg-red-500' : 'bg-cyan-500'
-                }`}
-                style={{ width: `${Math.min(100, Math.max(0, payload.progressPercent))}%` }}
-              />
-            </div>
-          </div>
+            );
+          })()}
 
           {/* Transport Controls: Start / Pause, Stop, Restart */}
           <div className="grid grid-cols-3 gap-2.5 mb-3">

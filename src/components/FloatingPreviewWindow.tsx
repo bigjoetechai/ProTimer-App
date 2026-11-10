@@ -4,6 +4,8 @@
  * - Resizable from all 8 edges and corners (N, S, E, W, NE, NW, SE, SW) by dragging.
  * - Draggable anywhere on screen via its header bar.
  * - Displays the active timer time in real time with Start, Pause, Stop, Next, +Step, -Step, and Step selector controls.
+ * - Applies all Preferences: Fonts, Font Styles, Sizes & Positions, Colon Offset, Shadow, Crop & Scale,
+ *   Colors & Animations, Progress Bar, Background Image, and Logo.
  */
 
 import React, { useState, useRef, useEffect } from 'react';
@@ -19,13 +21,35 @@ import {
   Pin,
   ExternalLink,
 } from 'lucide-react';
-import { TimerItem, TimerStatus } from '../types';
+import {
+  TimerItem,
+  TimerStatus,
+  resolveBackgroundImageForList,
+  resolveLogoImageForList,
+} from '../types';
+import { formatClock, formatDate, formatSeconds } from '../utilities/timeFormatters';
+import {
+  getElementOffsetTransform,
+  getLogoLocationClasses,
+  getTargetCanvasStyles,
+  getTargetElements,
+  getTargetExtras,
+  getTargetShadowCss,
+  renderTimeWithColonOffset,
+  resolveDisplayDigitColor,
+  resolveFontFamily,
+  resolveFontStyleCss,
+  useLivePreferences,
+} from '../utilities/displayStyleHelper';
 
 interface FloatingPreviewWindowProps {
   isOpen: boolean;
   onClose: () => void;
   onPopOutWindow?: () => void;
   timeStr: string;
+  currentSeconds?: number;
+  activeListId?: string;
+  activeAlertLevel?: 'none' | 'warning' | 'danger';
   status: TimerStatus;
   isOvertime: boolean;
   alertColor?: string;
@@ -56,6 +80,9 @@ export const FloatingPreviewWindow: React.FC<FloatingPreviewWindowProps> = ({
   onClose,
   onPopOutWindow,
   timeStr,
+  currentSeconds,
+  activeListId,
+  activeAlertLevel = 'none',
   status,
   isOvertime,
   alertColor,
@@ -66,13 +93,15 @@ export const FloatingPreviewWindow: React.FC<FloatingPreviewWindowProps> = ({
   progressPercent = 0,
   isBlackout = false,
   isClockMode = false,
-  clockTimeFormatted = '00:00:00',
+  clockTimeFormatted,
   onStart,
   onPause,
   onStop,
   onNextCue,
   onAdjustDuration,
 }) => {
+  const localPrefs = useLivePreferences();
+
   const [bounds, setBounds] = useState<{ x: number; y: number; width: number; height: number }>(() => {
     const winW = typeof window !== 'undefined' ? window.innerWidth : 1280;
     const winH = typeof window !== 'undefined' ? window.innerHeight : 800;
@@ -229,18 +258,70 @@ export const FloatingPreviewWindow: React.FC<FloatingPreviewWindowProps> = ({
   const isRunning = status === 'running' || status === 'overtime';
   const isPaused = status === 'paused';
 
-  const cleanTime = (timeStr || '00:00:00').replace(/^[+-]/, '');
+  const fsElements = getTargetElements(localPrefs, 'fullscreen_ndi_preview');
+  const fsExtras = getTargetExtras(localPrefs, 'fullscreen_ndi_preview');
+  const textShadowStyle = getTargetShadowCss(fsExtras);
+
+  const countdownCfg = fsElements.countdown;
+  const nameCfg = fsElements.name;
+  const clockCfg = fsElements.clock;
+  const dateCfg = fsElements.date;
+  const progressBarCfg = fsElements.progress_bar;
+  const logoCfg = fsElements.logo;
+  const slideTextCfg = fsElements.slide_text;
+
+  const formattedClock = clockTimeFormatted || formatClock(new Date(), undefined, localPrefs);
+  const formattedDate = formatDate(new Date(), localPrefs);
+
+  const formattedCountdown =
+    currentSeconds !== undefined
+      ? formatSeconds(currentSeconds, true, isOvertime, localPrefs)
+      : timeStr || '00:00:00';
+  const cleanTime = formattedCountdown.replace(/^[+-]/, '');
   const displayTime = isClockMode
-    ? clockTimeFormatted
+    ? formattedClock
     : isOvertime
     ? `+${cleanTime}`
     : cleanTime;
 
-  // Dynamic font size based on current pop-out width/height
-  const computedFontSizePx = Math.max(
-    28,
+  const countdownScale = Math.max(0.2, (countdownCfg?.sizePercent ?? 113) / 113);
+  const nameScale = Math.max(0.2, (nameCfg?.sizePercent ?? 33) / 33);
+  const clockScale = Math.max(0.2, (clockCfg?.sizePercent ?? 33) / 33);
+  const dateScale = Math.max(0.2, (dateCfg?.sizePercent ?? 33) / 33);
+  const logoScale = Math.max(0.2, (logoCfg?.sizePercent ?? 20) / 20);
+
+  // Dynamic font size based on current pop-out width/height and Sizes & Positions countdown.sizePercent
+  const baseFontSizePx = Math.max(
+    24,
     Math.min(bounds.width * 0.165, (bounds.height - 84) * 0.52)
   );
+  const computedFontSizePx = Math.max(14, Math.round(baseFontSizePx * countdownScale));
+
+  const resolvedDigitColor = resolveDisplayDigitColor({
+    isOvertime,
+    isPaused,
+    activeAlertLevel,
+    alertColor,
+    prefs: localPrefs,
+  });
+
+  const activeBackgroundImageUrl = resolveBackgroundImageForList(
+    localPrefs,
+    activeListId || 'list_1'
+  );
+  const backgroundFit = localPrefs.backgroundFit || 'cover';
+  const backgroundOpacity = localPrefs.backgroundImageOpacity ?? 100;
+  const activeLogoUrl = resolveLogoImageForList(localPrefs, activeListId || 'list_1');
+
+  const { outerStyle, innerTransformStyle } = getTargetCanvasStyles(
+    fsExtras,
+    Boolean(activeBackgroundImageUrl)
+  );
+
+  const showProgressBar =
+    localPrefs.showProgressBar !== undefined
+      ? localPrefs.showProgressBar || Boolean(progressBarCfg?.visible)
+      : true;
 
   return (
     <>
@@ -251,7 +332,9 @@ export const FloatingPreviewWindow: React.FC<FloatingPreviewWindowProps> = ({
           width: `${bounds.width}px`,
           height: `${bounds.height}px`,
         }}
-        className="fixed z-[9999] bg-black text-white rounded-md border-2 border-cyan-500/60 shadow-[0_18px_50px_rgba(0,0,0,0.85)] flex flex-col justify-between font-mono select-none overflow-hidden"
+        className={`fixed z-[9999] bg-black text-white rounded-md border-2 ${
+          fsElements.border?.visible ? 'border-cyan-400' : 'border-cyan-500/60'
+        } shadow-[0_18px_50px_rgba(0,0,0,0.85)] flex flex-col justify-between font-mono select-none overflow-hidden`}
       >
         {/* =====================================================================
             8-DIRECTION EDGE & CORNER RESIZE HANDLES
@@ -294,13 +377,22 @@ export const FloatingPreviewWindow: React.FC<FloatingPreviewWindowProps> = ({
            ===================================================================== */}
         <div
           onMouseDown={startMove}
-          className="h-9 px-2 bg-[#0c111b] border-b border-[#1d2738] flex items-center justify-between gap-1.5 cursor-move shrink-0"
+          className="h-9 px-2 bg-[#0c111b] border-b border-[#1d2738] flex items-center justify-between gap-1.5 cursor-move shrink-0 z-20"
         >
           <div className="flex items-center gap-1 min-w-0">
             <Pin className="w-3 h-3 text-cyan-400 shrink-0" />
-            <span className="text-[11px] font-bold text-cyan-400 uppercase tracking-wider truncate">
-              {activeTimer?.name || 'PREVIEW'}
-            </span>
+            {nameCfg?.visible !== false && (
+              <span
+                className="text-cyan-400 uppercase tracking-wider truncate"
+                style={{
+                  fontFamily: resolveFontFamily(nameCfg?.font),
+                  ...resolveFontStyleCss(nameCfg?.fontStyle),
+                  fontSize: `${Math.max(9, Math.min(16, Math.round(11 * nameScale)))}px`,
+                }}
+              >
+                {activeTimer?.name || 'PREVIEW'}
+              </span>
+            )}
           </div>
 
           <div className="flex items-center gap-1 shrink-0">
@@ -410,32 +502,124 @@ export const FloatingPreviewWindow: React.FC<FloatingPreviewWindowProps> = ({
         </div>
 
         {/* =====================================================================
-            CENTER ACTIVE TIME DISPLAY
+            CENTER ACTIVE TIME DISPLAY (Respects Sizes & Positions, Fonts, Colors, Images)
            ===================================================================== */}
-        <div className="flex-1 flex flex-col items-center justify-center px-3 min-h-0 bg-black">
+        <div
+          className="relative flex-1 flex flex-col items-center justify-center px-3 min-h-0 overflow-hidden"
+          style={outerStyle}
+        >
+          {activeBackgroundImageUrl && (
+            <img
+              src={activeBackgroundImageUrl}
+              alt=""
+              className={`absolute inset-0 w-full h-full pointer-events-none select-none z-0 ${
+                backgroundFit === 'contain' ? 'object-contain' : 'object-cover'
+              }`}
+              style={{
+                opacity: Math.min(1, Math.max(0, backgroundOpacity / 100)),
+              }}
+            />
+          )}
+
+          {activeLogoUrl && (
+            <img
+              src={activeLogoUrl}
+              alt="Logo"
+              className={`absolute z-10 object-contain pointer-events-none select-none ${getLogoLocationClasses(
+                logoCfg?.location
+              )}`}
+              style={{
+                height: `${Math.round(22 * logoScale)}px`,
+                maxWidth: `${Math.round(80 * logoScale)}px`,
+                transform: getElementOffsetTransform(logoCfg, 1),
+              }}
+            />
+          )}
+
           {isBlackout ? (
-            <span className="text-xs uppercase tracking-widest text-red-400 font-semibold">
+            <span className="relative z-10 text-xs uppercase tracking-widest text-red-400 font-semibold">
               BLACKOUT ACTIVE
             </span>
           ) : (
             <div
-              style={{
-                fontSize: `${computedFontSizePx}px`,
-                ...(alertColor ? { color: alertColor } : {}),
-              }}
-              className={`font-black tracking-tighter tabular-nums leading-none ${
-                isOvertime
-                  ? 'text-red-500 animate-overtime-blink'
-                  : isOnOff
-                  ? 'text-white animate-overtime-blink'
-                  : isFlash
-                  ? 'text-white animate-pulse'
-                  : isPaused
-                  ? 'text-amber-400'
-                  : 'text-white'
-              }`}
+              className="relative z-10 flex flex-col items-center justify-center w-full"
+              style={innerTransformStyle}
             >
-              {displayTime}
+              {/* Optional Clock / Date overlay when enabled in Sizes & Positions */}
+              {(clockCfg?.visible || dateCfg?.visible) && (
+                <div className="flex items-center justify-center gap-2 mb-0.5">
+                  {clockCfg?.visible && (
+                    <span
+                      className="text-neutral-200 tabular-nums"
+                      style={{
+                        fontFamily: resolveFontFamily(clockCfg?.font),
+                        ...resolveFontStyleCss(clockCfg?.fontStyle),
+                        fontSize: `${Math.max(9, Math.round(11 * clockScale))}px`,
+                        textShadow: textShadowStyle,
+                        transform: getElementOffsetTransform(clockCfg, 1),
+                      }}
+                    >
+                      {formattedClock}
+                    </span>
+                  )}
+                  {dateCfg?.visible && (
+                    <span
+                      className="text-neutral-300"
+                      style={{
+                        fontFamily: resolveFontFamily(dateCfg?.font),
+                        ...resolveFontStyleCss(dateCfg?.fontStyle),
+                        fontSize: `${Math.max(9, Math.round(10 * dateScale))}px`,
+                        textShadow: textShadowStyle,
+                        transform: getElementOffsetTransform(dateCfg, 1),
+                      }}
+                    >
+                      {formattedDate}
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {/* Main Countdown Readout */}
+              {countdownCfg?.visible !== false && (
+                <div
+                  style={{
+                    fontSize: `${computedFontSizePx}px`,
+                    color: resolvedDigitColor,
+                    fontFamily: resolveFontFamily(countdownCfg?.font),
+                    ...resolveFontStyleCss(countdownCfg?.fontStyle),
+                    textShadow: textShadowStyle,
+                    transform: getElementOffsetTransform(countdownCfg, 1.5),
+                  }}
+                  className={`tracking-tighter tabular-nums leading-none ${
+                    localPrefs.smoothTransitions !== false ? 'transition-colors duration-300' : ''
+                  } ${
+                    isOvertime
+                      ? 'animate-overtime-blink'
+                      : isOnOff
+                      ? 'animate-overtime-blink'
+                      : isFlash && localPrefs.flashAlertsEnabled !== false
+                      ? 'animate-pulse'
+                      : ''
+                  }`}
+                >
+                  {renderTimeWithColonOffset(displayTime, fsElements.colon?.vert)}
+                </div>
+              )}
+
+              {/* Optional Slide Text / Cue Name below countdown */}
+              {slideTextCfg?.visible && activeTimer?.notes && (
+                <div
+                  className="text-cyan-300 truncate max-w-full mt-0.5"
+                  style={{
+                    fontFamily: resolveFontFamily(slideTextCfg?.font),
+                    ...resolveFontStyleCss(slideTextCfg?.fontStyle),
+                    fontSize: `${Math.max(9, Math.round(11 * ((slideTextCfg.sizePercent ?? 33) / 33)))}px`,
+                    textShadow: textShadowStyle,
+                  }}
+                >
+                  {activeTimer.notes}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -443,23 +627,38 @@ export const FloatingPreviewWindow: React.FC<FloatingPreviewWindowProps> = ({
         {/* =====================================================================
             BOTTOM PROGRESS & STATUS FOOTER
            ===================================================================== */}
-        <div className="px-2.5 py-1.5 bg-[#090d14] border-t border-[#1d2738] shrink-0">
-          <div className="w-full h-1.5 bg-neutral-900 rounded-full overflow-hidden mb-1">
+        <div className="px-2.5 py-1.5 bg-[#090d14] border-t border-[#1d2738] shrink-0 z-20">
+          {showProgressBar && (
             <div
-              className={`h-full transition-all duration-200 ${
-                isOvertime
-                  ? 'bg-red-500'
-                  : isRunning
-                  ? 'bg-emerald-500'
-                  : isPaused
-                  ? 'bg-amber-500'
-                  : 'bg-cyan-500/60'
-              }`}
-              style={{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }}
-            />
-          </div>
+              className="bg-neutral-900 rounded-full overflow-hidden mb-1 mx-auto"
+              style={{
+                height: `${Math.max(4, Math.min(12, Math.round((localPrefs.progressBarHeightPx ?? 12) * 0.5)))}px`,
+                width: `${Math.min(100, Math.max(15, progressBarCfg?.sizePercent ?? 100))}%`,
+              }}
+            >
+              <div
+                className={`h-full transition-all duration-200 ${
+                  isOvertime || activeAlertLevel === 'danger'
+                    ? 'bg-red-500'
+                    : activeAlertLevel === 'warning'
+                    ? 'bg-amber-500'
+                    : isRunning
+                    ? 'bg-emerald-500'
+                    : isPaused
+                    ? 'bg-amber-500'
+                    : 'bg-cyan-500/60'
+                }`}
+                style={{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }}
+              />
+            </div>
+          )}
 
-          <div className="flex items-center justify-between text-[10px] text-neutral-400">
+          <div
+            className="flex items-center justify-between text-[10px] text-neutral-400"
+            style={{
+              fontFamily: resolveFontFamily(nameCfg?.font),
+            }}
+          >
             <span
               className={`uppercase font-bold ${
                 isOvertime

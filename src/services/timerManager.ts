@@ -27,7 +27,8 @@ import {
   AllListsBackupData,
   ListActiveCueSummary,
   TimerRunLogEntry,
-  resolveBackgroundImageForList
+  resolveBackgroundImageForList,
+  resolveLogoImageForList
 } from '../types';
 import { generateId } from '../utilities/idGenerator';
 import { formatSeconds } from '../utilities/timeFormatters';
@@ -2773,6 +2774,7 @@ class TimerManagerService {
 
       const runningCuesCount = list.timerIds.filter((tid) => this.runningTimerIds.has(tid)).length;
       const backgroundImageUrl = resolveBackgroundImageForList(prefs, list.id);
+      const logoImageUrl = resolveLogoImageForList(prefs, list.id);
 
       return {
         listId: list.id,
@@ -2793,6 +2795,7 @@ class TimerManagerService {
         totalCuesCount: nonSpacerTimers.length,
         runningCuesCount,
         backgroundImageUrl,
+        logoImageUrl,
       };
     });
   }

@@ -43,7 +43,7 @@ interface SettingsModalProps {
  * to max 1920x1080 so multiple per-list backgrounds persist reliably in localStorage
  * and sync instantaneously across Fullscreen / Multi FS display windows.
  */
-function readAndOptimizeImageFile(file: File, maxDimension = 1920): Promise<string> {
+function readAndOptimizeImageFile(file: File, maxDimension = 1600): Promise<string> {
   return new Promise((resolve) => {
     const reader = new FileReader();
     reader.onload = (ev) => {
@@ -52,11 +52,11 @@ function readAndOptimizeImageFile(file: File, maxDimension = 1920): Promise<stri
         resolve('');
         return;
       }
-      // Keep SVGs, GIFs, or small images (< 450 KB) untouched
+      // Keep SVGs, GIFs, or already-compact images (< 220 KB) untouched
       if (
         file.type === 'image/svg+xml' ||
         file.type === 'image/gif' ||
-        rawDataUrl.length < 450_000
+        rawDataUrl.length < 220_000
       ) {
         resolve(rawDataUrl);
         return;
@@ -80,7 +80,7 @@ function readAndOptimizeImageFile(file: File, maxDimension = 1920): Promise<stri
           }
           ctx.drawImage(img, 0, 0, width, height);
           const mime = file.type === 'image/png' ? 'image/webp' : 'image/jpeg';
-          const optimized = canvas.toDataURL(mime, 0.86);
+          const optimized = canvas.toDataURL(mime, 0.8);
           resolve(optimized && optimized.length < rawDataUrl.length ? optimized : rawDataUrl);
         } catch {
           resolve(rawDataUrl);
@@ -503,11 +503,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [activeStyleTab, setActiveStyleTab] = useState<StyleSubTab>('general_settings');
   const [activeSizesTargetTab, setActiveSizesTargetTab] =
     useState<SizesPositionTargetTab>('fullscreen_ndi_preview');
+  const [hasUnappliedChanges, setHasUnappliedChanges] = useState(false);
+  const [appliedFeedback, setAppliedFeedback] = useState(false);
+  const applyFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const bgImageInputRef = useRef<HTMLInputElement>(null);
   const listBgImageInputRef = useRef<HTMLInputElement>(null);
   const pendingListBgTargetIdRef = useRef<string | null>(null);
-  const logoImageInputRef = useRef<HTMLInputElement>(null);
+  const listLogoImageInputRef = useRef<HTMLInputElement>(null);
+  const pendingListLogoTargetIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -515,8 +518,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         ...DEFAULT_PREFERENCES,
         ...preferences,
       });
+      setHasUnappliedChanges(false);
+      setAppliedFeedback(false);
     }
   }, [isOpen, preferences]);
+
+  useEffect(() => {
+    return () => {
+      if (applyFeedbackTimerRef.current) {
+        clearTimeout(applyFeedbackTimerRef.current);
+      }
+    };
+  }, []);
 
   const availableLists: TimerList[] =
     lists && lists.length > 0 ? lists : timerManagerService.getAllLists();
@@ -525,27 +538,39 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   if (!isOpen) return null;
 
+  const stagePreferences = (updated: AppPreferences) => {
+    setPrefs(updated);
+    setHasUnappliedChanges(true);
+    setAppliedFeedback(false);
+  };
+
   const updatePref = <K extends keyof AppPreferences>(key: K, value: AppPreferences[K]) => {
     const updated = { ...prefs, [key]: value };
-    setPrefs(updated);
-    onSave(updated);
-    if (key === 'theme' && (value === 'dark' || value === 'light')) {
-      setTheme(value);
+    stagePreferences(updated);
+  };
+
+  const handleApply = () => {
+    onSave(prefs);
+    if (prefs.theme === 'dark' || prefs.theme === 'light') {
+      setTheme(prefs.theme);
     }
+    setHasUnappliedChanges(false);
+    setAppliedFeedback(true);
+    if (applyFeedbackTimerRef.current) {
+      clearTimeout(applyFeedbackTimerRef.current);
+    }
+    applyFeedbackTimerRef.current = setTimeout(() => {
+      setAppliedFeedback(false);
+    }, 2200);
   };
 
   const handleClose = () => {
-    onSave(prefs);
     onClose();
   };
 
   const handleResetDefaults = () => {
     const reset = { ...DEFAULT_PREFERENCES };
-    setPrefs(reset);
-    onSave(reset);
-    if (reset.theme) {
-      setTheme(reset.theme);
-    }
+    stagePreferences(reset);
   };
 
   const handleExportPreferences = () => {
@@ -569,9 +594,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         const parsed = JSON.parse(String(event.target?.result || '{}'));
         if (parsed && typeof parsed === 'object') {
           const merged = { ...DEFAULT_PREFERENCES, ...parsed };
-          setPrefs(merged);
-          onSave(merged);
-          if (merged.theme) setTheme(merged.theme);
+          stagePreferences(merged);
         }
       } catch {
         // Ignore invalid JSON file
@@ -917,6 +940,32 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           },
                         };
 
+                        // When editing the primary Fullscreen / NDI / Preview tab, also apply the patch
+                        // to Presenter, Multitimer, and Web Display (LAN) so changes apply across all displays
+                        // unless the user specifically switches to another target tab to customize it.
+                        if (activeSizesTargetTab === 'fullscreen_ndi_preview') {
+                          const otherTargets: SizesPositionTargetTab[] = [
+                            'presenter_window',
+                            'multitimer',
+                            'web_display_lan',
+                          ];
+                          for (const t of otherTargets) {
+                            const targetMap = {
+                              ...DEFAULT_TARGET_ELEMENTS_CONFIG,
+                              ...(allTargets[t] || {}),
+                            };
+                            const targetElem = {
+                              ...DEFAULT_TARGET_ELEMENTS_CONFIG[elementId],
+                              ...(targetMap[elementId] || {}),
+                              ...patch,
+                            };
+                            updatedTargets[t] = {
+                              ...targetMap,
+                              [elementId]: targetElem,
+                            };
+                          }
+                        }
+
                         const nextPrefs: AppPreferences = {
                           ...prefs,
                           sizesAndPositionsByTarget: updatedTargets,
@@ -933,13 +982,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           if (elementId === 'message' && patch.sizePercent !== undefined) {
                             nextPrefs.messageSizePercent = patch.sizePercent;
                           }
-                          if (elementId === 'progress_bar' && patch.visible !== undefined) {
-                            nextPrefs.showProgressBar = patch.visible;
+                          if (elementId === 'progress_bar') {
+                            if (patch.visible !== undefined) {
+                              nextPrefs.showProgressBar = patch.visible;
+                            }
+                            if (patch.location === 'Top') {
+                              nextPrefs.progressBarPosition = 'top';
+                            } else if (patch.location === 'Bottom') {
+                              nextPrefs.progressBarPosition = 'bottom';
+                            }
                           }
                         }
 
-                        setPrefs(nextPrefs);
-                        onSave(nextPrefs);
+                        stagePreferences(nextPrefs);
                       };
 
                       const allExtras =
@@ -958,12 +1013,27 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             ...patch,
                           },
                         };
+
+                        if (activeSizesTargetTab === 'fullscreen_ndi_preview') {
+                          const otherTargets: SizesPositionTargetTab[] = [
+                            'presenter_window',
+                            'multitimer',
+                            'web_display_lan',
+                          ];
+                          for (const t of otherTargets) {
+                            updatedExtrasMap[t] = {
+                              ...DEFAULT_TARGET_EXTRAS_CONFIG,
+                              ...(allExtras[t] || {}),
+                              ...patch,
+                            };
+                          }
+                        }
+
                         const nextPrefs: AppPreferences = {
                           ...prefs,
                           sizesAndPositionsExtrasByTarget: updatedExtrasMap,
                         };
-                        setPrefs(nextPrefs);
-                        onSave(nextPrefs);
+                        stagePreferences(nextPrefs);
                       };
 
                       const compactSelectCls = isDark
@@ -1525,8 +1595,40 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           <h3 className={sectionHeadingCls}>PROGRESS BAR OPTIONS</h3>
                           <PrefCheckbox
                             isDark={isDark}
-                            checked={prefs.showProgressBar ?? true}
-                            onChange={(val) => updatePref('showProgressBar', val)}
+                            checked={
+                              prefs.showProgressBar ??
+                              prefs.sizesAndPositionsByTarget?.fullscreen_ndi_preview?.progress_bar
+                                ?.visible ??
+                              false
+                            }
+                            onChange={(val) => {
+                              const allTargets =
+                                prefs.sizesAndPositionsByTarget || createDefaultSizesAndPositions();
+                              const nextTargets = { ...allTargets };
+                              (
+                                [
+                                  'fullscreen_ndi_preview',
+                                  'presenter_window',
+                                  'multitimer',
+                                  'web_display_lan',
+                                ] as SizesPositionTargetTab[]
+                              ).forEach((t) => {
+                                nextTargets[t] = {
+                                  ...DEFAULT_TARGET_ELEMENTS_CONFIG,
+                                  ...(allTargets[t] || {}),
+                                  progress_bar: {
+                                    ...DEFAULT_TARGET_ELEMENTS_CONFIG.progress_bar,
+                                    ...(allTargets[t]?.progress_bar || {}),
+                                    visible: val,
+                                  },
+                                };
+                              });
+                              stagePreferences({
+                                ...prefs,
+                                showProgressBar: val,
+                                sizesAndPositionsByTarget: nextTargets,
+                              });
+                            }}
                             label="Display countdown progress bar on stage and presenter screens"
                           />
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-5 pt-2 max-w-xl">
@@ -1550,12 +1652,38 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                               <div className="relative">
                                 <select
                                   value={prefs.progressBarPosition || 'bottom'}
-                                  onChange={(e) =>
-                                    updatePref(
-                                      'progressBarPosition',
-                                      e.target.value as AppPreferences['progressBarPosition']
-                                    )
-                                  }
+                                  onChange={(e) => {
+                                    const pos = e.target
+                                      .value as AppPreferences['progressBarPosition'];
+                                    const loc = pos === 'top' ? 'Top' : 'Bottom';
+                                    const allTargets =
+                                      prefs.sizesAndPositionsByTarget ||
+                                      createDefaultSizesAndPositions();
+                                    const nextTargets = { ...allTargets };
+                                    (
+                                      [
+                                        'fullscreen_ndi_preview',
+                                        'presenter_window',
+                                        'multitimer',
+                                        'web_display_lan',
+                                      ] as SizesPositionTargetTab[]
+                                    ).forEach((t) => {
+                                      nextTargets[t] = {
+                                        ...DEFAULT_TARGET_ELEMENTS_CONFIG,
+                                        ...(allTargets[t] || {}),
+                                        progress_bar: {
+                                          ...DEFAULT_TARGET_ELEMENTS_CONFIG.progress_bar,
+                                          ...(allTargets[t]?.progress_bar || {}),
+                                          location: loc,
+                                        },
+                                      };
+                                    });
+                                    stagePreferences({
+                                      ...prefs,
+                                      progressBarPosition: pos,
+                                      sizesAndPositionsByTarget: nextTargets,
+                                    });
+                                  }}
                                   className={`${selectCls} w-full`}
                                 >
                                   <option value="bottom">Bottom of Display</option>
@@ -1569,31 +1697,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       </div>
                     )}
 
-                    {/* 4. IMAGES (Exact match to reference screenshot + Per-List Independent Backgrounds + App Theme) */}
+                    {/* 4. IMAGES (Per-List Independent Backgrounds + Logo + App Theme) */}
                     {activeStyleTab === 'images' && (
                       <div className="space-y-5">
                         {/* Hidden File Inputs */}
-                        <input
-                          ref={bgImageInputRef}
-                          type="file"
-                          accept="image/*"
-                          className="hidden"
-                          onChange={async (e) => {
-                            const file = e.target.files?.[0];
-                            e.target.value = '';
-                            if (!file) return;
-                            const dataUrl = await readAndOptimizeImageFile(file);
-                            if (!dataUrl) return;
-                            const updated: AppPreferences = {
-                              ...prefs,
-                              backgroundImageDataUrl: dataUrl,
-                              backgroundImageFileName: file.name,
-                            };
-                            setPrefs(updated);
-                            onSave(updated);
-                          }}
-                        />
-
                         <input
                           ref={listBgImageInputRef}
                           type="file"
@@ -1613,99 +1720,90 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                 fileName: file.name,
                               },
                             };
+                            const baseTargets =
+                              prefs.sizesAndPositionsByTarget || createDefaultSizesAndPositions();
+                            const nextTargets = { ...baseTargets };
+                            (
+                              [
+                                'fullscreen_ndi_preview',
+                                'presenter_window',
+                                'multitimer',
+                                'web_display_lan',
+                              ] as SizesPositionTargetTab[]
+                            ).forEach((t) => {
+                              nextTargets[t] = {
+                                ...(nextTargets[t] || DEFAULT_TARGET_ELEMENTS_CONFIG),
+                                background: {
+                                  ...(nextTargets[t]?.background ||
+                                    DEFAULT_TARGET_ELEMENTS_CONFIG.background),
+                                  visible: true,
+                                },
+                              };
+                            });
                             const updated: AppPreferences = {
                               ...prefs,
+                              backgroundImageDataUrl: '',
+                              backgroundImageFileName: '',
                               listBackgroundImages: nextListBgs,
+                              sizesAndPositionsByTarget: nextTargets,
                             };
-                            setPrefs(updated);
-                            onSave(updated);
+                            stagePreferences(updated);
                           }}
                         />
 
                         <input
-                          ref={logoImageInputRef}
+                          ref={listLogoImageInputRef}
                           type="file"
                           accept="image/*"
                           className="hidden"
                           onChange={async (e) => {
                             const file = e.target.files?.[0];
+                            const targetListId = pendingListLogoTargetIdRef.current;
                             e.target.value = '';
-                            if (!file) return;
+                            if (!file || !targetListId) return;
                             const dataUrl = await readAndOptimizeImageFile(file, 1024);
                             if (!dataUrl) return;
+                            const nextListLogos = {
+                              ...(prefs.listLogoImages || {}),
+                              [targetListId]: {
+                                dataUrl,
+                                fileName: file.name,
+                              },
+                            };
+                            const baseTargets =
+                              prefs.sizesAndPositionsByTarget || createDefaultSizesAndPositions();
+                            const nextTargets = { ...baseTargets };
+                            (
+                              [
+                                'fullscreen_ndi_preview',
+                                'presenter_window',
+                                'multitimer',
+                                'web_display_lan',
+                              ] as SizesPositionTargetTab[]
+                            ).forEach((t) => {
+                              nextTargets[t] = {
+                                ...(nextTargets[t] || DEFAULT_TARGET_ELEMENTS_CONFIG),
+                                logo: {
+                                  ...(nextTargets[t]?.logo ||
+                                    DEFAULT_TARGET_ELEMENTS_CONFIG.logo),
+                                  visible: true,
+                                },
+                              };
+                            });
                             const updated: AppPreferences = {
                               ...prefs,
-                              logoImageDataUrl: dataUrl,
-                              logoImageFileName: file.name,
+                              logoImageDataUrl: '',
+                              logoImageFileName: '',
+                              listLogoImages: nextListLogos,
+                              sizesAndPositionsByTarget: nextTargets,
                             };
-                            setPrefs(updated);
-                            onSave(updated);
+                            stagePreferences(updated);
                           }}
                         />
 
-                        {/* 1. BACKGROUND IMAGE */}
+                        {/* 1. INDEPENDENT BACKGROUND IMAGE PER LIST */}
                         <div className="space-y-4">
-                          <div className="space-y-2.5">
-                            <h3 className={sectionHeadingCls}>BACKGROUND IMAGE</h3>
-                            <div className="flex items-center gap-3 flex-wrap">
-                              <span
-                                className={`text-[13px] italic ${
-                                  isDark ? 'text-neutral-300' : 'text-slate-600'
-                                }`}
-                              >
-                                {prefs.backgroundImageFileName
-                                  ? prefs.backgroundImageFileName
-                                  : '(none)'}
-                              </span>
-
-                              <button
-                                type="button"
-                                onClick={() => bgImageInputRef.current?.click()}
-                                className={`px-3.5 py-1.5 rounded text-[13px] font-normal border transition-colors cursor-pointer ${
-                                  isDark
-                                    ? 'bg-[#121722] hover:bg-[#192130] border-[#2a364b] text-neutral-100'
-                                    : 'bg-white hover:bg-slate-100 border-slate-300 text-slate-800 shadow-2xs'
-                                }`}
-                              >
-                                Choose file...
-                              </button>
-
-                              {prefs.backgroundImageDataUrl && (
-                                <>
-                                  <img
-                                    src={prefs.backgroundImageDataUrl}
-                                    alt="Background preview"
-                                    className={`h-7 w-12 object-cover rounded border ${
-                                      isDark ? 'border-[#2a364b]' : 'border-slate-300'
-                                    }`}
-                                  />
-                                  <button
-                                    type="button"
-                                    title="Remove default background image (show black background)"
-                                    onClick={() => {
-                                      const updated: AppPreferences = {
-                                        ...prefs,
-                                        backgroundImageDataUrl: '',
-                                        backgroundImageFileName: '',
-                                      };
-                                      setPrefs(updated);
-                                      onSave(updated);
-                                    }}
-                                    className={`p-1 rounded transition-colors cursor-pointer ${
-                                      isDark
-                                        ? 'text-neutral-400 hover:text-red-400 hover:bg-red-950/30'
-                                        : 'text-slate-400 hover:text-red-600 hover:bg-red-50'
-                                    }`}
-                                  >
-                                    <X className="w-3.5 h-3.5" />
-                                  </button>
-                                </>
-                              )}
-                            </div>
-                          </div>
-
-                          {/* INDEPENDENT BACKGROUND IMAGE FOR EACH LIST */}
-                          <div className="space-y-2 pt-1">
+                          <div className="space-y-2">
                             <div className="flex items-center justify-between">
                               <h4 className={sectionHeadingCls}>
                                 BACKGROUND IMAGE PER LIST
@@ -1822,8 +1920,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                                 ...prefs,
                                                 listBackgroundImages: nextListBgs,
                                               };
-                                              setPrefs(updated);
-                                              onSave(updated);
+                                              stagePreferences(updated);
                                             }}
                                             className={`p-1 rounded transition-colors cursor-pointer ${
                                               isDark
@@ -1850,63 +1947,146 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           }`}
                         />
 
-                        {/* 2. LOGO */}
-                        <div className="space-y-3">
-                          <h3 className={sectionHeadingCls}>LOGO</h3>
-                          <div className="flex items-center gap-3 flex-wrap">
-                            <span
-                              className={`text-[13px] italic ${
-                                isDark ? 'text-neutral-300' : 'text-slate-600'
-                              }`}
-                            >
-                              {prefs.logoImageFileName ? prefs.logoImageFileName : '(none)'}
-                            </span>
+                        {/* 2. INDEPENDENT LOGO IMAGE PER LIST */}
+                        <div className="space-y-4">
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                              <h4 className={sectionHeadingCls}>
+                                LOGO IMAGE PER LIST
+                              </h4>
+                              <span
+                                className={`text-[11px] ${
+                                  isDark ? 'text-neutral-400' : 'text-slate-500'
+                                }`}
+                              >
+                                Independent logo for each Cue List (none when empty)
+                              </span>
+                            </div>
 
-                            <button
-                              type="button"
-                              onClick={() => logoImageInputRef.current?.click()}
-                              className={`px-3.5 py-1.5 rounded text-[13px] font-normal border transition-colors cursor-pointer ${
+                            <div
+                              className={`rounded border divide-y ${
                                 isDark
-                                  ? 'bg-[#121722] hover:bg-[#192130] border-[#2a364b] text-neutral-100'
-                                  : 'bg-white hover:bg-slate-100 border-slate-300 text-slate-800 shadow-2xs'
+                                  ? 'border-[#1f293a] divide-[#1a2232] bg-[#0e131d]/70'
+                                  : 'border-slate-200 divide-slate-200 bg-slate-50/70'
                               }`}
                             >
-                              Choose file...
-                            </button>
+                              {availableLists.map((list, idx) => {
+                                const listLogoEntry = prefs.listLogoImages?.[list.id];
+                                const hasListLogo = Boolean(
+                                  listLogoEntry &&
+                                    listLogoEntry.dataUrl &&
+                                    listLogoEntry.dataUrl.trim()
+                                );
+                                const isCurrentActiveList = list.id === currentActiveListId;
 
-                            {prefs.logoImageDataUrl && (
-                              <>
-                                <img
-                                  src={prefs.logoImageDataUrl}
-                                  alt="Logo preview"
-                                  className={`h-7 w-12 object-contain rounded border p-0.5 ${
-                                    isDark
-                                      ? 'border-[#2a364b] bg-[#0b0e14]'
-                                      : 'border-slate-300 bg-slate-50'
-                                  }`}
-                                />
-                                <button
-                                  type="button"
-                                  title="Remove logo"
-                                  onClick={() => {
-                                    const updated: AppPreferences = {
-                                      ...prefs,
-                                      logoImageDataUrl: '',
-                                      logoImageFileName: '',
-                                    };
-                                    setPrefs(updated);
-                                    onSave(updated);
-                                  }}
-                                  className={`p-1 rounded transition-colors cursor-pointer ${
-                                    isDark
-                                      ? 'text-neutral-400 hover:text-red-400 hover:bg-red-950/30'
-                                      : 'text-slate-400 hover:text-red-600 hover:bg-red-50'
-                                  }`}
-                                >
-                                  <X className="w-3.5 h-3.5" />
-                                </button>
-                              </>
-                            )}
+                                return (
+                                  <div
+                                    key={list.id}
+                                    className="px-3.5 py-2.5 flex items-center justify-between gap-3 flex-wrap"
+                                  >
+                                    {/* List Name & Active Indicator */}
+                                    <div className="flex items-center gap-2 min-w-[180px]">
+                                      <span
+                                        className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold uppercase ${
+                                          isDark
+                                            ? 'bg-[#182132] text-neutral-300'
+                                            : 'bg-slate-200 text-slate-700'
+                                        }`}
+                                      >
+                                        List {idx + 1}
+                                      </span>
+                                      <span
+                                        className={`text-[13px] font-medium truncate max-w-[210px] ${
+                                          isDark ? 'text-neutral-100' : 'text-slate-800'
+                                        }`}
+                                      >
+                                        {list.name}
+                                      </span>
+                                      {isCurrentActiveList && (
+                                        <span
+                                          className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${
+                                            isDark
+                                              ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
+                                              : 'bg-cyan-100 text-cyan-800 border border-cyan-300'
+                                          }`}
+                                        >
+                                          Active
+                                        </span>
+                                      )}
+                                    </div>
+
+                                    {/* File Status + Choose File + Preview + Remove */}
+                                    <div className="flex items-center gap-3">
+                                      <span
+                                        className={`text-[13px] italic truncate max-w-[170px] ${
+                                          hasListLogo
+                                            ? isDark
+                                              ? 'text-cyan-300 not-italic'
+                                              : 'text-cyan-700 not-italic'
+                                            : isDark
+                                            ? 'text-neutral-400'
+                                            : 'text-slate-500'
+                                        }`}
+                                        title={hasListLogo ? listLogoEntry?.fileName : '(none)'}
+                                      >
+                                        {hasListLogo ? listLogoEntry?.fileName : '(none)'}
+                                      </span>
+
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          pendingListLogoTargetIdRef.current = list.id;
+                                          listLogoImageInputRef.current?.click();
+                                        }}
+                                        className={`px-3 py-1 rounded text-[12.5px] font-normal border transition-colors cursor-pointer ${
+                                          isDark
+                                            ? 'bg-[#121722] hover:bg-[#192130] border-[#2a364b] text-neutral-100'
+                                            : 'bg-white hover:bg-slate-100 border-slate-300 text-slate-800 shadow-2xs'
+                                        }`}
+                                      >
+                                        Choose file...
+                                      </button>
+
+                                      {hasListLogo && listLogoEntry && (
+                                        <>
+                                          <img
+                                            src={listLogoEntry.dataUrl}
+                                            alt={`${list.name} logo`}
+                                            className={`h-7 w-12 object-contain rounded border p-0.5 ${
+                                              isDark
+                                                ? 'border-[#2a364b] bg-[#0b0e14]'
+                                                : 'border-slate-300 bg-slate-50'
+                                            }`}
+                                          />
+                                          <button
+                                            type="button"
+                                            title={`Remove logo image for ${list.name}`}
+                                            onClick={() => {
+                                              const nextListLogos = {
+                                                ...(prefs.listLogoImages || {}),
+                                              };
+                                              delete nextListLogos[list.id];
+                                              const updated: AppPreferences = {
+                                                ...prefs,
+                                                listLogoImages: nextListLogos,
+                                              };
+                                              stagePreferences(updated);
+                                            }}
+                                            className={`p-1 rounded transition-colors cursor-pointer ${
+                                              isDark
+                                                ? 'text-neutral-400 hover:text-red-400 hover:bg-red-950/30'
+                                                : 'text-slate-400 hover:text-red-600 hover:bg-red-50'
+                                            }`}
+                                          >
+                                            <X className="w-3.5 h-3.5" />
+                                          </button>
+                                        </>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -2346,6 +2526,64 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </div>
               </div>
             )}
+
+            {/* =================================================================
+                SHARED TAB FOOTER BAR WITH "APPLY" BUTTON (ALL PREFERENCES TABS)
+               ================================================================= */}
+            <div
+              className={`px-4 py-2.5 border-t flex items-center justify-between gap-3 shrink-0 ${
+                isDark ? 'bg-[#0b0e14] border-[#1b2333]' : 'bg-slate-100 border-slate-200'
+              }`}
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                {appliedFeedback ? (
+                  <span
+                    className={`inline-flex items-center gap-1.5 text-[12px] font-medium ${
+                      isDark ? 'text-emerald-400' : 'text-emerald-700'
+                    }`}
+                  >
+                    <Check className="w-3.5 h-3.5 stroke-[2.5]" />
+                    <span>Changes applied</span>
+                  </span>
+                ) : hasUnappliedChanges ? (
+                  <span
+                    className={`inline-flex items-center gap-1.5 text-[12px] font-medium ${
+                      isDark ? 'text-amber-400' : 'text-amber-700'
+                    }`}
+                  >
+                    <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse shrink-0" />
+                    <span className="truncate">Unapplied changes — click Apply to take effect</span>
+                  </span>
+                ) : (
+                  <span
+                    className={`text-[12px] truncate ${
+                      isDark ? 'text-neutral-500' : 'text-slate-500'
+                    }`}
+                  >
+                    All settings applied
+                  </span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleApply}
+                  className={`px-4 py-1.5 rounded text-[13px] font-semibold border transition-all flex items-center gap-1.5 cursor-pointer ${
+                    hasUnappliedChanges
+                      ? isDark
+                        ? 'bg-[#0078e7] hover:bg-[#1888f2] border-[#2b8cff] text-white shadow-sm'
+                        : 'bg-cyan-600 hover:bg-cyan-700 border-cyan-600 text-white shadow-sm'
+                      : isDark
+                      ? 'bg-[#152033] hover:bg-[#1c2b44] border-[#2b8cff]/60 text-[#4ea8ff] hover:text-white'
+                      : 'bg-cyan-50 hover:bg-cyan-600 border-cyan-500 text-cyan-800 hover:text-white'
+                  }`}
+                >
+                  <Check className="w-3.5 h-3.5 stroke-[2.5]" />
+                  <span>Apply</span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </div>

@@ -61,6 +61,7 @@ export interface AppPreferences {
   listBackgroundImages?: Record<string, ListBackgroundImageConfig>;
   logoImageDataUrl?: string;
   logoImageFileName?: string;
+  listLogoImages?: Record<string, ListBackgroundImageConfig>;
   backgroundImageOpacity?: number;
   backgroundFit?: 'cover' | 'contain';
   normalDigitsColor?: string;
@@ -86,22 +87,34 @@ export interface ListBackgroundImageConfig {
 
 /**
  * Resolves the effective background image Data URL for a given Cue List ID.
- * Returns the list's independent background image if uploaded, falling back
- * to the global default background image if uploaded, or empty string ('') for pure black.
+ * Each list has its own independent background image; returns empty string ('')
+ * for pure black background when no image is uploaded for that list or when removed.
  */
 export function resolveBackgroundImageForList(
   prefs: AppPreferences | null | undefined,
   listId?: string | null
 ): string {
-  if (!prefs) return '';
-  if (listId && prefs.listBackgroundImages) {
-    const entry = prefs.listBackgroundImages[listId];
-    if (entry && typeof entry.dataUrl === 'string' && entry.dataUrl.trim().length > 0) {
-      return entry.dataUrl;
-    }
+  if (!prefs || !listId || !prefs.listBackgroundImages) return '';
+  const entry = prefs.listBackgroundImages[listId];
+  if (entry && typeof entry.dataUrl === 'string' && entry.dataUrl.trim().length > 0) {
+    return entry.dataUrl;
   }
-  if (typeof prefs.backgroundImageDataUrl === 'string' && prefs.backgroundImageDataUrl.trim().length > 0) {
-    return prefs.backgroundImageDataUrl;
+  return '';
+}
+
+/**
+ * Resolves the effective logo image Data URL for a given Cue List ID.
+ * Each list has its own independent logo image; returns empty string ('')
+ * when no logo is uploaded for that list or when removed.
+ */
+export function resolveLogoImageForList(
+  prefs: AppPreferences | null | undefined,
+  listId?: string | null
+): string {
+  if (!prefs || !listId || !prefs.listLogoImages) return '';
+  const entry = prefs.listLogoImages[listId];
+  if (entry && typeof entry.dataUrl === 'string' && entry.dataUrl.trim().length > 0) {
+    return entry.dataUrl;
   }
   return '';
 }
@@ -165,7 +178,7 @@ export const DEFAULT_TARGET_EXTRAS_CONFIG: SizesPositionTargetExtras = {
   shadowYOffset: -5,
   shadowBlur: 0,
   shadowColor: '#000000',
-  shadowColorTransparent: true,
+  shadowColorTransparent: false,
 
   enableCrop: false,
   cropLeftPercent: 0,
@@ -261,10 +274,10 @@ export const DEFAULT_TARGET_ELEMENTS_CONFIG: Record<SizesPositionElementId, Size
     visible: false,
   },
   background: {
-    visible: false,
+    visible: true,
   },
   logo: {
-    visible: false,
+    visible: true,
     location: 'TopRight',
     vert: -1,
     horiz: -5,
@@ -362,6 +375,7 @@ export const DEFAULT_PREFERENCES: AppPreferences = {
   listBackgroundImages: {},
   logoImageDataUrl: '',
   logoImageFileName: '',
+  listLogoImages: {},
   backgroundImageOpacity: 100,
   backgroundFit: 'cover',
   normalDigitsColor: '#ffffff',

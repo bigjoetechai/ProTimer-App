@@ -4,6 +4,7 @@
 
 import { TimerItem, TimerStatus } from './timer';
 import { StageMessage } from './message';
+import { AppPreferences } from './settings';
 
 export type DisplayTarget = 
   | 'presenter' 
@@ -48,6 +49,7 @@ export interface ListActiveCueSummary {
   totalCuesCount: number;
   runningCuesCount: number;
   backgroundImageUrl?: string;
+  logoImageUrl?: string;
 }
 
 export interface DisplaySyncPayload {
@@ -67,6 +69,7 @@ export interface DisplaySyncPayload {
   alertOnOff?: boolean;
   activeMessage: StageMessage | null;
   clockTimeFormatted: string;
+  dateFormatted?: string;
   isBlackout: boolean;
   isClockMode: boolean;
   speed: number;
@@ -75,6 +78,7 @@ export interface DisplaySyncPayload {
   backgroundFit?: 'cover' | 'contain';
   backgroundImageOpacity?: number;
   logoImageUrl?: string;
+  preferences?: AppPreferences;
   timerList?: Array<{
     id: string;
     name: string;

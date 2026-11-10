@@ -219,31 +219,51 @@ export const MainConsolePage: React.FC = () => {
   const handleAddTimerType = (
     type: 'countdown' | 'count_up' | 'end_time' | 'stopwatch' | 'clock' | 'empty' | 'spacer'
   ) => {
+    const defaultDur =
+      preferences.defaultDurationEnabled !== false
+        ? preferences.defaultDurationSeconds ?? 600
+        : 600;
+    const defaultEndAction = preferences.defaultNewTimerEndAction || 'count_up';
+    const warnSec = preferences.defaultWarningSeconds ?? 90;
+    const dangerSec = preferences.defaultDangerSeconds ?? 30;
+    const warnColor = preferences.warningDigitsColor || '#eab308';
+    const dangerColor = preferences.dangerDigitsColor || '#ef4444';
+    const flashEnabled = preferences.flashAlertsEnabled ?? true;
+
+    const defaultAlert1 =
+      preferences.defaultAlert1Enabled !== false
+        ? {
+            id: 'alt1',
+            timeSeconds: warnSec,
+            color: warnColor,
+            flash: false,
+            soundEnabled: false,
+            label: 'Alert 1 (Warning)',
+          }
+        : undefined;
+
+    const defaultAlert2 = preferences.defaultAlert2Enabled
+      ? {
+          id: 'alt2',
+          timeSeconds: dangerSec,
+          color: dangerColor,
+          flash: flashEnabled,
+          soundEnabled: false,
+          label: 'Alert 2 (Danger)',
+        }
+      : undefined;
+
     switch (type) {
       case 'countdown':
         addTimer({
           name: 'Countdown',
-          durationSeconds: 600,
-          remainingSeconds: 600,
+          durationSeconds: defaultDur,
+          remainingSeconds: defaultDur,
           type: 'countdown',
-          endAction: 'count_up',
+          endAction: defaultEndAction,
           speed: 100,
-          alert1: {
-            id: 'alt1',
-            timeSeconds: 120,
-            color: '#eab308',
-            flash: false,
-            soundEnabled: false,
-            label: 'Alert 1 (Warning)',
-          },
-          alert2: {
-            id: 'alt2',
-            timeSeconds: 60,
-            color: '#ef4444',
-            flash: true,
-            soundEnabled: false,
-            label: 'Alert 2 (Danger)',
-          },
+          alert1: defaultAlert1,
+          alert2: defaultAlert2,
         });
         break;
       case 'count_up':
@@ -259,27 +279,13 @@ export const MainConsolePage: React.FC = () => {
       case 'end_time':
         addTimer({
           name: 'End Time',
-          durationSeconds: 1800,
-          remainingSeconds: 1800,
+          durationSeconds: defaultDur,
+          remainingSeconds: defaultDur,
           type: 'countdown',
-          endAction: 'count_up',
+          endAction: defaultEndAction,
           speed: 100,
-          alert1: {
-            id: 'alt1',
-            timeSeconds: 300,
-            color: '#eab308',
-            flash: false,
-            soundEnabled: false,
-            label: 'Alert 1 (Warning)',
-          },
-          alert2: {
-            id: 'alt2',
-            timeSeconds: 60,
-            color: '#ef4444',
-            flash: true,
-            soundEnabled: false,
-            label: 'Alert 2 (Danger)',
-          },
+          alert1: defaultAlert1,
+          alert2: defaultAlert2,
         });
         break;
       case 'stopwatch':
@@ -368,7 +374,7 @@ export const MainConsolePage: React.FC = () => {
 
       {/* 2. OPERATOR CONTROL PANEL */}
       <ControlPanel
-        timeStr={formatSeconds(snapshot.currentSeconds, true, snapshot.isOvertime)}
+        timeStr={formatSeconds(snapshot.currentSeconds, true, snapshot.isOvertime, preferences)}
         status={snapshot.status}
         speed={snapshot.speed}
         alertColor={snapshot.alertColor}
@@ -558,7 +564,10 @@ export const MainConsolePage: React.FC = () => {
         isOpen={isPresenterPopoutOpen}
         onClose={() => setIsPresenterPopoutOpen(false)}
         onPopOutWindow={() => openDisplayWindow('presenter', { x: 28, y: 60, width: 360, height: 240 })}
-        timeStr={formatSeconds(snapshot.currentSeconds, true, snapshot.isOvertime)}
+        timeStr={formatSeconds(snapshot.currentSeconds, true, snapshot.isOvertime, preferences)}
+        currentSeconds={snapshot.currentSeconds}
+        activeListId={snapshot.activeListId}
+        activeAlertLevel={payload?.activeAlertLevel}
         status={snapshot.status}
         isOvertime={snapshot.isOvertime}
         alertColor={snapshot.alertColor}
@@ -577,7 +586,10 @@ export const MainConsolePage: React.FC = () => {
         isOpen={isPreviewPopoutOpen}
         onClose={() => setIsPreviewPopoutOpen(false)}
         onPopOutWindow={() => openDisplayWindow('preview', { x: 40, y: 60, width: 360, height: 240 })}
-        timeStr={formatSeconds(snapshot.currentSeconds, true, snapshot.isOvertime)}
+        timeStr={formatSeconds(snapshot.currentSeconds, true, snapshot.isOvertime, preferences)}
+        currentSeconds={snapshot.currentSeconds}
+        activeListId={snapshot.activeListId}
+        activeAlertLevel={payload?.activeAlertLevel}
         status={snapshot.status}
         isOvertime={snapshot.isOvertime}
         alertColor={snapshot.alertColor}

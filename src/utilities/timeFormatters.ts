@@ -20,8 +20,13 @@ function getActiveFormattingPrefs(): AppPreferences {
 /**
  * Formats seconds into HH:MM:SS or MM:SS respecting user Countdown & General Preferences.
  */
-export function formatSeconds(seconds: number, forceHours = true, forceOvertimePlus = false): string {
-  const prefs = getActiveFormattingPrefs();
+export function formatSeconds(
+  seconds: number,
+  forceHours = true,
+  forceOvertimePlus = false,
+  prefsOverride?: AppPreferences
+): string {
+  const prefs = prefsOverride || getActiveFormattingPrefs();
   const isOvertime = seconds < 0 || forceOvertimePlus;
   const absSeconds = Math.abs(Math.round(seconds));
 
@@ -85,8 +90,12 @@ export function parseTimeToSeconds(timeStr: string): number {
 /**
  * Formats current Date into HH:MM:SS or HH:MM respecting Clock Options in Preferences.
  */
-export function formatClock(date: Date = new Date(), is24hOverride?: boolean): string {
-  const prefs = getActiveFormattingPrefs();
+export function formatClock(
+  date: Date = new Date(),
+  is24hOverride?: boolean,
+  prefsOverride?: AppPreferences
+): string {
+  const prefs = prefsOverride || getActiveFormattingPrefs();
   const is24h = is24hOverride !== undefined ? is24hOverride : (prefs.timeFormat24h ?? true);
   const showSeconds = prefs.clockDisplaySeconds ?? false;
   const hideZeros = prefs.hideLeadingZeros ?? false;
@@ -109,6 +118,40 @@ export function formatClock(date: Date = new Date(), is24hOverride?: boolean): s
   return showSeconds
     ? `${formatLead(hours)}:${minutes}:${seconds}`
     : `${formatLead(hours)}:${minutes}`;
+}
+
+/**
+ * Formats current Date according to Date Options in Preferences ('short', 'long', 'iso', 'dmy', 'mdy').
+ */
+export function formatDate(date: Date = new Date(), prefsOverride?: AppPreferences): string {
+  const prefs = prefsOverride || getActiveFormattingPrefs();
+  const format = prefs.dateFormat || 'short';
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+
+  switch (format) {
+    case 'iso':
+      return `${y}-${m}-${d}`;
+    case 'dmy':
+      return `${d}/${m}/${y}`;
+    case 'mdy':
+      return `${m}/${d}/${y}`;
+    case 'long':
+      return date.toLocaleDateString(undefined, {
+        weekday: 'short',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+      });
+    case 'short':
+    default:
+      return date.toLocaleDateString(undefined, {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+      });
+  }
 }
 
 /**
