@@ -4,7 +4,7 @@
  * with full multiple timer-list management, live concurrent execution, and independent timers.
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { ListOrdered, History } from 'lucide-react';
 import { MainLayout } from '../layouts';
 import {
@@ -26,6 +26,7 @@ import { formatSeconds } from '../utilities/timeFormatters';
 import { TimerItem, DisplayTarget, AppPreferences } from '../types';
 import { storageService } from '../services/storageService';
 import { displaySyncService } from '../services/displaySyncService';
+import { ndiStreamService, NdiStreamStatus } from '../services/ndiStreamService';
 
 export const MainConsolePage: React.FC = () => {
   const {
@@ -109,6 +110,15 @@ export const MainConsolePage: React.FC = () => {
   const [isLanModalOpen, setIsLanModalOpen] = useState(false);
   const [isPreviewPopoutOpen, setIsPreviewPopoutOpen] = useState(false);
   const [isPresenterPopoutOpen, setIsPresenterPopoutOpen] = useState(false);
+  const [ndiStreamStatus, setNdiStreamStatus] = useState<NdiStreamStatus>(() =>
+    ndiStreamService.getStatus()
+  );
+
+  useEffect(() => {
+    return ndiStreamService.subscribe((status) => {
+      setNdiStreamStatus(status);
+    });
+  }, []);
 
   // UI preferences & Theme
   const { theme, isDark, toggleTheme, setTheme } = useTheme();
@@ -129,6 +139,49 @@ export const MainConsolePage: React.FC = () => {
     toggleMultiFullscreen,
   } = useMonitorDetection();
   const { toggleAppFullscreen } = useWindowManager();
+
+  // Sync live Fullscreen, Multi Fullscreen, and NDI states to LAN / Remote controllers
+  useEffect(() => {
+    displaySyncService.updateOutputStatus({
+      isFullscreenActive,
+      isMultiFullscreenActive,
+      isNdiActive: ndiStreamStatus.active,
+      isNdiMultiActive: ndiStreamStatus.active && ndiStreamStatus.mode === 'multi',
+      ndiSourceName: ndiStreamStatus.sourceName,
+    });
+  }, [isFullscreenActive, isMultiFullscreenActive, ndiStreamStatus]);
+
+  // Register handler so LAN / QR Remote Control can remotely activate Fullscreen and NDI
+  useEffect(() => {
+    return displaySyncService.registerOutputController((command) => {
+      switch (command) {
+        case 'TOGGLE_FULLSCREEN':
+          toggleFullscreen(selectedMonitorId);
+          break;
+        case 'OPEN_FULLSCREEN':
+          openFullscreen(selectedMonitorId, 'fullscreen');
+          break;
+        case 'CLOSE_FULLSCREEN':
+          closeFullscreen();
+          break;
+        case 'TOGGLE_MULTI_FULLSCREEN':
+          toggleMultiFullscreen(selectedMonitorId);
+          break;
+        case 'TOGGLE_NDI':
+          ndiStreamService.toggleStream('single');
+          break;
+        case 'TOGGLE_NDI_MULTI':
+          ndiStreamService.toggleStream('multi');
+          break;
+      }
+    });
+  }, [
+    selectedMonitorId,
+    toggleFullscreen,
+    openFullscreen,
+    closeFullscreen,
+    toggleMultiFullscreen,
+  ]);
 
   // Active list name
   const currentList = useMemo(() => {
@@ -525,6 +578,8 @@ export const MainConsolePage: React.FC = () => {
             toggleFullscreen(selectedMonitorId);
           } else if (target === 'multi_fullscreen') {
             toggleMultiFullscreen(selectedMonitorId);
+          } else if (target === 'ndi') {
+            ndiStreamService.toggleStream('single');
           } else if (target === 'presenter') {
             setIsPresenterPopoutOpen((prev) => !prev);
             if (typeof window !== 'undefined' && window.electronAPI?.isElectron) {
@@ -557,6 +612,8 @@ export const MainConsolePage: React.FC = () => {
         onCloseMultiFullscreen={closeMultiFullscreen}
         isPreviewActive={isPreviewPopoutOpen}
         isPresenterActive={isPresenterPopoutOpen}
+        ndiStreamStatus={ndiStreamStatus}
+        onToggleNdiStream={(mode) => ndiStreamService.toggleStream(mode)}
       />
 
       {/* ALWAYS-ON-TOP RESIZABLE PRESENTER POP-OUT SCREEN (360 x 240 px, NO top controls) */}

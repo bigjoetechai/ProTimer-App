@@ -669,13 +669,27 @@ class TimerManagerService {
    * - At the click of start button it starts the next cue in sequence and advances the cue pointer.
    * - The active running cue becomes highlighted in red.
    */
+  private findListForTimer(timerId: string): TimerList | undefined {
+    for (const list of this.lists.values()) {
+      if (list.timerIds.includes(timerId)) {
+        return list;
+      }
+    }
+    return undefined;
+  }
+
   public start(targetId?: string): void {
-    const list = this.lists.get(this.activeListId);
-    if (!list || list.timerIds.length === 0) return;
+    const activeList = this.lists.get(this.activeListId);
+    const targetList = targetId
+      ? this.findListForTimer(targetId) || activeList
+      : activeList;
+    if (!targetList || targetList.timerIds.length === 0) return;
+
+    const isTargetListActive = targetList.id === this.activeListId;
 
     const findNextPlayableId = (fromIndex: number): string | null => {
-      for (let step = 1; step <= list.timerIds.length; step++) {
-        const candidateId = list.timerIds[(fromIndex + step) % list.timerIds.length];
+      for (let step = 1; step <= targetList.timerIds.length; step++) {
+        const candidateId = targetList.timerIds[(fromIndex + step) % targetList.timerIds.length];
         const candidate = this.timers.get(candidateId);
         if (candidate && candidate.type !== 'spacer') {
           return candidateId;
@@ -684,24 +698,39 @@ class TimerManagerService {
       return null;
     };
 
+    // Ensure activeTimerId and cuedTimerId belong to targetList when operating on activeList
+    const currentActiveInList =
+      this.activeTimerId && targetList.timerIds.includes(this.activeTimerId)
+        ? this.activeTimerId
+        : targetList.timerIds.find((tid) => this.runningTimerIds.has(tid)) ||
+          targetList.timerIds.find((tid) => this.timers.get(tid)?.status === 'paused') ||
+          null;
+
+    const currentCuedInList =
+      this.cuedTimerId && targetList.timerIds.includes(this.cuedTimerId)
+        ? this.cuedTimerId
+        : null;
+
     let idToStart: string | null = null;
 
-    if (targetId) {
-      // Explicit target specified (e.g. from row start button)
+    if (targetId && targetList.timerIds.includes(targetId)) {
       idToStart = targetId;
+    } else if (
+      currentActiveInList &&
+      this.timers.get(currentActiveInList)?.status === 'paused' &&
+      (!currentCuedInList || currentCuedInList === currentActiveInList)
+    ) {
+      // Resume currently paused timer in this list
+      idToStart = currentActiveInList;
+    } else if (currentCuedInList && currentCuedInList !== currentActiveInList) {
+      idToStart = currentCuedInList;
+    } else if (currentActiveInList && this.runningTimerIds.has(currentActiveInList)) {
+      const currentIndex = targetList.timerIds.indexOf(currentActiveInList);
+      idToStart = findNextPlayableId(currentIndex);
+    } else if (currentCuedInList) {
+      idToStart = currentCuedInList;
     } else {
-      // START button clicked: Start the next cue!
-      if (this.cuedTimerId && this.cuedTimerId !== this.activeTimerId) {
-        idToStart = this.cuedTimerId;
-      } else if (this.activeTimerId && this.runningTimerIds.has(this.activeTimerId)) {
-        // Current timer is actively running: start the next cue in the list
-        const currentIndex = list.timerIds.indexOf(this.activeTimerId);
-        idToStart = findNextPlayableId(currentIndex);
-      } else if (this.cuedTimerId) {
-        idToStart = this.cuedTimerId;
-      } else {
-        idToStart = findNextPlayableId(-1);
-      }
+      idToStart = findNextPlayableId(-1);
     }
 
     if (!idToStart) return;
@@ -709,23 +738,31 @@ class TimerManagerService {
     const timer = this.timers.get(idToStart);
     if (!timer || timer.type === 'spacer') return;
 
-    // Transition previous running timer(s) to completed so the next cue takes over
-    if (this.activeTimerId && this.activeTimerId !== idToStart) {
-      const prevTimer = this.timers.get(this.activeTimerId);
-      if (prevTimer && (prevTimer.status === 'running' || prevTimer.status === 'overtime')) {
-        this.recordTimerStop(prevTimer, 'stopped');
-        prevTimer.status = 'completed';
-        this.runningTimerIds.delete(this.activeTimerId);
-        this.saveTimerToStorage(prevTimer);
+    // Transition any other running/overtime/paused timer in THIS SAME LIST to completed/idle
+    targetList.timerIds.forEach((tid) => {
+      if (tid !== idToStart) {
+        const prevTimer = this.timers.get(tid);
+        if (
+          prevTimer &&
+          (prevTimer.status === 'running' ||
+            prevTimer.status === 'overtime' ||
+            prevTimer.status === 'paused')
+        ) {
+          this.recordTimerStop(prevTimer, 'stopped');
+          prevTimer.status = 'completed';
+          this.runningTimerIds.delete(tid);
+          this.saveTimerToStorage(prevTimer);
+        }
       }
-    }
+    });
 
-    this.activeTimerId = idToStart;
     const wasPaused = timer.status === 'paused';
 
-    // START should use the system time using the DURATION to determine the END
+    // START uses the system time + duration to determine the END time
     const now = new Date();
-    timer.startTime = formatClock(now, true);
+    if (!wasPaused) {
+      timer.startTime = formatClock(now, true);
+    }
 
     // If starting fresh (idle, cued, or completed), reset elapsed and remaining
     if (timer.status === 'idle' || timer.status === 'cued' || timer.status === 'completed') {
@@ -738,28 +775,20 @@ class TimerManagerService {
 
     // Transition to running state
     timer.status = 'running';
-    timer.triggeredAlertIds = [];
-    (timer as unknown as { endActionTriggered?: boolean }).endActionTriggered = false;
+    if (!wasPaused) {
+      timer.triggeredAlertIds = [];
+      (timer as unknown as { endActionTriggered?: boolean }).endActionTriggered = false;
+    }
     (timer as unknown as { lastWallClockTime: number }).lastWallClockTime = now.getTime();
 
     this.runningTimerIds.add(idToStart);
+    if (isTargetListActive) {
+      this.activeTimerId = idToStart;
+      this.cuedTimerId = idToStart;
+    }
     this.ensureTickerRunning();
     this.recordTimerStart(timer, wasPaused);
     this.saveTimerToStorage(timer);
-
-    // Advance cuedTimerId to the NEXT playable cue in sequence so the operator's next click of START starts the subsequent cue
-    const currentIndex = list.timerIds.indexOf(idToStart);
-    if (currentIndex !== -1 && list.timerIds.length > 1) {
-      const nextCueId = findNextPlayableId(currentIndex);
-      if (nextCueId && nextCueId !== idToStart) {
-        this.cuedTimerId = nextCueId;
-        const nextTimer = this.timers.get(nextCueId);
-        if (nextTimer && nextTimer.status === 'idle') {
-          nextTimer.status = 'cued';
-          this.saveTimerToStorage(nextTimer);
-        }
-      }
-    }
 
     this.notifySubscribers();
   }
@@ -769,10 +798,12 @@ class TimerManagerService {
   }
 
   /**
-   * STOP: Stop the selected timer.
+   * STOP: Stop the selected timer in the current list (or specified targetId).
    */
   public stop(targetId?: string): void {
-    const idToStop = targetId || this.activeTimerId;
+    const activeList = this.lists.get(this.activeListId);
+    const resolvedActive = this.getActiveTimer()?.id || this.getCuedTimer()?.id || null;
+    const idToStop = targetId || resolvedActive;
     if (!idToStop) return;
 
     const timer = this.timers.get(idToStop);
@@ -805,10 +836,12 @@ class TimerManagerService {
       timer.remainingSeconds = timer.durationSeconds;
     }
 
-    // Cue this timer back so hitting START starts it again, but clear activeTimerId
-    this.cuedTimerId = idToStop;
-    if (this.activeTimerId === idToStop) {
-      this.activeTimerId = null;
+    // Cue this timer back if it belongs to the active list
+    if (!activeList || activeList.timerIds.includes(idToStop)) {
+      this.cuedTimerId = idToStop;
+      if (this.activeTimerId === idToStop) {
+        this.activeTimerId = null;
+      }
     }
 
     this.saveTimerToStorage(timer);
@@ -820,7 +853,8 @@ class TimerManagerService {
    * Clicking Pause again while paused resumes the timer from where it left off.
    */
   public pause(targetId?: string): void {
-    const idToPause = targetId || this.activeTimerId;
+    const activeList = this.lists.get(this.activeListId);
+    const idToPause = targetId || this.getActiveTimer()?.id || null;
     if (!idToPause) return;
 
     const timer = this.timers.get(idToPause);
@@ -838,7 +872,9 @@ class TimerManagerService {
       const isCountUp = timer.type === 'count_up' || timer.type === 'stopwatch' || timer.type === 'digital_clock';
       timer.status = !isCountUp && timer.remainingSeconds <= 0 ? 'overtime' : 'running';
 
-      this.activeTimerId = idToPause;
+      if (!activeList || activeList.timerIds.includes(idToPause)) {
+        this.activeTimerId = idToPause;
+      }
       this.runningTimerIds.add(idToPause);
       this.ensureTickerRunning();
       this.recordTimerStart(timer, true);
@@ -875,7 +911,8 @@ class TimerManagerService {
    * Ensures alerts can trigger again after restarting.
    */
   public restart(targetId?: string): void {
-    const idToRestart = targetId || this.activeTimerId;
+    const activeList = this.lists.get(this.activeListId);
+    const idToRestart = targetId || this.getActiveTimer()?.id || this.getCuedTimer()?.id || null;
     if (!idToRestart) return;
 
     const timer = this.timers.get(idToRestart);
@@ -911,7 +948,10 @@ class TimerManagerService {
     timer.status = 'running';
     (timer as unknown as { lastWallClockTime: number }).lastWallClockTime = now.getTime();
 
-    this.activeTimerId = idToRestart;
+    if (!activeList || activeList.timerIds.includes(idToRestart)) {
+      this.activeTimerId = idToRestart;
+      this.cuedTimerId = idToRestart;
+    }
     this.runningTimerIds.add(idToRestart);
     this.ensureTickerRunning();
     this.recordTimerStart(timer, false);
@@ -1356,6 +1396,8 @@ class TimerManagerService {
   }
 
   private handleTimerCompletion(timer: TimerItem): void {
+    const ownerList = this.findListForTimer(timer.id);
+
     // Process standard end action
     switch (timer.endAction) {
       case 'blackout':
@@ -1363,19 +1405,35 @@ class TimerManagerService {
         timer.status = 'completed';
         this.runningTimerIds.delete(timer.id);
         this.checkStopTicker();
-        this.triggerBlackout(true);
+        if (!ownerList || ownerList.id === this.activeListId) {
+          this.triggerBlackout(true);
+        }
         break;
-      case 'next_timer':
+      case 'next_timer': {
         this.recordTimerStop(timer, 'completed');
         timer.status = 'completed';
         this.runningTimerIds.delete(timer.id);
-        this.moveNextCue();
-        if (this.cuedTimerId && this.cuedTimerId !== timer.id) {
-          this.start(this.cuedTimerId);
+        if (ownerList && ownerList.timerIds.length > 0) {
+          const currentIdx = ownerList.timerIds.indexOf(timer.id);
+          let nextId: string | null = null;
+          for (let step = 1; step <= ownerList.timerIds.length; step++) {
+            const candidateId = ownerList.timerIds[(currentIdx + step) % ownerList.timerIds.length];
+            const candidate = this.timers.get(candidateId);
+            if (candidate && candidate.type !== 'spacer' && candidateId !== timer.id) {
+              nextId = candidateId;
+              break;
+            }
+          }
+          if (nextId) {
+            this.start(nextId);
+          } else {
+            this.checkStopTicker();
+          }
         } else {
           this.checkStopTicker();
         }
         break;
+      }
       case 'loop':
         this.recordTimerStop(timer, 'completed');
         this.restart(timer.id);
@@ -1865,16 +1923,20 @@ class TimerManagerService {
 
     const list = this.lists.get(listId)!;
     
-    // Check if any timer in the newly selected list is currently running
+    // Check if any timer in the newly selected list is currently running or paused
     const runningTimerInList = list.timerIds.find(tid => this.runningTimerIds.has(tid));
+    const pausedTimerInList = list.timerIds.find(tid => this.timers.get(tid)?.status === 'paused');
+    const cuedTimerInList = list.timerIds.find(tid => this.timers.get(tid)?.status === 'cued');
+
     if (runningTimerInList) {
-      // Focus on the timer that is actively running in this list
       this.activeTimerId = runningTimerInList;
-      this.cuedTimerId = runningTimerInList;
+      this.cuedTimerId = cuedTimerInList || runningTimerInList;
+    } else if (pausedTimerInList) {
+      this.activeTimerId = pausedTimerInList;
+      this.cuedTimerId = cuedTimerInList || pausedTimerInList;
     } else if (list.timerIds.length > 0) {
-      // Cue the first timer in this list, but do NOT make it active until started
       this.activeTimerId = null;
-      this.cuedTimerId = list.timerIds[0];
+      this.cuedTimerId = cuedTimerInList || list.timerIds[0];
     } else {
       this.activeTimerId = null;
       this.cuedTimerId = null;
@@ -2622,8 +2684,8 @@ class TimerManagerService {
   }
 
   public getSnapshot(): TimerSnapshot {
-    const active = this.activeTimerId ? this.timers.get(this.activeTimerId) : null;
-    const cued = this.cuedTimerId ? this.timers.get(this.cuedTimerId) : null;
+    const active = this.getActiveTimer();
+    const cued = this.getCuedTimer();
     const displayTarget = active || cued;
 
     const dur = displayTarget?.durationSeconds || 1;
@@ -2640,8 +2702,8 @@ class TimerManagerService {
     const isOnOff = alertInfo.onOff;
 
     return {
-      activeTimerId: this.activeTimerId,
-      cuedTimerId: this.cuedTimerId,
+      activeTimerId: active?.id || null,
+      cuedTimerId: cued?.id || null,
       activeListId: this.activeListId,
       status: active?.status || 'idle',
       currentSeconds: currentRemaining,
@@ -2658,23 +2720,55 @@ class TimerManagerService {
   }
 
   public getActiveTimer(): TimerItem | null {
-    return this.activeTimerId ? this.timers.get(this.activeTimerId) || null : null;
+    const list = this.lists.get(this.activeListId);
+    if (this.activeTimerId && (!list || list.timerIds.includes(this.activeTimerId))) {
+      const t = this.timers.get(this.activeTimerId);
+      if (t && (t.status === 'running' || t.status === 'overtime' || t.status === 'paused')) {
+        return t;
+      }
+    }
+    if (list) {
+      const runningId = list.timerIds.find((tid) => this.runningTimerIds.has(tid));
+      if (runningId) return this.timers.get(runningId) || null;
+      const pausedId = list.timerIds.find((tid) => this.timers.get(tid)?.status === 'paused');
+      if (pausedId) return this.timers.get(pausedId) || null;
+    }
+    return null;
   }
 
   public getCuedTimer(): TimerItem | null {
-    return this.cuedTimerId ? this.timers.get(this.cuedTimerId) || null : null;
+    const list = this.lists.get(this.activeListId);
+    if (this.cuedTimerId && (!list || list.timerIds.includes(this.cuedTimerId))) {
+      return this.timers.get(this.cuedTimerId) || null;
+    }
+    if (list && list.timerIds.length > 0) {
+      const cuedId =
+        list.timerIds.find((tid) => this.timers.get(tid)?.status === 'cued') ||
+        list.timerIds.find((tid) => this.timers.get(tid)?.type !== 'spacer') ||
+        list.timerIds[0];
+      return cuedId ? this.timers.get(cuedId) || null : null;
+    }
+    return null;
   }
 
   public getNextTimer(): TimerItem | null {
     const list = this.lists.get(this.activeListId);
     if (!list) return null;
-    if (this.cuedTimerId && this.cuedTimerId !== this.activeTimerId) {
-      return this.timers.get(this.cuedTimerId) || null;
+    const active = this.getActiveTimer();
+    const cued = this.getCuedTimer();
+    if (cued && (!active || cued.id !== active.id)) {
+      return cued;
     }
-    if (this.activeTimerId) {
-      const idx = list.timerIds.indexOf(this.activeTimerId);
-      if (idx !== -1 && idx + 1 < list.timerIds.length) {
-        return this.timers.get(list.timerIds[idx + 1]) || null;
+    const refId = active?.id || cued?.id;
+    if (refId) {
+      const idx = list.timerIds.indexOf(refId);
+      if (idx !== -1) {
+        for (let i = idx + 1; i < list.timerIds.length; i++) {
+          const next = this.timers.get(list.timerIds[i]);
+          if (next && next.type !== 'spacer') {
+            return next;
+          }
+        }
       }
     }
     return null;

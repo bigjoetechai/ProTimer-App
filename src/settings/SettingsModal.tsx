@@ -12,7 +12,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { X, Upload, Download, RotateCcw, Check, ChevronDown, ChevronUp } from 'lucide-react';
+import { X, Upload, Download, RotateCcw, Check, ChevronDown, ChevronUp, Radio } from 'lucide-react';
 import {
   AppPreferences,
   DEFAULT_PREFERENCES,
@@ -28,6 +28,7 @@ import {
 } from '../types';
 import { useTheme } from '../hooks';
 import { timerManagerService } from '../services/timerManager';
+import { ndiStreamService, NdiStreamStatus } from '../services/ndiStreamService';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -505,12 +506,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     useState<SizesPositionTargetTab>('fullscreen_ndi_preview');
   const [hasUnappliedChanges, setHasUnappliedChanges] = useState(false);
   const [appliedFeedback, setAppliedFeedback] = useState(false);
+  const [ndiStatus, setNdiStatus] = useState<NdiStreamStatus>(() =>
+    ndiStreamService.getStatus()
+  );
   const applyFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const listBgImageInputRef = useRef<HTMLInputElement>(null);
   const pendingListBgTargetIdRef = useRef<string | null>(null);
   const listLogoImageInputRef = useRef<HTMLInputElement>(null);
   const pendingListLogoTargetIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const unsubscribe = ndiStreamService.subscribe((status) => {
+      setNdiStatus(status);
+    });
+    return () => unsubscribe();
+  }, []);
 
   useEffect(() => {
     if (isOpen) {
@@ -2495,6 +2506,125 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         onChange={(val) => updatePref('ndiAlphaChannel', val)}
                         label="Enable transparent alpha channel for downstream keyers"
                       />
+                    </div>
+                  </div>
+
+                  {/* Horizontal Divider */}
+                  <div className={`border-t ${isDark ? 'border-[#1e2636]' : 'border-slate-200'}`} />
+
+                  {/* 4. NDI NETWORK STREAM STATUS & CAPTURE ENDPOINTS */}
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <h3 className={sectionHeadingCls}>NDI NETWORK STREAM STATUS</h3>
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[11px] font-bold tracking-wide uppercase border ${
+                            ndiStatus.active
+                              ? isDark
+                                ? 'bg-emerald-950/80 border-emerald-500/70 text-emerald-300'
+                                : 'bg-emerald-50 border-emerald-500 text-emerald-700'
+                              : isDark
+                              ? 'bg-[#121722] border-[#263246] text-neutral-400'
+                              : 'bg-slate-100 border-slate-300 text-slate-600'
+                          }`}
+                        >
+                          <Radio
+                            className={`w-3 h-3 ${
+                              ndiStatus.active ? 'text-emerald-400 animate-pulse' : 'opacity-60'
+                            }`}
+                          />
+                          {ndiStatus.active
+                            ? `ACTIVE (${ndiStatus.mode === 'multi' ? 'NDI MULTI' : 'NDI SINGLE'})`
+                            : 'STANDBY'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (hasUnappliedChanges) {
+                              handleApply();
+                            }
+                            ndiStreamService.toggleStream(ndiStatus.mode || 'single');
+                          }}
+                          className={`px-3 py-1 rounded text-[11px] font-bold tracking-wide transition-colors cursor-pointer ${
+                            ndiStatus.active
+                              ? 'bg-red-600 hover:bg-red-500 text-white'
+                              : 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                          }`}
+                        >
+                          {ndiStatus.active ? 'Stop NDI Stream' : 'Start NDI Stream'}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div
+                      className={`p-3.5 rounded border text-[12px] space-y-2.5 ${
+                        isDark
+                          ? 'bg-[#0b0f17] border-[#1e2636] text-neutral-300'
+                          : 'bg-slate-50 border-slate-200 text-slate-700'
+                      }`}
+                    >
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
+                        <div>
+                          <span className="text-neutral-500 block">Source Name</span>
+                          <span className="font-mono font-semibold">
+                            {ndiStatus.active
+                              ? ndiStatus.sourceName
+                              : prefs.ndiSourceName || 'ProTimer (Main Output)'}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-neutral-500 block">Resolution & FPS</span>
+                          <span className="font-mono font-semibold">
+                            {ndiStatus.active
+                              ? `${ndiStatus.width}x${ndiStatus.height} @ ${ndiStatus.frameRate}fps`
+                              : `${prefs.ndiResolution || 'HD - 1920 x 1080'} @ ${prefs.ndiFrameRate || 30}fps`}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-neutral-500 block">Alpha Keyer</span>
+                          <span className="font-mono font-semibold">
+                            {(ndiStatus.active ? ndiStatus.alphaChannel : prefs.ndiAlphaChannel)
+                              ? 'RGBA (Transparent)'
+                              : 'Opaque Fill'}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-neutral-500 block">NDI Groups</span>
+                          <span className="font-mono font-semibold">
+                            {(ndiStatus.active ? ndiStatus.useCustomGroups : prefs.ndiUseCustomGroups)
+                              ? (ndiStatus.active ? ndiStatus.customGroups : prefs.ndiCustomGroups) || 'Public'
+                              : 'Public (Default)'}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div
+                        className={`pt-2 border-t space-y-1.5 ${
+                          isDark ? 'border-[#1a2232]' : 'border-slate-200'
+                        }`}
+                      >
+                        <div className="text-[11px] text-neutral-400">
+                          Click the <strong>NDI</strong> or <strong>NDI Multi</strong> button on the bottom bar (or the button above) to broadcast directly over the network without opening a popup display window. Capture on another computer using:
+                        </div>
+                        <div className="grid grid-cols-1 gap-1.5 text-[11px] font-mono">
+                          <div className="flex items-center justify-between gap-2 px-2 py-1 rounded bg-black/25">
+                            <span className="text-cyan-400 truncate">
+                              MJPEG Video Stream:{' '}
+                              {ndiStatus.ips && ndiStatus.ips.length > 0
+                                ? `http://${ndiStatus.ips[0]}:${ndiStatus.port || 3000}/api/lan/ndi/mjpeg`
+                                : `${typeof window !== 'undefined' ? window.location.origin : ''}/api/lan/ndi/mjpeg`}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-2 px-2 py-1 rounded bg-black/25">
+                            <span className="text-emerald-400 truncate">
+                              Clean Alpha NDI Feed:{' '}
+                              {ndiStatus.ips && ndiStatus.ips.length > 0
+                                ? `http://${ndiStatus.ips[0]}:${ndiStatus.port || 3000}/?display=ndi`
+                                : `${typeof window !== 'undefined' ? window.location.origin : ''}/?display=ndi`}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>

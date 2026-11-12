@@ -20,9 +20,11 @@ import {
   Check,
   X,
   Wifi,
-  History
+  History,
+  Radio,
 } from 'lucide-react';
 import { TimerList, DisplayTarget, DetectedMonitor } from '../types';
+import { NdiStreamStatus } from '../services/ndiStreamService';
 import { useTheme } from '../hooks';
 
 interface BottomBarProps {
@@ -48,6 +50,8 @@ interface BottomBarProps {
   onCloseMultiFullscreen?: () => void;
   isPreviewActive?: boolean;
   isPresenterActive?: boolean;
+  ndiStreamStatus?: NdiStreamStatus;
+  onToggleNdiStream?: (mode: 'single' | 'multi') => void;
   isHistoryTabActive?: boolean;
   onSelectHistoryTab?: () => void;
   historyCount?: number;
@@ -76,6 +80,8 @@ export const BottomBar: React.FC<BottomBarProps> = ({
   onCloseMultiFullscreen,
   isPreviewActive = false,
   isPresenterActive = false,
+  ndiStreamStatus,
+  onToggleNdiStream,
   isHistoryTabActive = false,
   onSelectHistoryTab,
   historyCount = 0,
@@ -297,41 +303,106 @@ export const BottomBar: React.FC<BottomBarProps> = ({
             { label: 'Presenter', target: 'presenter' as DisplayTarget, tooltip: 'Open Speaker Confidence Display' },
             { label: 'Preview', target: 'preview' as DisplayTarget, tooltip: 'Open Control Room Preview Window' },
             { label: 'Fullscreen', target: 'fullscreen' as DisplayTarget, tooltip: 'Display Active Timer on Selected Fullscreen Monitor' },
-            { label: 'NDI', target: 'ndi' as DisplayTarget, tooltip: 'NDI IP Video Stream' },
-            { label: 'NDI Multi', target: 'ndi' as DisplayTarget, tooltip: 'Multi-Channel NDI Stream' },
+            {
+              label: 'NDI',
+              target: 'ndi' as DisplayTarget,
+              ndiMode: 'single' as const,
+              tooltip: 'Activate NDI Network Broadcast Stream (uses Preferences → NDI settings)',
+            },
+            {
+              label: 'NDI Multi',
+              target: 'ndi' as DisplayTarget,
+              ndiMode: 'multi' as const,
+              tooltip: 'Activate Multi-List NDI Network Broadcast Stream (uses Preferences → NDI settings)',
+            },
             { label: 'Multi Preview', target: 'preview' as DisplayTarget, tooltip: 'Multiview Stage Preview' },
             { label: 'Multi FS', target: 'multi_fullscreen' as DisplayTarget, tooltip: 'Multi Fullscreen: Display Active Cue of All List Tabs' },
             { label: 'LAN Control', target: 'lan_control' as DisplayTarget, tooltip: 'Local Network Web Remote Control' },
             { label: 'LAN Display', target: 'lan_display' as DisplayTarget, tooltip: 'Local Network Remote Stage Output' },
           ].map((item) => {
+            const isNdiSingleActive =
+              item.label === 'NDI' &&
+              Boolean(ndiStreamStatus?.active && ndiStreamStatus.mode === 'single');
+            const isNdiMultiActive =
+              item.label === 'NDI Multi' &&
+              Boolean(ndiStreamStatus?.active && ndiStreamStatus.mode === 'multi');
+            const isNdiButton = item.label === 'NDI' || item.label === 'NDI Multi';
             const isActive =
               (item.label === 'Presenter' && isPresenterActive) ||
               (item.label === 'Preview' && isPreviewActive) ||
               (item.label === 'Fullscreen' && isFullscreenActive) ||
-              (item.label === 'Multi FS' && isMultiFullscreenActive);
+              (item.label === 'Multi FS' && isMultiFullscreenActive) ||
+              isNdiSingleActive ||
+              isNdiMultiActive;
+
             return (
               <button
                 key={item.label}
                 type="button"
-                onClick={() => onOpenDisplay(item.target)}
-                title={isActive ? `${item.label} Active (Click to Toggle)` : item.tooltip}
+                onClick={() => {
+                  if (item.ndiMode && onToggleNdiStream) {
+                    onToggleNdiStream(item.ndiMode);
+                  } else {
+                    onOpenDisplay(item.target);
+                  }
+                }}
+                title={
+                  isNdiButton && isActive && ndiStreamStatus
+                    ? `NDI Stream Active on Network: ${ndiStreamStatus.sourceName} (${ndiStreamStatus.width}x${ndiStreamStatus.height} @ ${ndiStreamStatus.frameRate} FPS${
+                        ndiStreamStatus.alphaChannel ? ', Alpha ON' : ''
+                      }) — Click to Stop`
+                    : isActive
+                    ? `${item.label} Active (Click to Toggle)`
+                    : item.tooltip
+                }
                 className={`px-2.5 py-1 border rounded text-[11px] font-medium transition-all shadow-xs flex items-center gap-1.5 cursor-pointer ${
-                  isActive
-                    ? isDark 
-                      ? 'bg-cyan-950/80 hover:bg-cyan-900 text-cyan-200 border-cyan-400 ring-1 ring-cyan-400/50' 
+                  isNdiButton && isActive
+                    ? isDark
+                      ? 'bg-emerald-950/85 hover:bg-emerald-900 text-emerald-200 border-emerald-400 ring-1 ring-emerald-400/50'
+                      : 'bg-emerald-100 hover:bg-emerald-200 text-emerald-900 border-emerald-500 ring-1 ring-emerald-500/50'
+                    : isActive
+                    ? isDark
+                      ? 'bg-cyan-950/80 hover:bg-cyan-900 text-cyan-200 border-cyan-400 ring-1 ring-cyan-400/50'
                       : 'bg-cyan-100 hover:bg-cyan-200 text-cyan-900 border-cyan-500 ring-1 ring-cyan-500/50'
                     : isDark
-                      ? 'bg-[#131924] hover:bg-[#1c2536] active:bg-[#232e42] border-[#232e42] hover:border-cyan-500/50 text-neutral-300 hover:text-white'
-                      : 'bg-slate-100 hover:bg-slate-200 active:bg-slate-300 border-slate-300 hover:border-cyan-600/50 text-slate-700 hover:text-slate-900'
+                    ? 'bg-[#131924] hover:bg-[#1c2536] active:bg-[#232e42] border-[#232e42] hover:border-cyan-500/50 text-neutral-300 hover:text-white'
+                    : 'bg-slate-100 hover:bg-slate-200 active:bg-slate-300 border-slate-300 hover:border-cyan-600/50 text-slate-700 hover:text-slate-900'
                 }`}
               >
                 {isActive && (
-                  <span className="w-1.5 h-1.5 rounded-full bg-cyan-500 animate-pulse" />
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full animate-pulse ${
+                      isNdiButton ? 'bg-emerald-400' : 'bg-cyan-500'
+                    }`}
+                  />
                 )}
                 <span>{item.label}</span>
               </button>
             );
           })}
+
+          {/* Active NDI Network Stream Indicator Pill */}
+          {ndiStreamStatus?.active && (
+            <div
+              title={`Broadcasting NDI Stream on Network:\nSource: ${ndiStreamStatus.sourceName}\nFormat: ${ndiStreamStatus.width}×${ndiStreamStatus.height} @ ${ndiStreamStatus.frameRate} FPS\nGroups: ${
+                ndiStreamStatus.useCustomGroups ? ndiStreamStatus.customGroups : 'Public'
+              }\nNetwork Capture URL: http://${ndiStreamStatus.ips[0] || 'localhost'}:${ndiStreamStatus.port}/api/lan/ndi/mjpeg`}
+              className={`px-2.5 py-0.5 rounded border text-[10.5px] font-mono flex items-center gap-1.5 ${
+                isDark
+                  ? 'bg-emerald-950/50 border-emerald-500/40 text-emerald-300'
+                  : 'bg-emerald-50 border-emerald-300 text-emerald-800'
+              }`}
+            >
+              <Radio className="w-3 h-3 text-emerald-400 animate-pulse shrink-0" />
+              <span className="font-semibold">
+                NDI LIVE: {ndiStreamStatus.sourceName}
+              </span>
+              <span className="opacity-80 hidden xl:inline">
+                ({ndiStreamStatus.width}×{ndiStreamStatus.height} @ {ndiStreamStatus.frameRate}fps
+                {ndiStreamStatus.alphaChannel ? ' • Alpha' : ''})
+              </span>
+            </div>
+          )}
 
           {/* Dedicated LAN Pairing & QR Hub Button */}
           {onOpenLanModal && (

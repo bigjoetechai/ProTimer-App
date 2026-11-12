@@ -53,7 +53,14 @@ export interface ListActiveCueSummary {
 }
 
 export interface DisplaySyncPayload {
+  seq?: number;
   activeListId?: string;
+  activeListName?: string;
+  lists?: Array<{
+    id: string;
+    name: string;
+    runningCount?: number;
+  }>;
   activeTimer: TimerItem | null;
   nextTimer: TimerItem | null;
   status: TimerStatus;
@@ -87,6 +94,11 @@ export interface DisplaySyncPayload {
     isCued: boolean;
   }>;
   listActiveCues?: ListActiveCueSummary[];
+  isFullscreenActive?: boolean;
+  isMultiFullscreenActive?: boolean;
+  isNdiActive?: boolean;
+  isNdiMultiActive?: boolean;
+  ndiSourceName?: string;
 }
 
 export interface DetectedMonitor {

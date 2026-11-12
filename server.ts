@@ -21,7 +21,7 @@ async function startServer() {
   const app = express();
   const server = http.createServer(app);
 
-  app.use(express.json());
+  app.use(express.json({ limit: '25mb' }));
 
   // Intercept all /api/lan requests
   app.use(async (req, res, next) => {
