@@ -76,29 +76,45 @@ let activeLanPort = 3000;
 let localServerUrl = devServerUrl;
 let embeddedServer = null;
 
-// LAN state for mobile/tablet remote control & LAN displays
+// LAN state for mobile/tablet remote control, LAN displays & NDI network stream
 const lanState = {
   masterState: null,
   timers: [],
   accessPin: '1234',
   pinRequired: true,
   pendingCommands: [],
+  ndiStream: {
+    active: false,
+    multiMode: false,
+    sourceName: 'ProTimer NDI',
+    resolution: '1920x1080',
+    frameRate: 30,
+    alphaChannel: false,
+    groups: 'Public',
+    startedAt: null,
+    lastFrameDataUrl: null,
+    lastFrameTimestamp: 0,
+  },
 };
 const sseClients = new Set();
 
-function getLocalIpAddresses() {
+function getLocalNetworkInterfaces() {
   const interfaces = os.networkInterfaces();
-  const addresses = [];
+  const list = [];
   for (const name of Object.keys(interfaces)) {
-    const list = interfaces[name];
-    if (!list) continue;
-    for (const iface of list) {
+    const netList = interfaces[name];
+    if (!netList) continue;
+    for (const iface of netList) {
       if (iface.family === 'IPv4' && !iface.internal) {
-        addresses.push(iface.address);
+        list.push({ name, address: iface.address });
       }
     }
   }
-  return addresses.length > 0 ? addresses : ['127.0.0.1'];
+  return list.length > 0 ? list : [{ name: 'Loopback', address: '127.0.0.1' }];
+}
+
+function getLocalIpAddresses() {
+  return getLocalNetworkInterfaces().map((i) => i.address);
 }
 
 function broadcastSse(data) {
@@ -155,13 +171,31 @@ function handleEmbeddedLanApi(req, res) {
   }
 
   if (pathname === '/api/lan/info' && method === 'GET') {
+    const interfaces = getLocalNetworkInterfaces();
+    const primaryIp = interfaces[0]?.address || '127.0.0.1';
+    const baseOrigin = `http://${primaryIp}:${activeLanPort}`;
     sendJson(200, {
+      ip: primaryIp,
       ips: getLocalIpAddresses(),
       port: activeLanPort,
+      pin: lanState.accessPin,
       pinRequired: lanState.pinRequired,
       defaultPin: lanState.accessPin,
+      interfaces,
+      controlUrl: `${baseOrigin}/?display=lan_control`,
+      displayUrl: `${baseOrigin}/?display=lan_display`,
+      ndiStreamUrl: `${baseOrigin}/?display=ndi`,
       hasMaster: Boolean(lanState.masterState),
       connectedClients: sseClients.size,
+      ndiStream: {
+        active: lanState.ndiStream.active,
+        multiMode: lanState.ndiStream.multiMode,
+        sourceName: lanState.ndiStream.sourceName,
+        resolution: lanState.ndiStream.resolution,
+        frameRate: lanState.ndiStream.frameRate,
+        alphaChannel: lanState.ndiStream.alphaChannel,
+        groups: lanState.ndiStream.groups,
+      },
     });
     return true;
   }
@@ -203,14 +237,20 @@ function handleEmbeddedLanApi(req, res) {
 
   if (pathname === '/api/lan/state' && method === 'POST') {
     readBody().then((body) => {
-      if (body.state) lanState.masterState = body.state;
-      if (Array.isArray(body.timers)) lanState.timers = body.timers;
-      broadcastSse({
-        type: 'STATE_UPDATE',
-        state: lanState.masterState,
-        timers: lanState.timers,
-        timestamp: Date.now(),
-      });
+      const incoming = body.state;
+      const prev = lanState.masterState;
+      if (incoming) {
+        if (!prev || !prev.timestamp || !incoming.timestamp || incoming.timestamp >= prev.timestamp) {
+          lanState.masterState = incoming;
+          if (Array.isArray(body.timers)) lanState.timers = body.timers;
+          broadcastSse({
+            type: 'STATE_UPDATE',
+            state: lanState.masterState,
+            timers: lanState.timers,
+            timestamp: incoming.timestamp || Date.now(),
+          });
+        }
+      }
       sendJson(200, { success: true });
     });
     return true;
@@ -281,6 +321,67 @@ function handleEmbeddedLanApi(req, res) {
     const commands = [...lanState.pendingCommands];
     lanState.pendingCommands = [];
     sendJson(200, { commands });
+    return true;
+  }
+
+  if (pathname === '/api/lan/ndi' && method === 'POST') {
+    readBody().then((body) => {
+      if (typeof body.active === 'boolean') {
+        lanState.ndiStream.active = body.active;
+        lanState.ndiStream.startedAt = body.active ? Date.now() : null;
+        if (!body.active) {
+          lanState.ndiStream.lastFrameDataUrl = null;
+        }
+      }
+      if (typeof body.multiMode === 'boolean') lanState.ndiStream.multiMode = body.multiMode;
+      if (typeof body.sourceName === 'string') lanState.ndiStream.sourceName = body.sourceName;
+      if (typeof body.resolution === 'string') lanState.ndiStream.resolution = body.resolution;
+      if (typeof body.frameRate === 'number') lanState.ndiStream.frameRate = body.frameRate;
+      if (typeof body.alphaChannel === 'boolean') lanState.ndiStream.alphaChannel = body.alphaChannel;
+      if (typeof body.groups === 'string') lanState.ndiStream.groups = body.groups;
+
+      broadcastSse({
+        type: 'NDI_STATUS',
+        ndiStream: {
+          active: lanState.ndiStream.active,
+          multiMode: lanState.ndiStream.multiMode,
+          sourceName: lanState.ndiStream.sourceName,
+          resolution: lanState.ndiStream.resolution,
+          frameRate: lanState.ndiStream.frameRate,
+          alphaChannel: lanState.ndiStream.alphaChannel,
+          groups: lanState.ndiStream.groups,
+          startedAt: lanState.ndiStream.startedAt,
+        },
+      });
+      sendJson(200, { success: true, ndiStream: lanState.ndiStream });
+    });
+    return true;
+  }
+
+  if (pathname === '/api/lan/ndi/frame' && method === 'POST') {
+    readBody().then((body) => {
+      if (typeof body.frame === 'string') {
+        lanState.ndiStream.lastFrameDataUrl = body.frame;
+        lanState.ndiStream.lastFrameTimestamp = Date.now();
+      }
+      sendJson(200, { success: true });
+    });
+    return true;
+  }
+
+  if (pathname === '/api/lan/ndi' && method === 'GET') {
+    sendJson(200, {
+      active: lanState.ndiStream.active,
+      multiMode: lanState.ndiStream.multiMode,
+      sourceName: lanState.ndiStream.sourceName,
+      resolution: lanState.ndiStream.resolution,
+      frameRate: lanState.ndiStream.frameRate,
+      alphaChannel: lanState.ndiStream.alphaChannel,
+      groups: lanState.ndiStream.groups,
+      startedAt: lanState.ndiStream.startedAt,
+      lastFrameTimestamp: lanState.ndiStream.lastFrameTimestamp,
+      frame: lanState.ndiStream.lastFrameDataUrl,
+    });
     return true;
   }
 
