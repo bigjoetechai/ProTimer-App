@@ -161,8 +161,8 @@ export const TimerRow: React.FC<TimerRowProps> = ({
           isDark ? 'bg-[#07090d] hover:bg-[#0d1118]' : 'bg-slate-100/70 hover:bg-slate-200/60'
         }`}
       >
-        <td className={`py-1.5 px-2 w-14 text-center ${cellBorder}`}>
-          <div className="flex items-center justify-center">
+        <td className={`py-1.5 px-3 w-14 text-left ${cellBorder}`}>
+          <div className="flex items-center justify-start">
             <GripVertical
               className={`w-3 h-3 cursor-grab active:cursor-grabbing shrink-0 opacity-0 group-hover:opacity-100 transition-opacity ${
                 isDark ? 'text-neutral-600 hover:text-neutral-400' : 'text-slate-400 hover:text-slate-600'
@@ -171,9 +171,9 @@ export const TimerRow: React.FC<TimerRowProps> = ({
           </div>
         </td>
         <td colSpan={10} className={`py-1.5 px-3 ${cellBorder}`} />
-        <td className="py-1.5 px-2 text-right">
+        <td className="py-1.5 px-3 text-left">
           <div
-            className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity"
+            className="flex items-center justify-start gap-1 opacity-0 group-hover:opacity-100 transition-opacity"
             onClick={(e) => e.stopPropagation()}
           >
             <button
@@ -212,8 +212,8 @@ export const TimerRow: React.FC<TimerRowProps> = ({
       className={`${rowBottomBorder} cursor-pointer transition-colors text-xs select-none group ${rowStyle}`}
     >
       {/* 1. ID / Drag Handle */}
-      <td className={`py-2 px-2 font-mono ${secondaryText} w-14 text-center ${cellBorder}`}>
-        <div className="flex items-center justify-center gap-1">
+      <td className={`py-2 px-3 font-mono ${secondaryText} w-14 text-left ${cellBorder}`}>
+        <div className="flex items-center justify-start gap-1">
           <GripVertical className={`w-3 h-3 cursor-grab active:cursor-grabbing shrink-0 ${
             isEmptyCue ? 'opacity-0 group-hover:opacity-100 transition-opacity ' : ''
           }${
@@ -478,9 +478,9 @@ export const TimerRow: React.FC<TimerRowProps> = ({
       </td>
 
       {/* Actions */}
-      <td className="py-2 px-2 text-right">
+      <td className="py-2 px-3 text-left">
         <div
-          className={`flex items-center justify-end gap-1 ${
+          className={`flex items-center justify-start gap-1 ${
             isEmptyCue ? 'opacity-0' : 'opacity-70'
           } group-hover:opacity-100 transition-opacity`}
           onClick={(e) => e.stopPropagation()}

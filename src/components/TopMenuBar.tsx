@@ -157,27 +157,27 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
   // Dynamic Theme Helpers
   const headerClass = isDark
     ? 'h-9 bg-[#0e1117] border-b border-[#1e2533] text-neutral-300'
-    : 'h-9 bg-white border-b border-slate-200 text-slate-700 shadow-2xs';
+    : 'h-9 bg-[#e2e7f0] border-b border-slate-300 text-slate-800 shadow-2xs';
 
   const menuBtnClass = (isActive: boolean) =>
     `flex items-center gap-1 px-2.5 py-1 rounded transition-colors cursor-pointer select-none ${
       isActive
-        ? isDark ? 'bg-[#1e293b] text-white' : 'bg-slate-200 text-slate-900 font-semibold'
-        : isDark ? 'hover:bg-[#161c27] text-neutral-300 hover:text-white' : 'hover:bg-slate-100 text-slate-700 hover:text-slate-900'
+        ? isDark ? 'bg-[#1e293b] text-white' : 'bg-slate-300 text-slate-900 font-semibold'
+        : isDark ? 'hover:bg-[#161c27] text-neutral-300 hover:text-white' : 'hover:bg-[#d5dce7] text-slate-700 hover:text-slate-900'
     }`;
 
   const dropdownBaseClass = (width = 'w-48') =>
     `absolute top-full left-0 mt-1 ${width} rounded-md py-1 text-xs animate-in fade-in zoom-in-95 duration-100 z-50 ${
-      isDark ? 'bg-[#111622] border border-[#222e42] text-neutral-200 shadow-2xl' : 'bg-white border border-slate-300 text-slate-800 shadow-xl'
+      isDark ? 'bg-[#111622] border border-[#222e42] text-neutral-200 shadow-2xl' : 'bg-[#e6ebf3] border border-slate-300 text-slate-800 shadow-xl'
     }`;
 
   const dropdownItemClass =
     `w-full text-left px-3.5 py-1.5 flex items-center transition-colors cursor-pointer ${
-      isDark ? 'hover:bg-[#1e293b] text-neutral-100 hover:text-white' : 'hover:bg-slate-100 text-slate-800 hover:text-slate-900'
+      isDark ? 'hover:bg-[#1e293b] text-neutral-100 hover:text-white' : 'hover:bg-[#d5dce7] text-slate-800 hover:text-slate-900'
     }`;
 
-  const dropdownDividerClass = `border-t my-1 ${isDark ? 'border-[#1e2533]' : 'border-slate-200'}`;
-  const separatorBorder = isDark ? 'border-[#1e2533]' : 'border-slate-200';
+  const dropdownDividerClass = `border-t my-1 ${isDark ? 'border-[#1e2533]' : 'border-slate-300'}`;
+  const separatorBorder = isDark ? 'border-[#1e2533]' : 'border-slate-300';
 
   return (
     <header 

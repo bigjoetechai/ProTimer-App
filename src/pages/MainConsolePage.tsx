@@ -206,7 +206,7 @@ export const MainConsolePage: React.FC = () => {
 
   // Active list name
   const currentList = useMemo(() => {
-    return lists.find((l) => l.id === snapshot.activeListId) || lists[0] || { id: 'list_1', name: 'List 1: Sunday Service', timerIds: [] };
+    return lists.find((l) => l.id === snapshot.activeListId) || lists[0] || { id: 'list_1', name: 'List 1', timerIds: [] };
   }, [lists, snapshot.activeListId]);
 
   // Keyboard Hotkeys

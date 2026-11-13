@@ -188,12 +188,12 @@ export const TimerTable: React.FC<TimerTableProps> = ({
 
   const renderSortIndicator = (field: SortField) => {
     if (sortField !== field) {
-      return <ArrowUpDown className="w-2.5 h-2.5 opacity-40 ml-1 inline" />;
+      return <ArrowUpDown className="w-2.5 h-2.5 opacity-40 shrink-0" />;
     }
     return sortOrder === 'asc' ? (
-      <ArrowUp className="w-2.5 h-2.5 text-cyan-500 ml-1 inline" />
+      <ArrowUp className="w-2.5 h-2.5 text-cyan-500 shrink-0" />
     ) : (
-      <ArrowDown className="w-2.5 h-2.5 text-cyan-500 ml-1 inline" />
+      <ArrowDown className="w-2.5 h-2.5 text-cyan-500 shrink-0" />
     );
   };
 
@@ -260,68 +260,89 @@ export const TimerTable: React.FC<TimerTableProps> = ({
             <tr>
               <th 
                 onClick={() => handleSort('order')}
-                className={`py-2.5 px-3 w-14 text-center cursor-pointer transition-colors ${headerBorder}`}
+                className={`py-2.5 px-3 w-14 text-left whitespace-nowrap cursor-pointer transition-colors ${headerBorder}`}
                 title="Sort by ID"
               >
-                ID {renderSortIndicator('order')}
+                <div className="inline-flex items-center gap-1 whitespace-nowrap">
+                  <span>ID</span>
+                  {renderSortIndicator('order')}
+                </div>
               </th>
               <th 
                 onClick={() => handleSort('name')}
-                className={`py-2.5 px-3.5 min-w-[180px] cursor-pointer transition-colors ${headerBorder}`}
+                className={`py-2.5 px-3.5 min-w-[180px] text-left whitespace-nowrap cursor-pointer transition-colors ${headerBorder}`}
                 title="Sort by Name"
               >
-                Name {renderSortIndicator('name')}
+                <div className="inline-flex items-center gap-1 whitespace-nowrap">
+                  <span>Name</span>
+                  {renderSortIndicator('name')}
+                </div>
               </th>
               <th 
                 onClick={() => handleSort('startTime')}
-                className={`py-2.5 px-3 w-24 cursor-pointer transition-colors ${headerBorder}`}
+                className={`py-2.5 px-3 w-24 text-left whitespace-nowrap cursor-pointer transition-colors ${headerBorder}`}
                 title="Sort by Start Time"
               >
-                Start {renderSortIndicator('startTime')}
+                <div className="inline-flex items-center gap-1 whitespace-nowrap">
+                  <span>Start</span>
+                  {renderSortIndicator('startTime')}
+                </div>
               </th>
               <th 
                 onClick={() => handleSort('durationSeconds')}
-                className={`py-2.5 px-3 w-24 cursor-pointer transition-colors ${headerBorder}`}
+                className={`py-2.5 px-3 w-28 text-left whitespace-nowrap cursor-pointer transition-colors ${headerBorder}`}
                 title="Sort by Duration"
               >
-                Duration {renderSortIndicator('durationSeconds')}
+                <div className="inline-flex items-center gap-1 whitespace-nowrap">
+                  <span>Duration</span>
+                  {renderSortIndicator('durationSeconds')}
+                </div>
               </th>
-              <th className={`py-2.5 px-3 w-24 ${isDark ? 'border-r border-[#1a2130]' : 'border-r border-slate-200'}`}>
+              <th className={`py-2.5 px-3 w-24 text-left whitespace-nowrap ${isDark ? 'border-r border-[#1a2130]' : 'border-r border-slate-200'}`}>
                 End
               </th>
               <th 
                 onClick={() => handleSort('remainingSeconds')}
-                className={`py-2.5 px-3 w-28 cursor-pointer transition-colors ${headerBorder} ${
+                className={`py-2.5 px-3 w-28 text-left whitespace-nowrap cursor-pointer transition-colors ${headerBorder} ${
                   isDark ? 'bg-[#121926]/50' : 'bg-cyan-50/50'
                 }`}
                 title="Sort by Live Counter"
               >
-                Counter {renderSortIndicator('remainingSeconds')}
+                <div className="inline-flex items-center gap-1 whitespace-nowrap">
+                  <span>Counter</span>
+                  {renderSortIndicator('remainingSeconds')}
+                </div>
               </th>
               <th 
                 onClick={() => handleSort('type')}
-                className={`py-2.5 px-3 w-32 cursor-pointer transition-colors ${headerBorder}`}
+                className={`py-2.5 px-3 w-32 text-left whitespace-nowrap cursor-pointer transition-colors ${headerBorder}`}
                 title="Sort by Timer Type"
               >
-                Timer Type {renderSortIndicator('type')}
+                <div className="inline-flex items-center gap-1 whitespace-nowrap">
+                  <span>Timer Type</span>
+                  {renderSortIndicator('type')}
+                </div>
               </th>
-              <th className={`py-2.5 px-3 w-20 ${isDark ? 'border-r border-[#1a2130]' : 'border-r border-slate-200'}`}>
+              <th className={`py-2.5 px-3 w-20 text-left whitespace-nowrap ${isDark ? 'border-r border-[#1a2130]' : 'border-r border-slate-200'}`}>
                 Alert 1
               </th>
-              <th className={`py-2.5 px-3 w-20 ${isDark ? 'border-r border-[#1a2130]' : 'border-r border-slate-200'}`}>
+              <th className={`py-2.5 px-3 w-20 text-left whitespace-nowrap ${isDark ? 'border-r border-[#1a2130]' : 'border-r border-slate-200'}`}>
                 Alert 2
               </th>
-              <th className={`py-2.5 px-3 w-28 ${isDark ? 'border-r border-[#1a2130]' : 'border-r border-slate-200'}`}>
+              <th className={`py-2.5 px-3 w-28 text-left whitespace-nowrap ${isDark ? 'border-r border-[#1a2130]' : 'border-r border-slate-200'}`}>
                 End Action
               </th>
               <th 
                 onClick={() => handleSort('speed')}
-                className={`py-2.5 px-3 w-20 cursor-pointer transition-colors ${headerBorder}`}
+                className={`py-2.5 px-3 w-20 text-left whitespace-nowrap cursor-pointer transition-colors ${headerBorder}`}
                 title="Sort by Speed"
               >
-                Speed {renderSortIndicator('speed')}
+                <div className="inline-flex items-center gap-1 whitespace-nowrap">
+                  <span>Speed</span>
+                  {renderSortIndicator('speed')}
+                </div>
               </th>
-              <th className="py-2.5 px-2 w-28 text-right">
+              <th className="py-2.5 px-3 w-28 text-left whitespace-nowrap">
                 Actions
               </th>
             </tr>

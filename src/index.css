@@ -50,52 +50,67 @@
 }
 
 [data-theme="light"], .light {
-  --app-bg: #f4f6fa;
+  --app-bg: #d8dfe9;
   --app-text: #0f172a;
-  --topbar-bg: #ffffff;
-  --topbar-border: #e2e8f0;
-  --menu-bg: #ffffff;
-  --menu-border: #cbd5e1;
-  --menu-hover: #f1f5f9;
+  --topbar-bg: #e2e7f0;
+  --topbar-border: #c5cedb;
+  --menu-bg: #e6ebf3;
+  --menu-border: #bfc8d6;
+  --menu-hover: #d5dce7;
   --menu-text: #0f172a;
-  --menu-muted: #64748b;
-  --control-bg: #ffffff;
-  --control-border: #e2e8f0;
-  --table-bg: #ffffff;
-  --table-header-bg: #f8fafc;
-  --table-header-border: #e2e8f0;
-  --table-header-text: #475569;
-  --table-row-bg: #ffffff;
-  --table-row-border: #f1f5f9;
-  --table-row-hover: #f8fafc;
+  --menu-muted: #475569;
+  --control-bg: #dfe5ef;
+  --control-border: #c5cedb;
+  --table-bg: #d8dfe9;
+  --table-header-bg: #cfd7e3;
+  --table-header-border: #bdc7d6;
+  --table-header-text: #334155;
+  --table-row-bg: #e3e8f1;
+  --table-row-border: #ced6e2;
+  --table-row-hover: #d8dfe9;
   --table-row-text: #1e293b;
-  --table-row-cued-bg: #e0f2fe;
+  --table-row-cued-bg: #cde4f7;
   --table-row-cued-border: #0284c7;
   --table-row-cued-text: #0369a1;
-  --table-row-active-bg: #fee2e2;
+  --table-row-active-bg: #f5d0d0;
   --table-row-active-border: #dc2626;
   --table-row-active-text: #991b1b;
-  --card-bg: #f8fafc;
-  --card-border: #cbd5e1;
-  --input-bg: #ffffff;
-  --input-border: #cbd5e1;
+  --card-bg: #dde3ed;
+  --card-border: #c2cbd9;
+  --input-bg: #e8ecf4;
+  --input-border: #bcc6d6;
   --input-text: #0f172a;
-  --bottombar-bg: #f8fafc;
-  --bottombar-border: #e2e8f0;
-  --tab-inactive-bg: #e2e8f0;
+  --bottombar-bg: #dce2ec;
+  --bottombar-border: #c5cedb;
+  --tab-inactive-bg: #ced6e3;
   --tab-inactive-text: #475569;
-  --tab-active-bg: #ffffff;
+  --tab-active-bg: #e4e9f2;
   --tab-active-text: #0f172a;
-  --button-secondary-bg: #f8fafc;
-  --button-secondary-border: #cbd5e1;
-  --button-secondary-hover: #f1f5f9;
+  --button-secondary-bg: #d9e0ec;
+  --button-secondary-border: #bfc8d6;
+  --button-secondary-hover: #cdd5e3;
   --button-secondary-text: #1e293b;
-  --modal-bg: #ffffff;
-  --modal-header-bg: #f8fafc;
-  --modal-border: #e2e8f0;
-  --scrollbar-track: #f1f5f9;
-  --scrollbar-thumb: #cbd5e1;
+  --modal-bg: #e4e9f2;
+  --modal-header-bg: #d8dfe9;
+  --modal-border: #c2cbd9;
+  --scrollbar-track: #d5dce7;
+  --scrollbar-thumb: #b0bccd;
   --scrollbar-thumb-hover: #94a3b8;
+}
+
+[data-theme="light"] .bg-white,
+.light .bg-white {
+  background-color: #e3e8f1 !important;
+}
+
+[data-theme="light"] .bg-slate-50,
+.light .bg-slate-50 {
+  background-color: #d9e0ec !important;
+}
+
+[data-theme="light"] .bg-slate-100,
+.light .bg-slate-100 {
+  background-color: #d1d9e6 !important;
 }
 
 @layer base {

@@ -134,10 +134,10 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     return `${Math.round(sec / 60)} min`;
   };
 
-  const containerBg = isDark ? 'bg-[#0c0f16] border-b border-[#1b2333]' : 'bg-white border-b border-slate-200 shadow-2xs';
-  const sectionTitleColor = isDark ? 'text-neutral-400' : 'text-slate-500';
+  const containerBg = isDark ? 'bg-[#0c0f16] border-b border-[#1b2333]' : 'bg-[#dfe5ef] border-b border-slate-300 shadow-2xs';
+  const sectionTitleColor = isDark ? 'text-neutral-400' : 'text-slate-600';
   const labelColor = isDark ? 'text-neutral-300' : 'text-slate-700';
-  const dividerBg = isDark ? 'bg-[#1b2333]' : 'bg-slate-200';
+  const dividerBg = isDark ? 'bg-[#1b2333]' : 'bg-slate-300';
 
   return (
     <div className={`${containerBg} px-3 sm:px-4 py-2 flex flex-nowrap items-center justify-between gap-2 xl:gap-6 overflow-x-auto select-none relative min-w-0 transition-colors duration-150`}>

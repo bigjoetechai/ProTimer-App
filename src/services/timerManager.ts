@@ -180,74 +180,81 @@ class TimerManagerService {
   public async initialize(): Promise<void> {
     if (this.isInitialized) return;
 
+    const CLEAN_DEFAULTS_KEY = 'protimer_clean_defaults_v2';
+    const hasCleanedLegacyDefaults =
+      typeof window !== 'undefined' && localStorage.getItem(CLEAN_DEFAULTS_KEY) === 'true';
+
     // Load lists & timers from IndexedDB
-    const savedLists = await storageService.getAllLists();
-    const savedTimers = await storageService.getAllTimers();
+    let savedLists = await storageService.getAllLists();
+    let savedTimers = await storageService.getAllTimers();
+
+    // One-time cleanup of previously seeded default tabs & sample cues
+    if (!hasCleanedLegacyDefaults) {
+      const legacySampleNames = new Set([
+        'Prelude & Welcome',
+        'Worship & Praise',
+        'Sermon: Living with Purpose',
+        'Benediction & Dismissal',
+        'Keynote Presentation',
+        'Expert Panel Discussion',
+        'Morning Coffee Break',
+        'Guest Speaker 1',
+        'Lightning Talks',
+        'Closing Remarks',
+      ]);
+
+      const cleanList1: TimerList = {
+        id: 'list_1',
+        name: 'List 1',
+        order: 0,
+        isDefault: true,
+        timerIds: [],
+      };
+
+      // Keep only user-created timers that were not part of the seeded sample set
+      const userTimers = savedTimers.filter((t) => !legacySampleNames.has(t.name));
+      cleanList1.timerIds = userTimers.map((t) => t.id);
+
+      await storageService.replaceAllListsAndTimers([cleanList1], userTimers);
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem(CLEAN_DEFAULTS_KEY, 'true');
+        } catch {
+          // Ignore storage error
+        }
+      }
+      savedLists = [cleanList1];
+      savedTimers = userTimers;
+    }
 
     if (savedLists.length > 0) {
       savedLists.forEach((l, idx) => {
         if (l.order === undefined) l.order = idx;
+        if (l.name === 'List 1: Sunday Service') {
+          l.name = 'List 1';
+          storageService.saveList(l);
+        }
         this.lists.set(l.id, l);
       });
       this.activeListId = savedLists[0].id;
-
-      // Ensure standard default lists exist
-      if (!this.lists.has('list_2')) {
-        const l2: TimerList = { id: 'list_2', name: 'List 2: Conference', order: 1, timerIds: [] };
-        this.lists.set(l2.id, l2);
-        storageService.saveList(l2);
-      }
-      if (!this.lists.has('list_3')) {
-        const l3: TimerList = { id: 'list_3', name: 'List 3: Speakers', order: 2, timerIds: [] };
-        this.lists.set(l3.id, l3);
-        storageService.saveList(l3);
-      }
     } else {
-      const defaultLists: TimerList[] = [
-        { id: 'list_1', name: 'List 1: Sunday Service', order: 0, isDefault: true, timerIds: [] },
-        { id: 'list_2', name: 'List 2: Conference', order: 1, timerIds: [] },
-        { id: 'list_3', name: 'List 3: Speakers', order: 2, timerIds: [] },
-      ];
-      defaultLists.forEach(l => {
-        this.lists.set(l.id, l);
-        storageService.saveList(l);
-      });
+      const defaultList: TimerList = {
+        id: 'list_1',
+        name: 'List 1',
+        order: 0,
+        isDefault: true,
+        timerIds: [],
+      };
+      this.lists.set(defaultList.id, defaultList);
+      storageService.saveList(defaultList);
       this.activeListId = 'list_1';
     }
 
     if (savedTimers.length > 0) {
-      savedTimers.forEach(t => {
-        // Normalize status to idle/paused on fresh boot
+      savedTimers.forEach((t) => {
         t.status = t.status === 'running' ? 'paused' : (t.status || 'idle');
-        if (t.type === 'countdown' || !t.type) {
-          if (!t.alert1 && t.durationSeconds >= 60) {
-            t.alert1 = {
-              id: generateId('alt'),
-              timeSeconds: Math.min(t.durationSeconds - 10, Math.max(30, Math.round(t.durationSeconds * 0.4))),
-              color: '#eab308',
-              flash: false,
-              soundEnabled: true,
-              soundType: 'chime',
-              label: 'Alert 1 (Warning)',
-            };
-          }
-          if (!t.alert2 && t.durationSeconds >= 30) {
-            t.alert2 = {
-              id: generateId('alt'),
-              timeSeconds: Math.min(t.durationSeconds - 5, Math.max(10, Math.round(t.durationSeconds * 0.2))),
-              color: '#ef4444',
-              flash: true,
-              soundEnabled: true,
-              soundType: 'alarm',
-              label: 'Alert 2 (Danger)',
-            };
-          }
-        }
         this.timers.set(t.id, t);
       });
-    } else {
-      // Seed with initial sample timers across all default lists
-      this.seedInitialTimers();
     }
 
     // Load persisted timer run history logs
@@ -270,11 +277,17 @@ class TimerManagerService {
       }
     }
 
-    // Auto-cue first timer in active list
+    // Auto-cue first timer in active list if any exist
     const activeList = this.lists.get(this.activeListId);
     if (activeList && activeList.timerIds.length > 0) {
       const firstId = activeList.timerIds[0];
       this.cue(firstId);
+    }
+
+    if (typeof window !== 'undefined' && !this.wallClockCheckerInterval) {
+      this.wallClockCheckerInterval = setInterval(() => {
+        this.checkScheduledAutoStarts();
+      }, 1000);
     }
 
     this.isInitialized = true;
