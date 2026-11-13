@@ -144,6 +144,22 @@
   }
 }
 
+/* Hide native up/down spinner arrows on number and time inputs when hovering/focusing */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button,
+input[type="time"]::-webkit-inner-spin-button,
+input[type="time"]::-webkit-outer-spin-button {
+  -webkit-appearance: none !important;
+  appearance: none !important;
+  margin: 0 !important;
+  display: none !important;
+}
+
+input[type="number"] {
+  -moz-appearance: textfield !important;
+  appearance: textfield !important;
+}
+
 @keyframes overtime-digit-blink {
   0%, 49.9% {
     opacity: 1;
@@ -156,4 +172,5 @@
 .animate-overtime-blink {
   animation: overtime-digit-blink 1s steps(1, end) infinite;
 }
+
 
