@@ -24,9 +24,9 @@ import {
   resolveDisplayDigitColor,
   resolveFontFamily,
   resolveFontStyleCss,
+  sanitizeImageUrl,
   useLivePreferences,
 } from '../utilities/displayStyleHelper';
-import { X, Minimize2 } from 'lucide-react';
 
 interface FullscreenDisplayProps {
   onClose?: () => void;
@@ -38,22 +38,7 @@ export const FullscreenDisplay: React.FC<FullscreenDisplayProps> = ({
   isClient = true,
 }) => {
   const { payload } = useDisplaySync(isClient);
-  const [showControls, setShowControls] = useState(false);
   const localPrefs = useLivePreferences(payload?.preferences);
-
-  const handleClose = () => {
-    if (onClose) {
-      onClose();
-      return;
-    }
-    if (typeof window !== 'undefined' && window.electronAPI?.closeFullscreenOutput) {
-      window.electronAPI.closeFullscreenOutput();
-    } else if (document.fullscreenElement) {
-      document.exitFullscreen().catch(() => {});
-    } else {
-      window.close();
-    }
-  };
 
   // Handle Escape key to safely close/exit fullscreen without stopping timers
   useEffect(() => {
@@ -80,30 +65,13 @@ export const FullscreenDisplay: React.FC<FullscreenDisplayProps> = ({
 
   if (!payload) {
     return (
-      <div className="h-screen w-screen bg-black text-neutral-500 flex flex-col items-center justify-center font-mono select-none">
-        <div className="w-8 h-8 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin mb-4" />
-      </div>
+      <div className="h-screen w-screen bg-black text-neutral-500 flex flex-col items-center justify-center font-mono select-none" />
     );
   }
 
   // Blackout mode (Blank pure black screen)
   if (payload.isBlackout) {
-    return (
-      <div
-        className="h-screen w-screen bg-black cursor-none relative"
-        onMouseMove={() => setShowControls(true)}
-      >
-        {showControls && (
-          <button
-            onClick={handleClose}
-            className="absolute top-4 right-4 z-50 p-2 bg-neutral-900/80 hover:bg-neutral-800 text-neutral-400 hover:text-white rounded-full transition-opacity opacity-40 hover:opacity-100 cursor-pointer"
-            title="Exit Fullscreen (Escape)"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        )}
-      </div>
-    );
+    return <div className="h-screen w-screen bg-black cursor-none relative" />;
   }
 
   const fsElements = getTargetElements(localPrefs, 'fullscreen_ndi_preview');
@@ -112,22 +80,29 @@ export const FullscreenDisplay: React.FC<FullscreenDisplayProps> = ({
 
   // Resolve active list's independent background image (or global default; '' when none or removed -> pure black)
   const activeListId = payload.activeListId || 'list_1';
-  const resolvedFromPrefs = resolveBackgroundImageForList(localPrefs, activeListId);
-  const hasLocalListBgMap = Boolean(
-    localPrefs.listBackgroundImages && Object.keys(localPrefs.listBackgroundImages).length > 0
+  const hasExplicitListBgEntry = Boolean(
+    localPrefs.listBackgroundImages &&
+      Object.prototype.hasOwnProperty.call(localPrefs.listBackgroundImages, activeListId)
   );
+  const resolvedFromPrefs = sanitizeImageUrl(resolveBackgroundImageForList(localPrefs, activeListId));
   const activeBackgroundImageUrl =
-    resolvedFromPrefs || (!hasLocalListBgMap ? payload.backgroundImageUrl || '' : '');
+    hasExplicitListBgEntry && !resolvedFromPrefs
+      ? ''
+      : resolvedFromPrefs || sanitizeImageUrl(payload.backgroundImageUrl);
 
   const backgroundFit = payload.backgroundFit || localPrefs.backgroundFit || 'cover';
   const backgroundOpacity =
     payload.backgroundImageOpacity ?? localPrefs.backgroundImageOpacity ?? 100;
-  const resolvedLogoFromPrefs = resolveLogoImageForList(localPrefs, activeListId);
-  const hasLocalListLogoMap = Boolean(
-    localPrefs.listLogoImages && Object.keys(localPrefs.listLogoImages).length > 0
+
+  const hasExplicitListLogoEntry = Boolean(
+    localPrefs.listLogoImages &&
+      Object.prototype.hasOwnProperty.call(localPrefs.listLogoImages, activeListId)
   );
+  const resolvedLogoFromPrefs = sanitizeImageUrl(resolveLogoImageForList(localPrefs, activeListId));
   const activeLogoUrl =
-    resolvedLogoFromPrefs || (!hasLocalListLogoMap ? payload.logoImageUrl || '' : '');
+    hasExplicitListLogoEntry && !resolvedLogoFromPrefs
+      ? ''
+      : resolvedLogoFromPrefs || sanitizeImageUrl(payload.logoImageUrl);
 
   const { outerStyle, innerTransformStyle } = getTargetCanvasStyles(
     fsExtras,
@@ -146,18 +121,20 @@ export const FullscreenDisplay: React.FC<FullscreenDisplayProps> = ({
           fsElements.border?.visible ? 'border-4 border-cyan-500/80' : ''
         }`}
         style={outerStyle}
-        onMouseEnter={() => setShowControls(true)}
-        onMouseLeave={() => setShowControls(false)}
       >
         {activeBackgroundImageUrl && (
           <img
             src={activeBackgroundImageUrl}
             alt=""
+            decoding="sync"
+            draggable={false}
             className={`absolute inset-0 w-full h-full pointer-events-none select-none z-0 ${
               backgroundFit === 'contain' ? 'object-contain' : 'object-cover'
             }`}
             style={{
               opacity: Math.min(1, Math.max(0, backgroundOpacity / 100)),
+              transform: 'translateZ(0)',
+              backfaceVisibility: 'hidden',
             }}
           />
         )}
@@ -166,6 +143,8 @@ export const FullscreenDisplay: React.FC<FullscreenDisplayProps> = ({
           <img
             src={activeLogoUrl}
             alt="Logo"
+            decoding="sync"
+            draggable={false}
             className={`absolute z-20 object-contain pointer-events-none select-none ${getLogoLocationClasses(
               fsElements.logo?.location
             )}`}
@@ -189,16 +168,6 @@ export const FullscreenDisplay: React.FC<FullscreenDisplayProps> = ({
         >
           {formattedClock}
         </div>
-
-        {showControls && (
-          <button
-            onClick={handleClose}
-            className="absolute top-4 right-4 z-50 p-2.5 bg-neutral-900/80 hover:bg-neutral-800 text-neutral-400 hover:text-white rounded-full transition-all border border-neutral-700 shadow-lg cursor-pointer"
-            title="Exit Fullscreen (Escape)"
-          >
-            <Minimize2 className="w-4 h-4" />
-          </button>
-        )}
 
         <MessageOverlay
           message={payload.activeMessage}
@@ -505,19 +474,21 @@ export const FullscreenDisplay: React.FC<FullscreenDisplayProps> = ({
         fsElements.border?.visible ? 'border-4 border-cyan-500/80' : ''
       }`}
       style={outerStyle}
-      onMouseEnter={() => setShowControls(true)}
-      onMouseLeave={() => setShowControls(false)}
     >
       {/* Uploaded Background Image Layer (pure black bg-black when no image is uploaded or removed) */}
       {activeBackgroundImageUrl && (
         <img
           src={activeBackgroundImageUrl}
           alt=""
+          decoding="sync"
+          draggable={false}
           className={`absolute inset-0 w-full h-full pointer-events-none select-none z-0 ${
             backgroundFit === 'contain' ? 'object-contain' : 'object-cover'
           }`}
           style={{
             opacity: Math.min(1, Math.max(0, backgroundOpacity / 100)),
+            transform: 'translateZ(0)',
+            backfaceVisibility: 'hidden',
           }}
         />
       )}
@@ -527,6 +498,8 @@ export const FullscreenDisplay: React.FC<FullscreenDisplayProps> = ({
         <img
           src={activeLogoUrl}
           alt="Logo"
+          decoding="sync"
+          draggable={false}
           className={`absolute z-20 object-contain pointer-events-none select-none ${getLogoLocationClasses(
             logoCfg?.location
           )}`}
@@ -558,17 +531,6 @@ export const FullscreenDisplay: React.FC<FullscreenDisplayProps> = ({
           {bottomNodes}
         </div>
       </div>
-
-      {/* Subtle hover exit control */}
-      {showControls && (
-        <button
-          onClick={handleClose}
-          className="absolute top-4 right-4 z-50 p-2.5 bg-neutral-900/90 hover:bg-neutral-800 text-neutral-400 hover:text-white rounded-full transition-all border border-neutral-700 shadow-xl cursor-pointer"
-          title="Exit Fullscreen (Escape)"
-        >
-          <X className="w-4 h-4" />
-        </button>
-      )}
 
       {/* On-screen Stage Messages Overlay */}
       <MessageOverlay

@@ -50,6 +50,8 @@ if (process.platform === 'win32') {
 let mainWindow = null;
 let outputWindow = null;
 let multiOutputWindow = null;
+let previewWindow = null;
+let presenterWindow = null;
 let currentOutputDisplayId = null;
 const secondaryWindows = new Set();
 
@@ -241,6 +243,34 @@ function handleEmbeddedLanApi(req, res) {
       const prev = lanState.masterState;
       if (incoming) {
         if (!prev || !prev.timestamp || !incoming.timestamp || incoming.timestamp >= prev.timestamp) {
+          if (incoming.backgroundImageUrl === '__CACHED__') {
+            incoming.backgroundImageUrl = prev?.backgroundImageUrl || undefined;
+          }
+          if (incoming.logoImageUrl === '__CACHED__') {
+            incoming.logoImageUrl = prev?.logoImageUrl || undefined;
+          }
+          if (Array.isArray(incoming.listActiveCues) && Array.isArray(prev?.listActiveCues)) {
+            incoming.listActiveCues = incoming.listActiveCues.map((cue) => {
+              if (cue.backgroundImageUrl === '__CACHED__') {
+                const prevCue = prev.listActiveCues.find((c) => c.listId === cue.listId);
+                return { ...cue, backgroundImageUrl: prevCue?.backgroundImageUrl || undefined };
+              }
+              return cue;
+            });
+          }
+          if (incoming.preferences && prev?.preferences) {
+            if (
+              (!incoming.preferences.listBackgroundImages ||
+                Object.keys(incoming.preferences.listBackgroundImages).length === 0) &&
+              prev.preferences.listBackgroundImages &&
+              Object.keys(prev.preferences.listBackgroundImages).length > 0
+            ) {
+              incoming.preferences.listBackgroundImages = prev.preferences.listBackgroundImages;
+            }
+            if (!incoming.preferences.backgroundImageDataUrl && prev.preferences.backgroundImageDataUrl) {
+              incoming.preferences.backgroundImageDataUrl = prev.preferences.backgroundImageDataUrl;
+            }
+          }
           lanState.masterState = incoming;
           if (Array.isArray(body.timers)) lanState.timers = body.timers;
           broadcastSse({
@@ -724,6 +754,18 @@ function notifyMultiOutputClosed() {
   }
 }
 
+function notifyPreviewStateChanged(isOpen) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('preview-window-state', Boolean(isOpen));
+  }
+}
+
+function notifyPresenterStateChanged(isOpen) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('presenter-window-state', Boolean(isOpen));
+  }
+}
+
 function notifyWindowStateChanged() {
   if (mainWindow && !mainWindow.isDestroyed()) {
     const bounds = mainWindow.getBounds();
@@ -767,25 +809,28 @@ function createMainWindow() {
     },
   });
 
-  // Intercept window.open calls (Presenter, Stage, Preview, NDI, etc.)
-  // so they open as native ProTimer windows instead of launching an external browser
+  // Intercept window.open calls (Stage, NDI, etc.)
+  // Route preview/presenter to singleton frameless always-on-top windows so 2 windows never open
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     const isPreviewWindow = typeof url === 'string' && url.includes('display=preview');
     const isPresenterWindow = typeof url === 'string' && url.includes('display=presenter');
-    const isCompactAlwaysOnTop = isPreviewWindow || isPresenterWindow;
+
+    if (isPreviewWindow) {
+      openPreviewWindow();
+      return { action: 'deny' };
+    }
+    if (isPresenterWindow) {
+      openPresenterWindow();
+      return { action: 'deny' };
+    }
 
     const childWin = new BrowserWindow({
-      width: isCompactAlwaysOnTop ? 360 : 1100,
-      height: isCompactAlwaysOnTop ? 240 : 720,
-      minWidth: isCompactAlwaysOnTop ? 200 : 640,
-      minHeight: isCompactAlwaysOnTop ? 130 : 400,
+      width: 1100,
+      height: 720,
+      minWidth: 640,
+      minHeight: 400,
       resizable: true,
-      alwaysOnTop: isCompactAlwaysOnTop,
-      title: isPreviewWindow
-        ? 'ProTimer - Preview'
-        : isPresenterWindow
-        ? 'ProTimer - Presenter'
-        : 'ProTimer - Display Output',
+      title: 'ProTimer - Display Output',
       icon: iconPath,
       backgroundColor: '#000000',
       autoHideMenuBar: true,
@@ -795,10 +840,6 @@ function createMainWindow() {
         nodeIntegration: false,
       },
     });
-
-    if (isCompactAlwaysOnTop) {
-      childWin.setAlwaysOnTop(true, 'floating');
-    }
 
     secondaryWindows.add(childWin);
     childWin.loadURL(url);
@@ -868,6 +909,14 @@ function createMainWindow() {
       multiOutputWindow.close();
       multiOutputWindow = null;
     }
+    if (previewWindow && !previewWindow.isDestroyed()) {
+      previewWindow.close();
+      previewWindow = null;
+    }
+    if (presenterWindow && !presenterWindow.isDestroyed()) {
+      presenterWindow.close();
+      presenterWindow = null;
+    }
     for (const win of secondaryWindows) {
       if (!win.isDestroyed()) {
         win.close();
@@ -875,6 +924,196 @@ function createMainWindow() {
     }
     secondaryWindows.clear();
   });
+}
+
+// =============================================================================
+// SINGLETON FRAMELESS ALWAYS-ON-TOP RESIZABLE PREVIEW & PRESENTER WINDOWS
+// =============================================================================
+
+function applyAlwaysOnTopOverlap(win) {
+  if (!win || win.isDestroyed()) return;
+  win.setAlwaysOnTop(true, 'screen-saver');
+  try {
+    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  } catch {
+    // Ignore on platforms where visibleOnFullScreen option is unsupported
+  }
+}
+
+function openPreviewWindow() {
+  if (previewWindow && !previewWindow.isDestroyed()) {
+    applyAlwaysOnTopOverlap(previewWindow);
+    previewWindow.show();
+    previewWindow.focus();
+    notifyPreviewStateChanged(true);
+    return { active: true };
+  }
+
+  const primary = screen.getPrimaryDisplay();
+  const workArea = primary.workArea;
+  const defaultW = 360;
+  const defaultH = 240;
+  const defaultX = workArea.x + Math.max(20, workArea.width - defaultW - 32);
+  const defaultY = workArea.y + Math.max(48, workArea.height - defaultH - 96);
+
+  previewWindow = new BrowserWindow({
+    x: defaultX,
+    y: defaultY,
+    width: defaultW,
+    height: defaultH,
+    minWidth: 150,
+    minHeight: 90,
+    frame: false,
+    resizable: true,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    alwaysOnTop: true,
+    autoHideMenuBar: true,
+    hasShadow: true,
+    show: false,
+    paintWhenInitiallyHidden: true,
+    icon: getAppIconPath(),
+    backgroundColor: '#000000',
+    title: 'ProTimer - Preview',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      backgroundThrottling: false,
+    },
+  });
+
+  applyAlwaysOnTopOverlap(previewWindow);
+
+  const baseUrl = getBaseUrl();
+  const separator = baseUrl.includes('?') ? '&' : '?';
+  const previewUrl = `${baseUrl}${separator}display=preview`;
+
+  previewWindow.once('ready-to-show', () => {
+    if (previewWindow && !previewWindow.isDestroyed()) {
+      applyAlwaysOnTopOverlap(previewWindow);
+      previewWindow.show();
+      notifyPreviewStateChanged(true);
+    }
+  });
+
+  previewWindow.on('blur', () => applyAlwaysOnTopOverlap(previewWindow));
+  previewWindow.on('show', () => applyAlwaysOnTopOverlap(previewWindow));
+
+  previewWindow.loadURL(previewUrl);
+
+  previewWindow.on('closed', () => {
+    previewWindow = null;
+    notifyPreviewStateChanged(false);
+  });
+
+  notifyPreviewStateChanged(true);
+  return { active: true };
+}
+
+function closePreviewWindow() {
+  if (previewWindow && !previewWindow.isDestroyed()) {
+    previewWindow.close();
+    previewWindow = null;
+  }
+  notifyPreviewStateChanged(false);
+  return { active: false };
+}
+
+function togglePreviewWindow() {
+  if (previewWindow && !previewWindow.isDestroyed()) {
+    return closePreviewWindow();
+  }
+  return openPreviewWindow();
+}
+
+function openPresenterWindow() {
+  if (presenterWindow && !presenterWindow.isDestroyed()) {
+    applyAlwaysOnTopOverlap(presenterWindow);
+    presenterWindow.show();
+    presenterWindow.focus();
+    notifyPresenterStateChanged(true);
+    return { active: true };
+  }
+
+  const primary = screen.getPrimaryDisplay();
+  const workArea = primary.workArea;
+  const defaultW = 360;
+  const defaultH = 240;
+  const defaultX = workArea.x + 28;
+  const defaultY = workArea.y + Math.max(48, workArea.height - defaultH - 96);
+
+  presenterWindow = new BrowserWindow({
+    x: defaultX,
+    y: defaultY,
+    width: defaultW,
+    height: defaultH,
+    minWidth: 150,
+    minHeight: 90,
+    frame: false,
+    resizable: true,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    alwaysOnTop: true,
+    autoHideMenuBar: true,
+    hasShadow: true,
+    show: false,
+    paintWhenInitiallyHidden: true,
+    icon: getAppIconPath(),
+    backgroundColor: '#000000',
+    title: 'ProTimer - Presenter',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      backgroundThrottling: false,
+    },
+  });
+
+  applyAlwaysOnTopOverlap(presenterWindow);
+
+  const baseUrl = getBaseUrl();
+  const separator = baseUrl.includes('?') ? '&' : '?';
+  const presenterUrl = `${baseUrl}${separator}display=presenter`;
+
+  presenterWindow.once('ready-to-show', () => {
+    if (presenterWindow && !presenterWindow.isDestroyed()) {
+      applyAlwaysOnTopOverlap(presenterWindow);
+      presenterWindow.show();
+      notifyPresenterStateChanged(true);
+    }
+  });
+
+  presenterWindow.on('blur', () => applyAlwaysOnTopOverlap(presenterWindow));
+  presenterWindow.on('show', () => applyAlwaysOnTopOverlap(presenterWindow));
+
+  presenterWindow.loadURL(presenterUrl);
+
+  presenterWindow.on('closed', () => {
+    presenterWindow = null;
+    notifyPresenterStateChanged(false);
+  });
+
+  notifyPresenterStateChanged(true);
+  return { active: true };
+}
+
+function closePresenterWindow() {
+  if (presenterWindow && !presenterWindow.isDestroyed()) {
+    presenterWindow.close();
+    presenterWindow = null;
+  }
+  notifyPresenterStateChanged(false);
+  return { active: false };
+}
+
+function togglePresenterWindow() {
+  if (presenterWindow && !presenterWindow.isDestroyed()) {
+    return closePresenterWindow();
+  }
+  return openPresenterWindow();
 }
 
 // =============================================================================
@@ -914,10 +1153,12 @@ function openFullscreenOutput(monitorId, displayTarget = 'fullscreen') {
     y,
     width,
     height,
+    show: false,
     frame: false,
     fullscreen: true,
     alwaysOnTop: true,
     autoHideMenuBar: true,
+    paintWhenInitiallyHidden: true,
     icon: getAppIconPath(),
     backgroundColor: '#000000',
     title: 'ProTimer - Fullscreen Live Output',
@@ -925,6 +1166,7 @@ function openFullscreenOutput(monitorId, displayTarget = 'fullscreen') {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
+      backgroundThrottling: false,
     },
   });
 
@@ -938,8 +1180,15 @@ function openFullscreenOutput(monitorId, displayTarget = 'fullscreen') {
   const separator = baseUrl.includes('?') ? '&' : '?';
   const outputUrl = `${baseUrl}${separator}display=${encodeURIComponent(displayTarget)}`;
 
+  outputWindow.once('ready-to-show', () => {
+    if (outputWindow && !outputWindow.isDestroyed()) {
+      outputWindow.setFullScreen(true);
+      outputWindow.show();
+      outputWindow.focus();
+    }
+  });
+
   outputWindow.loadURL(outputUrl);
-  outputWindow.setFullScreen(true);
 
   outputWindow.on('closed', () => {
     outputWindow = null;
@@ -983,10 +1232,12 @@ function openMultiFullscreenOutput(monitorId) {
     y,
     width,
     height,
+    show: false,
     frame: false,
     fullscreen: true,
     alwaysOnTop: true,
     autoHideMenuBar: true,
+    paintWhenInitiallyHidden: true,
     icon: getAppIconPath(),
     backgroundColor: '#000000',
     title: 'ProTimer - Multi Fullscreen Output (All Lists)',
@@ -994,6 +1245,7 @@ function openMultiFullscreenOutput(monitorId) {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
+      backgroundThrottling: false,
     },
   });
 
@@ -1007,8 +1259,15 @@ function openMultiFullscreenOutput(monitorId) {
   const separator = baseUrl.includes('?') ? '&' : '?';
   const outputUrl = `${baseUrl}${separator}display=multi_fullscreen`;
 
+  multiOutputWindow.once('ready-to-show', () => {
+    if (multiOutputWindow && !multiOutputWindow.isDestroyed()) {
+      multiOutputWindow.setFullScreen(true);
+      multiOutputWindow.show();
+      multiOutputWindow.focus();
+    }
+  });
+
   multiOutputWindow.loadURL(outputUrl);
-  multiOutputWindow.setFullScreen(true);
 
   multiOutputWindow.on('closed', () => {
     multiOutputWindow = null;
@@ -1134,6 +1393,64 @@ ipcMain.handle('close-multi-fullscreen-output', async () => {
 
 ipcMain.handle('is-multi-fullscreen-output-active', async () => {
   return Boolean(multiOutputWindow && !multiOutputWindow.isDestroyed());
+});
+
+ipcMain.handle('toggle-preview-window', async () => {
+  return togglePreviewWindow();
+});
+
+ipcMain.handle('open-preview-window', async () => {
+  return openPreviewWindow();
+});
+
+ipcMain.handle('close-preview-window', async () => {
+  return closePreviewWindow();
+});
+
+ipcMain.handle('is-preview-window-active', async () => {
+  return Boolean(previewWindow && !previewWindow.isDestroyed());
+});
+
+ipcMain.handle('toggle-presenter-window', async () => {
+  return togglePresenterWindow();
+});
+
+ipcMain.handle('open-presenter-window', async () => {
+  return openPresenterWindow();
+});
+
+ipcMain.handle('close-presenter-window', async () => {
+  return closePresenterWindow();
+});
+
+ipcMain.handle('is-presenter-window-active', async () => {
+  return Boolean(presenterWindow && !presenterWindow.isDestroyed());
+});
+
+ipcMain.handle('current-window-get-bounds', async (event) => {
+  const senderWin = BrowserWindow.fromWebContents(event.sender);
+  if (!senderWin || senderWin.isDestroyed()) return null;
+  return senderWin.getBounds();
+});
+
+ipcMain.handle('current-window-set-bounds', async (event, bounds) => {
+  const senderWin = BrowserWindow.fromWebContents(event.sender);
+  if (!senderWin || senderWin.isDestroyed() || !bounds || typeof bounds !== 'object') return false;
+  const current = senderWin.getBounds();
+  const nextBounds = {
+    x: typeof bounds.x === 'number' && Number.isFinite(bounds.x) ? Math.round(bounds.x) : current.x,
+    y: typeof bounds.y === 'number' && Number.isFinite(bounds.y) ? Math.round(bounds.y) : current.y,
+    width:
+      typeof bounds.width === 'number' && Number.isFinite(bounds.width)
+        ? Math.max(150, Math.round(bounds.width))
+        : current.width,
+    height:
+      typeof bounds.height === 'number' && Number.isFinite(bounds.height)
+        ? Math.max(90, Math.round(bounds.height))
+        : current.height,
+  };
+  senderWin.setBounds(nextBounds);
+  return true;
 });
 
 ipcMain.handle('window-minimize', async () => {

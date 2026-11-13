@@ -120,6 +120,27 @@ export const MainConsolePage: React.FC = () => {
     });
   }, []);
 
+  // Keep Preview & Presenter active state synced with native Electron windows when running as desktop app
+  useEffect(() => {
+    const api = typeof window !== 'undefined' ? window.electronAPI : undefined;
+    if (!api?.isElectron) return;
+
+    api.isPreviewWindowActive?.().then((active) => setIsPreviewPopoutOpen(Boolean(active)));
+    api.isPresenterWindowActive?.().then((active) => setIsPresenterPopoutOpen(Boolean(active)));
+
+    const unsubPreview = api.onPreviewStateChanged?.((isOpen) => {
+      setIsPreviewPopoutOpen(Boolean(isOpen));
+    });
+    const unsubPresenter = api.onPresenterStateChanged?.((isOpen) => {
+      setIsPresenterPopoutOpen(Boolean(isOpen));
+    });
+
+    return () => {
+      if (unsubPreview) unsubPreview();
+      if (unsubPresenter) unsubPresenter();
+    };
+  }, []);
+
   // UI preferences & Theme
   const { theme, isDark, toggleTheme, setTheme } = useTheme();
   const [preferences, setPreferences] = useState<AppPreferences>(() => {
@@ -581,14 +602,20 @@ export const MainConsolePage: React.FC = () => {
           } else if (target === 'ndi') {
             ndiStreamService.toggleStream('single');
           } else if (target === 'presenter') {
-            setIsPresenterPopoutOpen((prev) => !prev);
-            if (typeof window !== 'undefined' && window.electronAPI?.isElectron) {
-              openDisplayWindow('presenter', { x: 28, y: 60, width: 360, height: 240 });
+            if (typeof window !== 'undefined' && window.electronAPI?.isElectron && window.electronAPI.togglePresenterWindow) {
+              window.electronAPI.togglePresenterWindow().then((res) => {
+                setIsPresenterPopoutOpen(Boolean(res?.active));
+              });
+            } else {
+              setIsPresenterPopoutOpen((prev) => !prev);
             }
           } else if (target === 'preview') {
-            setIsPreviewPopoutOpen((prev) => !prev);
-            if (typeof window !== 'undefined' && window.electronAPI?.isElectron) {
-              openDisplayWindow('preview', { x: 40, y: 60, width: 360, height: 240 });
+            if (typeof window !== 'undefined' && window.electronAPI?.isElectron && window.electronAPI.togglePreviewWindow) {
+              window.electronAPI.togglePreviewWindow().then((res) => {
+                setIsPreviewPopoutOpen(Boolean(res?.active));
+              });
+            } else {
+              setIsPreviewPopoutOpen((prev) => !prev);
             }
           } else if (target === 'lan_control' || target === 'lan_display') {
             setIsLanModalOpen(true);
@@ -616,54 +643,56 @@ export const MainConsolePage: React.FC = () => {
         onToggleNdiStream={(mode) => ndiStreamService.toggleStream(mode)}
       />
 
-      {/* ALWAYS-ON-TOP RESIZABLE PRESENTER POP-OUT SCREEN (360 x 240 px, NO top controls) */}
-      <FloatingPresenterWindow
-        isOpen={isPresenterPopoutOpen}
-        onClose={() => setIsPresenterPopoutOpen(false)}
-        onPopOutWindow={() => openDisplayWindow('presenter', { x: 28, y: 60, width: 360, height: 240 })}
-        timeStr={formatSeconds(snapshot.currentSeconds, true, snapshot.isOvertime, preferences)}
-        currentSeconds={snapshot.currentSeconds}
-        activeListId={snapshot.activeListId}
-        activeAlertLevel={payload?.activeAlertLevel}
-        status={snapshot.status}
-        isOvertime={snapshot.isOvertime}
-        alertColor={snapshot.alertColor}
-        isFlash={snapshot.isFlash}
-        isOnOff={snapshot.isOnOff}
-        activeTimer={activeTimer || cuedTimer}
-        nextTimerName={payload?.nextTimer?.name}
-        progressPercent={payload?.progressPercent ?? 0}
-        isBlackout={payload?.isBlackout ?? false}
-        isClockMode={payload?.isClockMode ?? false}
-        clockTimeFormatted={payload?.clockTimeFormatted}
-      />
+      {/* ALWAYS-ON-TOP RESIZABLE PRESENTER POP-OUT SCREEN (Web mode only — Electron uses native frameless always-on-top window) */}
+      {!(typeof window !== 'undefined' && window.electronAPI?.isElectron) && (
+        <FloatingPresenterWindow
+          isOpen={isPresenterPopoutOpen}
+          onClose={() => setIsPresenterPopoutOpen(false)}
+          timeStr={formatSeconds(snapshot.currentSeconds, true, snapshot.isOvertime, preferences)}
+          currentSeconds={snapshot.currentSeconds}
+          activeListId={snapshot.activeListId}
+          activeAlertLevel={payload?.activeAlertLevel}
+          status={snapshot.status}
+          isOvertime={snapshot.isOvertime}
+          alertColor={snapshot.alertColor}
+          isFlash={snapshot.isFlash}
+          isOnOff={snapshot.isOnOff}
+          activeTimer={activeTimer || cuedTimer}
+          nextTimerName={payload?.nextTimer?.name}
+          progressPercent={payload?.progressPercent ?? 0}
+          isBlackout={payload?.isBlackout ?? false}
+          isClockMode={payload?.isClockMode ?? false}
+          clockTimeFormatted={payload?.clockTimeFormatted}
+        />
+      )}
 
-      {/* ALWAYS-ON-TOP RESIZABLE PREVIEW POP-OUT SCREEN (360 x 240 px) */}
-      <FloatingPreviewWindow
-        isOpen={isPreviewPopoutOpen}
-        onClose={() => setIsPreviewPopoutOpen(false)}
-        onPopOutWindow={() => openDisplayWindow('preview', { x: 40, y: 60, width: 360, height: 240 })}
-        timeStr={formatSeconds(snapshot.currentSeconds, true, snapshot.isOvertime, preferences)}
-        currentSeconds={snapshot.currentSeconds}
-        activeListId={snapshot.activeListId}
-        activeAlertLevel={payload?.activeAlertLevel}
-        status={snapshot.status}
-        isOvertime={snapshot.isOvertime}
-        alertColor={snapshot.alertColor}
-        isFlash={snapshot.isFlash}
-        isOnOff={snapshot.isOnOff}
-        activeTimer={activeTimer || cuedTimer}
-        nextTimerName={payload?.nextTimer?.name}
-        progressPercent={payload?.progressPercent ?? 0}
-        isBlackout={payload?.isBlackout ?? false}
-        isClockMode={payload?.isClockMode ?? false}
-        clockTimeFormatted={payload?.clockTimeFormatted}
-        onStart={() => start()}
-        onPause={() => pause()}
-        onStop={() => stop()}
-        onNextCue={() => skipEvent()}
-        onAdjustDuration={(delta) => adjustDuration(delta)}
-      />
+      {/* ALWAYS-ON-TOP RESIZABLE PREVIEW POP-OUT SCREEN (Web mode only — Electron uses native frameless always-on-top window) */}
+      {!(typeof window !== 'undefined' && window.electronAPI?.isElectron) && (
+        <FloatingPreviewWindow
+          isOpen={isPreviewPopoutOpen}
+          onClose={() => setIsPreviewPopoutOpen(false)}
+          timeStr={formatSeconds(snapshot.currentSeconds, true, snapshot.isOvertime, preferences)}
+          currentSeconds={snapshot.currentSeconds}
+          activeListId={snapshot.activeListId}
+          activeAlertLevel={payload?.activeAlertLevel}
+          status={snapshot.status}
+          isOvertime={snapshot.isOvertime}
+          alertColor={snapshot.alertColor}
+          isFlash={snapshot.isFlash}
+          isOnOff={snapshot.isOnOff}
+          activeTimer={activeTimer || cuedTimer}
+          nextTimerName={payload?.nextTimer?.name}
+          progressPercent={payload?.progressPercent ?? 0}
+          isBlackout={payload?.isBlackout ?? false}
+          isClockMode={payload?.isClockMode ?? false}
+          clockTimeFormatted={payload?.clockTimeFormatted}
+          onStart={() => start()}
+          onPause={() => pause()}
+          onStop={() => stop()}
+          onNextCue={() => skipEvent()}
+          onAdjustDuration={(delta) => adjustDuration(delta)}
+        />
+      )}
 
       {/* 5. MODALS */}
       <TimerEditorModal

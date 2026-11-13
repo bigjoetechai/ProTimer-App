@@ -20,6 +20,11 @@ import {
 } from '../types';
 import { storageService } from '../services/storageService';
 
+export function sanitizeImageUrl(url?: string | null): string {
+  if (!url || url === '__CACHED__') return '';
+  return url;
+}
+
 /**
  * Reactive hook that keeps any display component in sync with saved preferences
  * via localStorage, custom events, and DisplaySyncPayload.
@@ -42,10 +47,29 @@ export function useLivePreferences(payloadPrefs?: AppPreferences): AppPreference
   }, []);
 
   if (payloadPrefs) {
+    const hasPayloadListBg =
+      payloadPrefs.listBackgroundImages &&
+      Object.keys(payloadPrefs.listBackgroundImages).length > 0;
+    const hasPayloadListLogo =
+      payloadPrefs.listLogoImages &&
+      Object.keys(payloadPrefs.listLogoImages).length > 0;
+
     return {
       ...DEFAULT_PREFERENCES,
       ...localPrefs,
       ...payloadPrefs,
+      backgroundImageDataUrl:
+        sanitizeImageUrl(payloadPrefs.backgroundImageDataUrl) ||
+        sanitizeImageUrl(localPrefs.backgroundImageDataUrl),
+      logoImageDataUrl:
+        sanitizeImageUrl(payloadPrefs.logoImageDataUrl) ||
+        sanitizeImageUrl(localPrefs.logoImageDataUrl),
+      listBackgroundImages: hasPayloadListBg
+        ? payloadPrefs.listBackgroundImages
+        : localPrefs.listBackgroundImages || {},
+      listLogoImages: hasPayloadListLogo
+        ? payloadPrefs.listLogoImages
+        : localPrefs.listLogoImages || {},
     };
   }
 

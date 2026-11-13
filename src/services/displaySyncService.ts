@@ -56,6 +56,9 @@ class DisplaySyncService {
   private lastPushedBgUrl: string | undefined = undefined;
   private lastPushedLogoUrl: string | undefined = undefined;
   private lastPushedCueImages: Map<string, { bg?: string; logo?: string }> = new Map();
+  private lastBusBgUrl: string | undefined = undefined;
+  private lastBusLogoUrl: string | undefined = undefined;
+  private lastBusCueImages: Map<string, { bg?: string; logo?: string }> = new Map();
   private isPushingLanState: boolean = false;
   private pendingLanPush: { state: DisplaySyncPayload; timers: TimerItem[] } | null = null;
   private lastLanPushAt: number = 0;
@@ -63,6 +66,7 @@ class DisplaySyncService {
   private lastPushedStatus: string | undefined = undefined;
   private lastPushedTimerId: string | undefined = undefined;
   private lastRealtimeFrameAt: number = 0;
+  private lastBusFrameAt: number = 0;
   private optimisticLockUntil: number = 0;
   private hasReceivedMasterSync: boolean = false;
 
@@ -101,21 +105,126 @@ class DisplaySyncService {
       this.masterEventSource.close();
       this.masterEventSource = null;
     }
+    // Seed initial state from local storage if available on the same machine so Fullscreen never flashes a spinner
+    if (!this.lastPayload) {
+      const snap = timerManagerService.getSnapshot();
+      this.lastPayload = this.buildPayload(snap.status, snap.currentSeconds);
+    }
     // Request fresh sync frame from Master window and connect to LAN stream
     this.bus.post('REQUEST_SYNC', { timestamp: Date.now() });
     this.setupClientLanSync();
+  }
+
+  private resolveCachedImages(incoming: DisplaySyncPayload): DisplaySyncPayload {
+    const prev = this.lastPayload;
+    const localPrefs = storageService.getPreferences();
+    const activeListId = incoming.activeListId || prev?.activeListId || 'list_1';
+
+    let resolvedBg = incoming.backgroundImageUrl;
+    if (resolvedBg === '__CACHED__') {
+      resolvedBg =
+        (prev?.backgroundImageUrl && prev.backgroundImageUrl !== '__CACHED__'
+          ? prev.backgroundImageUrl
+          : '') || resolveBackgroundImageForList(localPrefs, activeListId);
+    }
+
+    let resolvedLogo = incoming.logoImageUrl;
+    if (resolvedLogo === '__CACHED__') {
+      resolvedLogo =
+        (prev?.logoImageUrl && prev.logoImageUrl !== '__CACHED__'
+          ? prev.logoImageUrl
+          : '') || resolveLogoImageForList(localPrefs, activeListId);
+    }
+
+    let resolvedListCues = incoming.listActiveCues;
+    if (Array.isArray(incoming.listActiveCues)) {
+      const prevCueMap = new Map(
+        (prev?.listActiveCues || []).map((c) => [c.listId, c])
+      );
+      resolvedListCues = incoming.listActiveCues.map((cue) => {
+        const oldCue = prevCueMap.get(cue.listId);
+        const cueBg =
+          cue.backgroundImageUrl === '__CACHED__'
+            ? (oldCue?.backgroundImageUrl && oldCue.backgroundImageUrl !== '__CACHED__'
+                ? oldCue.backgroundImageUrl
+                : '') || resolveBackgroundImageForList(localPrefs, cue.listId)
+            : cue.backgroundImageUrl;
+        const cueLogo =
+          cue.logoImageUrl === '__CACHED__'
+            ? (oldCue?.logoImageUrl && oldCue.logoImageUrl !== '__CACHED__'
+                ? oldCue.logoImageUrl
+                : '') || resolveLogoImageForList(localPrefs, cue.listId)
+            : cue.logoImageUrl;
+        return {
+          ...cue,
+          backgroundImageUrl: cueBg,
+          logoImageUrl: cueLogo,
+        };
+      });
+    }
+
+    let resolvedPrefs = incoming.preferences;
+    if (resolvedPrefs) {
+      const hasIncomingListBg =
+        resolvedPrefs.listBackgroundImages &&
+        Object.keys(resolvedPrefs.listBackgroundImages).length > 0;
+      const hasIncomingListLogo =
+        resolvedPrefs.listLogoImages &&
+        Object.keys(resolvedPrefs.listLogoImages).length > 0;
+
+      resolvedPrefs = {
+        ...resolvedPrefs,
+        backgroundImageDataUrl:
+          resolvedPrefs.backgroundImageDataUrl ||
+          prev?.preferences?.backgroundImageDataUrl ||
+          localPrefs.backgroundImageDataUrl ||
+          '',
+        logoImageDataUrl:
+          resolvedPrefs.logoImageDataUrl ||
+          prev?.preferences?.logoImageDataUrl ||
+          localPrefs.logoImageDataUrl ||
+          '',
+        listBackgroundImages: hasIncomingListBg
+          ? resolvedPrefs.listBackgroundImages
+          : prev?.preferences?.listBackgroundImages &&
+            Object.keys(prev.preferences.listBackgroundImages).length > 0
+          ? prev.preferences.listBackgroundImages
+          : localPrefs.listBackgroundImages || {},
+        listLogoImages: hasIncomingListLogo
+          ? resolvedPrefs.listLogoImages
+          : prev?.preferences?.listLogoImages &&
+            Object.keys(prev.preferences.listLogoImages).length > 0
+          ? prev.preferences.listLogoImages
+          : localPrefs.listLogoImages || {},
+      };
+    }
+
+    return {
+      ...incoming,
+      backgroundImageUrl: resolvedBg,
+      logoImageUrl: resolvedLogo,
+      listActiveCues: resolvedListCues,
+      preferences: resolvedPrefs,
+    };
   }
 
   private acceptClientPayload(incoming: DisplaySyncPayload, source: 'bus' | 'sse' | 'poll'): void {
     if (!incoming) return;
     const now = Date.now();
 
-    if (source === 'bus' || source === 'sse') {
+    if (source === 'bus') {
+      this.lastBusFrameAt = now;
+      this.lastRealtimeFrameAt = now;
+    } else if (source === 'sse') {
+      // If same-machine BroadcastChannel is actively delivering frames, ignore SSE frames
+      // so stripped network payloads never overwrite or compete with local BroadcastChannel state
+      if (this.hasReceivedMasterSync && now - this.lastBusFrameAt < 2500) {
+        return;
+      }
       this.lastRealtimeFrameAt = now;
     } else if (source === 'poll') {
       // If real-time BroadcastChannel or SSE is actively streaming, ignore background poll responses
-      // so delayed HTTP responses never cause the UI to jump backward
-      if (this.hasReceivedMasterSync && now - this.lastRealtimeFrameAt < 1800) {
+      if (this.hasReceivedMasterSync && now - this.lastRealtimeFrameAt < 2000) {
         return;
       }
     }
@@ -136,9 +245,10 @@ class DisplaySyncService {
       return;
     }
 
+    const hydrated = this.resolveCachedImages(incoming);
     this.hasReceivedMasterSync = true;
-    this.lastPayload = incoming;
-    this.notifyListeners(incoming);
+    this.lastPayload = hydrated;
+    this.notifyListeners(hydrated);
   }
 
   public registerOutputController(handler: (command: string, payload?: unknown) => void): () => void {
@@ -187,9 +297,19 @@ class DisplaySyncService {
       }
     });
 
+    // Listen for preferences updated broadcast across windows
+    this.bus.subscribe('PREFS_UPDATED', () => {
+      if (!this.isMaster && typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('protimer-prefs-updated'));
+      }
+    });
+
     // Listen for sync requests from newly opened Preview / Secondary windows
     this.bus.subscribe('REQUEST_SYNC', () => {
       if (this.isMaster) {
+        this.lastBusBgUrl = undefined;
+        this.lastBusLogoUrl = undefined;
+        this.lastBusCueImages.clear();
         const snap = timerManagerService.getSnapshot();
         this.broadcastCurrentState(snap.status, snap.currentSeconds, true);
       }
@@ -225,6 +345,10 @@ class DisplaySyncService {
           this.lastPushedBgUrl = undefined;
           this.lastPushedLogoUrl = undefined;
           this.lastPushedCueImages.clear();
+          this.lastBusBgUrl = undefined;
+          this.lastBusLogoUrl = undefined;
+          this.lastBusCueImages.clear();
+          this.bus.post('PREFS_UPDATED', { timestamp: Date.now() });
           this.notifyPreferencesUpdated();
         } else if (this.lastPayload) {
           const prefs = storageService.getPreferences();
@@ -565,8 +689,57 @@ class DisplaySyncService {
     const allActiveTimers = timerManagerService.getActiveListTimers();
 
     this.lastPayload = payload;
-    this.bus.post('SYNC_FRAME', payload);
     this.notifyListeners(payload);
+
+    // Optimize BroadcastChannel payload so 20Hz ticks don't structured-clone megabytes of unchanged base64 strings
+    const busPrefs = payload.preferences
+      ? {
+          ...payload.preferences,
+          backgroundImageDataUrl: '',
+          logoImageDataUrl: '',
+          listBackgroundImages: {},
+          listLogoImages: {},
+        }
+      : undefined;
+    const busBgToSend =
+      !immediate && payload.backgroundImageUrl === this.lastBusBgUrl
+        ? '__CACHED__'
+        : payload.backgroundImageUrl;
+    const busLogoToSend =
+      !immediate && payload.logoImageUrl === this.lastBusLogoUrl
+        ? '__CACHED__'
+        : payload.logoImageUrl;
+    this.lastBusBgUrl = payload.backgroundImageUrl;
+    this.lastBusLogoUrl = payload.logoImageUrl;
+
+    const busListCues = payload.listActiveCues?.map((cue) => {
+      const prevCue = this.lastBusCueImages.get(cue.listId);
+      const cueBg =
+        !immediate && prevCue && prevCue.bg === cue.backgroundImageUrl
+          ? '__CACHED__'
+          : cue.backgroundImageUrl;
+      const cueLogo =
+        !immediate && prevCue && prevCue.logo === cue.logoImageUrl
+          ? '__CACHED__'
+          : cue.logoImageUrl;
+      this.lastBusCueImages.set(cue.listId, {
+        bg: cue.backgroundImageUrl,
+        logo: cue.logoImageUrl,
+      });
+      return {
+        ...cue,
+        backgroundImageUrl: cueBg,
+        logoImageUrl: cueLogo,
+      };
+    });
+
+    this.bus.post('SYNC_FRAME', {
+      ...payload,
+      backgroundImageUrl: busBgToSend,
+      logoImageUrl: busLogoToSend,
+      listActiveCues: busListCues,
+      preferences: busPrefs,
+    });
 
     // Push state to LAN/NDI API for remote network capture & mobile controllers
     if (this.isMaster && typeof window !== 'undefined') {

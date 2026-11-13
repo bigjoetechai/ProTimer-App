@@ -9,7 +9,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { X, Pin, ExternalLink } from 'lucide-react';
+import { Pin } from 'lucide-react';
 import {
   TimerItem,
   TimerStatus,
@@ -56,13 +56,11 @@ type ResizeDirection = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
 
 const DEFAULT_WIDTH = 360;
 const DEFAULT_HEIGHT = 240;
-const MIN_WIDTH = 200;
-const MIN_HEIGHT = 130;
+const MIN_WIDTH = 150;
+const MIN_HEIGHT = 90;
 
 export const FloatingPresenterWindow: React.FC<FloatingPresenterWindowProps> = ({
   isOpen,
-  onClose,
-  onPopOutWindow,
   timeStr,
   currentSeconds,
   activeListId,
@@ -348,26 +346,6 @@ export const FloatingPresenterWindow: React.FC<FloatingPresenterWindowProps> = (
           >
             {formattedClock}
           </span>
-
-          {onPopOutWindow && (
-            <button
-              type="button"
-              onClick={onPopOutWindow}
-              title="Open Presenter in Native OS / Browser Window (360×240)"
-              className="p-1 text-neutral-400 hover:text-white hover:bg-[#1a2436] rounded cursor-pointer"
-            >
-              <ExternalLink className="w-3 h-3" />
-            </button>
-          )}
-
-          <button
-            type="button"
-            onClick={onClose}
-            title="Close Presenter"
-            className="p-1 text-neutral-400 hover:text-red-400 hover:bg-[#1a2436] rounded cursor-pointer"
-          >
-            <X className="w-3 h-3" />
-          </button>
         </div>
       </div>
 

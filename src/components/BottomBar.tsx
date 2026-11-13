@@ -420,32 +420,6 @@ export const BottomBar: React.FC<BottomBarProps> = ({
               <span>LAN Hub / QR</span>
             </button>
           )}
-
-          {/* Quick Exit Fullscreen Button if Single Output is currently Active */}
-          {isFullscreenActive && onCloseFullscreen && (
-            <button
-              type="button"
-              onClick={onCloseFullscreen}
-              title="Close Fullscreen Output Window"
-              className="px-2 py-1 bg-red-950/60 hover:bg-red-900 border border-red-800/80 rounded text-[11px] font-medium text-red-300 hover:text-white transition-all shadow-xs flex items-center gap-1 cursor-pointer"
-            >
-              <X className="w-3 h-3" />
-              <span>Exit Fullscreen</span>
-            </button>
-          )}
-
-          {/* Quick Exit Multi FS Button if Multi FS Output is currently Active */}
-          {isMultiFullscreenActive && onCloseMultiFullscreen && (
-            <button
-              type="button"
-              onClick={onCloseMultiFullscreen}
-              title="Close Multi FS Output Window"
-              className="px-2 py-1 bg-red-950/60 hover:bg-red-900 border border-red-800/80 rounded text-[11px] font-medium text-red-300 hover:text-white transition-all shadow-xs flex items-center gap-1 cursor-pointer"
-            >
-              <X className="w-3 h-3" />
-              <span>Exit Multi FS</span>
-            </button>
-          )}
         </div>
 
         {/* Fullscreen Monitor Selector Dropdown */}

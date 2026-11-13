@@ -358,25 +358,25 @@ export const TimerTable: React.FC<TimerTableProps> = ({
         {/* Empty state / Click to add timer footer */}
         <div
           onClick={onAddNew}
-          className={`min-h-[180px] flex flex-col items-center justify-center p-8 cursor-pointer transition-colors group border-t border-dashed ${
+          className={`py-3.5 px-4 flex flex-col items-center justify-center cursor-pointer transition-colors group border-t border-dashed ${
             isDark 
               ? 'hover:bg-[#111722]/50 border-[#1a2233]' 
               : 'hover:bg-slate-100/70 border-slate-300'
           }`}
         >
-          <div className={`w-12 h-12 rounded-full border flex items-center justify-center transition-all mb-3 ${
+          <div className={`w-8 h-8 rounded-full border flex items-center justify-center transition-all mb-1.5 ${
             isDark 
               ? 'bg-[#0c1018] border-neutral-700/80 text-neutral-400 group-hover:border-cyan-500 group-hover:text-cyan-400 group-hover:scale-105' 
               : 'bg-white border-slate-300 text-slate-500 group-hover:border-cyan-600 group-hover:text-cyan-600 group-hover:scale-105 shadow-2xs'
           }`}>
-            <Plus className="w-6 h-6" />
+            <Plus className="w-4 h-4" />
           </div>
-          <span className={`text-sm font-medium transition-colors ${
+          <span className={`text-xs font-medium transition-colors ${
             isDark ? 'text-neutral-300 group-hover:text-white' : 'text-slate-700 group-hover:text-slate-900'
           }`}>
             Click here to add a timer
           </span>
-          <span className={`text-xs mt-1 ${isDark ? 'text-neutral-500' : 'text-slate-400'}`}>
+          <span className={`text-[11px] mt-0.5 ${isDark ? 'text-neutral-500' : 'text-slate-400'}`}>
             Default settings from Options &rarr; Preferences
           </span>
         </div>

@@ -15,18 +15,13 @@ import {
   Settings, 
   ChevronDown,
   User,
-  Copy,
   Bell,
   Monitor,
   Keyboard,
   Check,
   CheckCircle2,
   Wifi,
-  Minus,
-  Square,
   Maximize2,
-  Minimize2,
-  X
 } from 'lucide-react';
 import { useWindowManager } from '../hooks';
 
@@ -99,13 +94,7 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
   const [cloudStatus] = useState<'local' | 'synced'>('local');
 
   const {
-    isMaximized,
-    isAppFullscreen,
-    width: windowWidth,
-    height: windowHeight,
-    minimize,
     toggleMaximize,
-    close,
     toggleAppFullscreen,
     resetToDefaultSize,
   } = useWindowManager();
@@ -834,75 +823,6 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
               </div>
             </div>
           )}
-        </div>
-
-        {/* Resolution & Window Management Controls */}
-        <div className={`flex items-center gap-1.5 ml-1 pl-2 border-l ${separatorBorder}`}>
-          {/* Current Dimensions Badge (Responsive Resolution Feedback) */}
-          <span 
-            title={`Application Window Dimensions: ${windowWidth} × ${windowHeight} px (Default: 1200 × 800, Min: 1000 × 650)`}
-            className={`text-[10px] font-mono px-1.5 py-0.5 rounded border hidden lg:inline-block select-none cursor-default ${
-              isDark 
-                ? 'bg-[#121622] border-[#1f2838] text-neutral-400' 
-                : 'bg-slate-100 border-slate-300 text-slate-600'
-            }`}
-          >
-            {windowWidth} × {windowHeight}
-          </span>
-
-          {/* Mode A: Application Fullscreen */}
-          <button
-            type="button"
-            onClick={() => toggleAppFullscreen()}
-            title={isAppFullscreen ? "Exit Application Fullscreen (Mode A - F11)" : "Enter Application Fullscreen (Mode A - F11)"}
-            className={`p-1 rounded transition-colors cursor-pointer ${
-              isAppFullscreen 
-                ? 'text-cyan-400 bg-cyan-950/60 border border-cyan-700/60' 
-                : isDark ? 'text-neutral-400 hover:text-white hover:bg-[#1a202c]' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
-            }`}
-          >
-            {isAppFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
-          </button>
-
-          {/* Minimize Button */}
-          <button
-            type="button"
-            onClick={minimize}
-            title="Minimize Application"
-            className={`w-6 h-6 rounded flex items-center justify-center transition-colors cursor-pointer ${
-              isDark ? 'text-neutral-400 hover:text-white hover:bg-[#1e2738]' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
-            }`}
-          >
-            <Minus className="w-3.5 h-3.5" />
-          </button>
-
-          {/* Maximize / Restore Button */}
-          <button
-            type="button"
-            onClick={toggleMaximize}
-            title={isMaximized ? "Restore Application Window" : "Maximize Application Window"}
-            className={`w-6 h-6 rounded flex items-center justify-center transition-colors cursor-pointer ${
-              isDark ? 'text-neutral-400 hover:text-white hover:bg-[#1e2738]' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
-            }`}
-          >
-            {isMaximized ? (
-              <Copy className="w-3 h-3 rotate-180" />
-            ) : (
-              <Square className="w-3 h-3" />
-            )}
-          </button>
-
-          {/* Close Application Button */}
-          <button
-            type="button"
-            onClick={close}
-            title="Close Application"
-            className={`w-6 h-6 rounded flex items-center justify-center transition-colors cursor-pointer ${
-              isDark ? 'text-neutral-400 hover:text-white hover:bg-red-600' : 'text-slate-600 hover:text-white hover:bg-red-600'
-            }`}
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
         </div>
       </div>
     </header>

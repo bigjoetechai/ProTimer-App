@@ -17,9 +17,7 @@ import {
   Plus,
   Minus,
   Sliders,
-  X,
   Pin,
-  ExternalLink,
 } from 'lucide-react';
 import {
   TimerItem,
@@ -72,13 +70,11 @@ type ResizeDirection = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
 
 const DEFAULT_WIDTH = 360;
 const DEFAULT_HEIGHT = 240;
-const MIN_WIDTH = 260;
-const MIN_HEIGHT = 150;
+const MIN_WIDTH = 150;
+const MIN_HEIGHT = 90;
 
 export const FloatingPreviewWindow: React.FC<FloatingPreviewWindowProps> = ({
   isOpen,
-  onClose,
-  onPopOutWindow,
   timeStr,
   currentSeconds,
   activeListId,
@@ -477,26 +473,6 @@ export const FloatingPreviewWindow: React.FC<FloatingPreviewWindowProps> = ({
             >
               <Sliders className="w-2.5 h-2.5 text-cyan-400" />
               <span>{formatStepLabel(incrementSeconds)}</span>
-            </button>
-
-            {onPopOutWindow && (
-              <button
-                type="button"
-                onClick={onPopOutWindow}
-                title="Open in Native OS / Browser Window (360×240)"
-                className="p-1 text-neutral-400 hover:text-white hover:bg-[#1a2436] rounded cursor-pointer"
-              >
-                <ExternalLink className="w-3 h-3" />
-              </button>
-            )}
-
-            <button
-              type="button"
-              onClick={onClose}
-              title="Close Preview"
-              className="p-1 text-neutral-400 hover:text-red-400 hover:bg-[#1a2436] rounded cursor-pointer"
-            >
-              <X className="w-3 h-3" />
             </button>
           </div>
         </div>

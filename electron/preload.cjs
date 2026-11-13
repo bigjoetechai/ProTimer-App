@@ -121,6 +121,41 @@ contextBridge.exposeInMainWorld('electronAPI', {
     };
   },
 
+  /**
+   * Singleton Frameless Always-On-Top Resizable Preview & Presenter Windows.
+   */
+  togglePreviewWindow: () => ipcRenderer.invoke('toggle-preview-window'),
+  openPreviewWindow: () => ipcRenderer.invoke('open-preview-window'),
+  closePreviewWindow: () => ipcRenderer.invoke('close-preview-window'),
+  isPreviewWindowActive: () => ipcRenderer.invoke('is-preview-window-active'),
+  onPreviewStateChanged: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const handler = (_event, isOpen) => callback(Boolean(isOpen));
+    ipcRenderer.on('preview-window-state', handler);
+    return () => {
+      ipcRenderer.removeListener('preview-window-state', handler);
+    };
+  },
+
+  togglePresenterWindow: () => ipcRenderer.invoke('toggle-presenter-window'),
+  openPresenterWindow: () => ipcRenderer.invoke('open-presenter-window'),
+  closePresenterWindow: () => ipcRenderer.invoke('close-presenter-window'),
+  isPresenterWindowActive: () => ipcRenderer.invoke('is-presenter-window-active'),
+  onPresenterStateChanged: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const handler = (_event, isOpen) => callback(Boolean(isOpen));
+    ipcRenderer.on('presenter-window-state', handler);
+    return () => {
+      ipcRenderer.removeListener('presenter-window-state', handler);
+    };
+  },
+
+  getCurrentWindowBounds: () => ipcRenderer.invoke('current-window-get-bounds'),
+  setCurrentWindowBounds: (bounds) => {
+    if (!bounds || typeof bounds !== 'object') return Promise.resolve(false);
+    return ipcRenderer.invoke('current-window-set-bounds', bounds);
+  },
+
   // ===========================================================================
   // 3. MODE A: APPLICATION FULLSCREEN & WINDOW SIZE MANAGEMENT
   // ===========================================================================

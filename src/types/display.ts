@@ -151,7 +151,28 @@ export interface ElectronAPI {
   closeMultiFullscreenOutput?: () => Promise<boolean>;
   isMultiFullscreenOutputActive?: () => Promise<boolean>;
   onMultiOutputClosed?: (callback: () => void) => () => void;
-  
+
+  // Singleton Frameless Always-On-Top Resizable Preview & Presenter Windows
+  togglePreviewWindow?: () => Promise<{ active: boolean }>;
+  openPreviewWindow?: () => Promise<{ active: boolean }>;
+  closePreviewWindow?: () => Promise<{ active: boolean }>;
+  isPreviewWindowActive?: () => Promise<boolean>;
+  onPreviewStateChanged?: (callback: (isOpen: boolean) => void) => () => void;
+
+  togglePresenterWindow?: () => Promise<{ active: boolean }>;
+  openPresenterWindow?: () => Promise<{ active: boolean }>;
+  closePresenterWindow?: () => Promise<{ active: boolean }>;
+  isPresenterWindowActive?: () => Promise<boolean>;
+  onPresenterStateChanged?: (callback: (isOpen: boolean) => void) => () => void;
+
+  getCurrentWindowBounds?: () => Promise<{ x: number; y: number; width: number; height: number } | null>;
+  setCurrentWindowBounds?: (bounds: {
+    x?: number;
+    y?: number;
+    width?: number;
+    height?: number;
+  }) => Promise<boolean>;
+
   // Window Size & Resolution Management
   minimizeWindow: () => Promise<boolean>;
   maximizeWindow: () => Promise<boolean>;

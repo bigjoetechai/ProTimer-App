@@ -27,9 +27,10 @@ import {
   resolveDisplayDigitColor,
   resolveFontFamily,
   resolveFontStyleCss,
+  sanitizeImageUrl,
   useLivePreferences,
 } from '../utilities/displayStyleHelper';
-import { X, Layers, Play, Pause, AlertTriangle, Clock } from 'lucide-react';
+import { Layers, Play, Pause, AlertTriangle, Clock } from 'lucide-react';
 
 interface MultiFullscreenDisplayProps {
   onClose?: () => void;
@@ -41,7 +42,6 @@ export const MultiFullscreenDisplay: React.FC<MultiFullscreenDisplayProps> = ({
   isClient = true,
 }) => {
   const { payload } = useDisplaySync(isClient);
-  const [showControls, setShowControls] = useState(false);
   const localPrefs = useLivePreferences(payload?.preferences);
 
   // Handle Escape key to safely close Multi FS without affecting single Fullscreen or running timers
@@ -67,47 +67,15 @@ export const MultiFullscreenDisplay: React.FC<MultiFullscreenDisplayProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown, true);
   }, [onClose]);
 
-  const handleClose = () => {
-    if (onClose) {
-      onClose();
-      return;
-    }
-    if (typeof window !== 'undefined' && window.electronAPI?.closeMultiFullscreenOutput) {
-      window.electronAPI.closeMultiFullscreenOutput();
-    } else if (document.fullscreenElement) {
-      document.exitFullscreen().catch(() => {});
-    } else {
-      window.close();
-    }
-  };
-
   if (!payload) {
     return (
-      <div className="h-screen w-screen bg-black text-neutral-500 flex flex-col items-center justify-center font-mono select-none">
-        <div className="w-8 h-8 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin mb-4" />
-        <span className="text-xs uppercase tracking-widest">Connecting to ProTimer Multi FS Engine...</span>
-      </div>
+      <div className="h-screen w-screen bg-black text-neutral-500 flex flex-col items-center justify-center font-mono select-none" />
     );
   }
 
   // Blackout mode
   if (payload.isBlackout) {
-    return (
-      <div
-        className="h-screen w-screen bg-black cursor-none relative"
-        onMouseMove={() => setShowControls(true)}
-      >
-        {showControls && (
-          <button
-            onClick={handleClose}
-            className="absolute top-4 right-4 z-50 p-2 bg-neutral-900/80 hover:bg-neutral-800 text-neutral-400 hover:text-white rounded-full transition-opacity opacity-40 hover:opacity-100 cursor-pointer"
-            title="Exit Multi FS (Escape)"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        )}
-      </div>
-    );
+    return <div className="h-screen w-screen bg-black cursor-none relative" />;
   }
 
   const listSummaries: ListActiveCueSummary[] =
@@ -167,12 +135,15 @@ export const MultiFullscreenDisplay: React.FC<MultiFullscreenDisplayProps> = ({
   const formattedDate = payload.dateFormatted || formatDate(new Date(), localPrefs);
 
   const activeListId = payload.activeListId || 'list_1';
-  const resolvedLogoFromPrefs = resolveLogoImageForList(localPrefs, activeListId);
-  const hasLocalListLogoMap = Boolean(
-    localPrefs.listLogoImages && Object.keys(localPrefs.listLogoImages).length > 0
+  const hasExplicitActiveLogoEntry = Boolean(
+    localPrefs.listLogoImages &&
+      Object.prototype.hasOwnProperty.call(localPrefs.listLogoImages, activeListId)
   );
+  const resolvedLogoFromPrefs = sanitizeImageUrl(resolveLogoImageForList(localPrefs, activeListId));
   const activeLogoUrl =
-    resolvedLogoFromPrefs || (!hasLocalListLogoMap ? payload.logoImageUrl || '' : '');
+    hasExplicitActiveLogoEntry && !resolvedLogoFromPrefs
+      ? ''
+      : resolvedLogoFromPrefs || sanitizeImageUrl(payload.logoImageUrl);
 
   const { outerStyle, innerTransformStyle } = getTargetCanvasStyles(mtExtras, true);
 
@@ -207,13 +178,13 @@ export const MultiFullscreenDisplay: React.FC<MultiFullscreenDisplayProps> = ({
         borderRadius: outerStyle.borderRadius,
         clipPath: outerStyle.clipPath,
       }}
-      onMouseEnter={() => setShowControls(true)}
-      onMouseLeave={() => setShowControls(false)}
     >
       {activeLogoUrl && (
         <img
           src={activeLogoUrl}
           alt="Logo"
+          decoding="sync"
+          draggable={false}
           className={`absolute z-30 object-contain pointer-events-none select-none ${getLogoLocationClasses(
             logoCfg?.location
           )}`}
@@ -318,17 +289,25 @@ export const MultiFullscreenDisplay: React.FC<MultiFullscreenDisplayProps> = ({
             ? `+${formattedItemTime.replace(/^[+-]/, '')}`
             : formattedItemTime.replace(/^-/, '+');
 
-          const resolvedFromPrefs = resolveBackgroundImageForList(localPrefs, item.listId);
-          const hasLocalListBgMap = Boolean(
+          const hasExplicitItemBgEntry = Boolean(
             localPrefs.listBackgroundImages &&
-              Object.keys(localPrefs.listBackgroundImages).length > 0
+              Object.prototype.hasOwnProperty.call(localPrefs.listBackgroundImages, item.listId)
           );
+          const resolvedFromPrefs = sanitizeImageUrl(resolveBackgroundImageForList(localPrefs, item.listId));
           const listBackgroundUrl =
-            resolvedFromPrefs || (!hasLocalListBgMap ? item.backgroundImageUrl || '' : '');
+            hasExplicitItemBgEntry && !resolvedFromPrefs
+              ? ''
+              : resolvedFromPrefs || sanitizeImageUrl(item.backgroundImageUrl);
 
-          const resolvedListLogoFromPrefs = resolveLogoImageForList(localPrefs, item.listId);
+          const hasExplicitItemLogoEntry = Boolean(
+            localPrefs.listLogoImages &&
+              Object.prototype.hasOwnProperty.call(localPrefs.listLogoImages, item.listId)
+          );
+          const resolvedListLogoFromPrefs = sanitizeImageUrl(resolveLogoImageForList(localPrefs, item.listId));
           const listLogoUrl =
-            resolvedListLogoFromPrefs || (!hasLocalListLogoMap ? item.logoImageUrl || '' : '');
+            hasExplicitItemLogoEntry && !resolvedListLogoFromPrefs
+              ? ''
+              : resolvedListLogoFromPrefs || sanitizeImageUrl(item.logoImageUrl);
 
           const resolvedItemDigitColor = resolveDisplayDigitColor({
             isOvertime,
@@ -353,11 +332,15 @@ export const MultiFullscreenDisplay: React.FC<MultiFullscreenDisplayProps> = ({
                 <img
                   src={listBackgroundUrl}
                   alt=""
+                  decoding="sync"
+                  draggable={false}
                   className={`absolute inset-0 w-full h-full pointer-events-none select-none z-0 ${
                     backgroundFit === 'contain' ? 'object-contain' : 'object-cover'
                   }`}
                   style={{
                     opacity: Math.min(1, Math.max(0, backgroundOpacity / 100)),
+                    transform: 'translateZ(0)',
+                    backfaceVisibility: 'hidden',
                   }}
                 />
               )}
@@ -367,6 +350,8 @@ export const MultiFullscreenDisplay: React.FC<MultiFullscreenDisplayProps> = ({
                 <img
                   src={listLogoUrl}
                   alt="List Logo"
+                  decoding="sync"
+                  draggable={false}
                   className={`absolute z-20 object-contain pointer-events-none select-none ${getLogoLocationClasses(
                     logoCfg?.location
                   )}`}
@@ -540,17 +525,6 @@ export const MultiFullscreenDisplay: React.FC<MultiFullscreenDisplayProps> = ({
           );
         })}
       </div>
-
-      {/* Hover Close Button */}
-      {showControls && (
-        <button
-          onClick={handleClose}
-          className="absolute top-4 right-4 p-2.5 bg-neutral-900/90 hover:bg-neutral-800 text-neutral-400 hover:text-white rounded-full transition-all border border-neutral-700 shadow-xl cursor-pointer z-50"
-          title="Exit Multi FS (Escape)"
-        >
-          <X className="w-4 h-4" />
-        </button>
-      )}
 
       {/* Stage Messages Overlay */}
       <MessageOverlay
