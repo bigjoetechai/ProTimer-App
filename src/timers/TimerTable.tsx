@@ -231,21 +231,12 @@ export const TimerTable: React.FC<TimerTableProps> = ({
           )}
         </div>
 
-        {/* Quick Table Info & Add Cue Button */}
+        {/* Quick Table Info */}
         <div className="flex items-center gap-3">
           <span className={`text-[11px] ${isDark ? 'text-neutral-400' : 'text-slate-500'}`}>
             {displayTimers.length} {displayTimers.length === 1 ? 'cue' : 'cues'}
             {searchQuery && ` (filtered from ${timers.length})`}
           </span>
-
-          <button
-            type="button"
-            onClick={onAddNew}
-            className="flex items-center gap-1 px-2.5 py-0.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded text-xs font-semibold transition-colors shadow-xs active:scale-95 cursor-pointer"
-          >
-            <Plus className="w-3 h-3" />
-            <span>Add Timer</span>
-          </button>
         </div>
       </div>
 

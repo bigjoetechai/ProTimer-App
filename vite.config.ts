@@ -9,7 +9,7 @@ function lanApiPlugin() {
     configureServer(server: any) {
       server.middlewares.use(async (req: any, res: any, next: any) => {
         if (req.url && req.url.startsWith('/api/lan')) {
-          const { handleLanApi } = await import('./server/lanHandler.js');
+          const { handleLanApi } = await import('./server/lanHandler.ts');
           const handled = await handleLanApi(req, res);
           if (handled) return;
         }

@@ -76,11 +76,231 @@ export function useLivePreferences(payloadPrefs?: AppPreferences): AppPreference
   return localPrefs;
 }
 
+export const COMMON_SYSTEM_FONTS: string[] = [
+  'Verdana',
+  'Arial',
+  'Arial Black',
+  'Arial Narrow',
+  'Bahnschrift',
+  'Book Antiqua',
+  'Bookman Old Style',
+  'Calibri',
+  'Cambria',
+  'Candara',
+  'Cascadia Code',
+  'Cascadia Mono',
+  'Century Gothic',
+  'Comic Sans MS',
+  'Consolas',
+  'Constantia',
+  'Corbel',
+  'Courier New',
+  'Ebrima',
+  'Franklin Gothic Medium',
+  'Futura',
+  'Gabriola',
+  'Gadugi',
+  'Garamond',
+  'Geneva',
+  'Georgia',
+  'Gill Sans',
+  'Helvetica',
+  'Helvetica Neue',
+  'Impact',
+  'Ink Free',
+  'Inter',
+  'JetBrains Mono',
+  'Lucida Console',
+  'Lucida Sans Unicode',
+  'Malgun Gothic',
+  'Marlett',
+  'Microsoft Himalaya',
+  'Microsoft JhengHei',
+  'Microsoft New Tai Lue',
+  'Microsoft PhagsPa',
+  'Microsoft Sans Serif',
+  'Microsoft Tai Le',
+  'Microsoft YaHei',
+  'Microsoft Yi Baiti',
+  'MingLiU-ExtB',
+  'Monaco',
+  'Mongolian Baiti',
+  'Montserrat',
+  'MS Gothic',
+  'MV Boli',
+  'Myanmar Text',
+  'Nirmala UI',
+  'Open Sans',
+  'Optima',
+  'Oswald',
+  'Palatino Linotype',
+  'Poppins',
+  'Roboto',
+  'Roboto Condensed',
+  'Roboto Mono',
+  'Rockwell',
+  'Segoe Print',
+  'Segoe Script',
+  'Segoe UI',
+  'Segoe UI Black',
+  'Segoe UI Historic',
+  'Segoe UI Semibold',
+  'Segoe UI Symbol',
+  'SimSun',
+  'Sitka Banner',
+  'Sitka Display',
+  'Sitka Heading',
+  'Sitka Small',
+  'Sitka Subheading',
+  'Sitka Text',
+  'Sylfaen',
+  'System UI',
+  'Tahoma',
+  'Times New Roman',
+  'Trebuchet MS',
+  'Ubuntu',
+  'Ubuntu Mono',
+  'Yu Gothic',
+];
+
+let cachedDetectedFonts: string[] | null = null;
+let pendingFontDetectionPromise: Promise<string[]> | null = null;
+
+function detectCanvasInstalledFonts(candidates: string[]): string[] {
+  if (typeof document === 'undefined') return candidates;
+  try {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return candidates;
+
+    const testText = 'mmmmmmmmmmlli100:00WW';
+    const testSize = '72px';
+    const baseFonts = ['monospace', 'sans-serif', 'serif'] as const;
+    const baseWidths: Record<string, number> = {};
+
+    for (const base of baseFonts) {
+      ctx.font = `${testSize} ${base}`;
+      baseWidths[base] = ctx.measureText(testText).width;
+    }
+
+    const available: string[] = [];
+    for (const font of candidates) {
+      if (font === 'System UI' || font === 'Verdana' || font === 'Arial' || font === 'Segoe UI') {
+        available.push(font);
+        continue;
+      }
+      const isInstalled = baseFonts.some((base) => {
+        ctx.font = `${testSize} "${font}", ${base}`;
+        return ctx.measureText(testText).width !== baseWidths[base];
+      });
+      if (isInstalled) {
+        available.push(font);
+      }
+    }
+    return available;
+  } catch {
+    return candidates;
+  }
+}
+
+export async function loadAllSystemFonts(): Promise<string[]> {
+  if (cachedDetectedFonts && cachedDetectedFonts.length > 0) {
+    return cachedDetectedFonts;
+  }
+  if (pendingFontDetectionPromise) {
+    return pendingFontDetectionPromise;
+  }
+
+  pendingFontDetectionPromise = (async () => {
+    const fontSet = new Set<string>(COMMON_SYSTEM_FONTS);
+
+    // 1. Canvas check across common system fonts
+    for (const f of detectCanvasInstalledFonts(COMMON_SYSTEM_FONTS)) {
+      fontSet.add(f);
+    }
+
+    // 2. Native OS fonts via Electron IPC (Windows / macOS / Linux)
+    if (typeof window !== 'undefined' && window.electronAPI?.getSystemFonts) {
+      try {
+        const osFonts = await window.electronAPI.getSystemFonts();
+        if (Array.isArray(osFonts)) {
+          for (const name of osFonts) {
+            const clean = typeof name === 'string' ? name.trim() : '';
+            if (clean && !clean.startsWith('@')) {
+              fontSet.add(clean);
+            }
+          }
+        }
+      } catch {
+        // Ignore Electron IPC error
+      }
+    }
+
+    // 3. Chromium Local Font Access API (window.queryLocalFonts)
+    if (typeof window !== 'undefined' && typeof (window as any).queryLocalFonts === 'function') {
+      try {
+        const localFonts = await (window as any).queryLocalFonts();
+        if (Array.isArray(localFonts)) {
+          for (const item of localFonts) {
+            const family = typeof item?.family === 'string' ? item.family.trim() : '';
+            if (family && !family.startsWith('@')) {
+              fontSet.add(family);
+            }
+          }
+        }
+      } catch {
+        // Permission denied or unsupported in current context
+      }
+    }
+
+    const sorted = Array.from(fontSet).sort((a, b) =>
+      a.localeCompare(b, undefined, { sensitivity: 'base' })
+    );
+    cachedDetectedFonts = sorted;
+    return sorted;
+  })();
+
+  return pendingFontDetectionPromise;
+}
+
 /**
- * Maps user-selected font family names to complete CSS font stacks.
+ * Hook that returns all available system fonts (common + OS installed fonts).
+ */
+export function useSystemFonts(): string[] {
+  const [fonts, setFonts] = useState<string[]>(() =>
+    cachedDetectedFonts && cachedDetectedFonts.length > 0
+      ? cachedDetectedFonts
+      : [...COMMON_SYSTEM_FONTS].sort((a, b) =>
+          a.localeCompare(b, undefined, { sensitivity: 'base' })
+        )
+  );
+
+  useEffect(() => {
+    let mounted = true;
+    loadAllSystemFonts().then((resolved) => {
+      if (mounted && resolved.length > 0) {
+        setFonts(resolved);
+      }
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  return fonts;
+}
+
+/**
+ * Maps user-selected font family names (including any installed OS system font) to complete CSS font stacks.
  */
 export function resolveFontFamily(fontName?: string): string {
-  switch (fontName) {
+  if (!fontName || !fontName.trim()) {
+    return 'Verdana, Geneva, Tahoma, sans-serif';
+  }
+  const clean = fontName.trim();
+  switch (clean) {
+    case 'System UI':
+      return 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
     case 'Verdana':
       return 'Verdana, Geneva, Tahoma, sans-serif';
     case 'Arial':
@@ -94,15 +314,25 @@ export function resolveFontFamily(fontName?: string): string {
     case 'Trebuchet MS':
       return '"Trebuchet MS", "Lucida Grande", "Lucida Sans Unicode", sans-serif';
     case 'Roboto Mono':
-      return '"Roboto Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace';
+    case 'Consolas':
+    case 'Cascadia Mono':
+    case 'Cascadia Code':
+    case 'Lucida Console':
+      return `"${clean.replace(/"/g, '')}", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace`;
     case 'Courier New':
       return '"Courier New", Courier, "Lucida Sans Typewriter", monospace';
     case 'Georgia':
-      return 'Georgia, Cambria, "Times New Roman", Times, serif';
+    case 'Times New Roman':
+    case 'Cambria':
+    case 'Garamond':
+    case 'Palatino Linotype':
+      return `"${clean.replace(/"/g, '')}", Georgia, Cambria, "Times New Roman", Times, serif`;
     case 'Impact':
       return 'Impact, Haettenschweiler, "Franklin Gothic Bold", Charcoal, sans-serif';
-    default:
-      return fontName ? `${fontName}, sans-serif` : 'Verdana, Geneva, Tahoma, sans-serif';
+    default: {
+      const escaped = clean.replace(/"/g, '');
+      return `"${escaped}", local("${escaped}"), system-ui, -apple-system, "Segoe UI", Arial, sans-serif`;
+    }
   }
 }
 

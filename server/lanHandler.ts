@@ -277,6 +277,22 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
           };
         });
       }
+      if (incoming.preferences && prev.preferences) {
+        if (
+          (!incoming.preferences.listBackgroundImages ||
+            Object.keys(incoming.preferences.listBackgroundImages).length === 0) &&
+          prev.preferences.listBackgroundImages &&
+          Object.keys(prev.preferences.listBackgroundImages).length > 0
+        ) {
+          incoming.preferences.listBackgroundImages = prev.preferences.listBackgroundImages;
+        }
+        if (
+          !incoming.preferences.backgroundImageDataUrl &&
+          prev.preferences.backgroundImageDataUrl
+        ) {
+          incoming.preferences.backgroundImageDataUrl = prev.preferences.backgroundImageDataUrl;
+        }
+      }
       state.masterState = incoming;
     }
     if (Array.isArray(body.timers)) {

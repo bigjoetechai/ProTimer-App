@@ -29,6 +29,11 @@ import {
 import { useTheme } from '../hooks';
 import { timerManagerService } from '../services/timerManager';
 import { ndiStreamService, NdiStreamStatus } from '../services/ndiStreamService';
+import {
+  COMMON_SYSTEM_FONTS,
+  resolveFontFamily,
+  useSystemFonts,
+} from '../utilities/displayStyleHelper';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -472,18 +477,7 @@ const SIZES_POSITION_ROWS: Array<{
   },
 ];
 
-const FONT_FAMILY_OPTIONS = [
-  'Verdana',
-  'Arial',
-  'Inter',
-  'Segoe UI',
-  'Tahoma',
-  'Trebuchet MS',
-  'Roboto Mono',
-  'Courier New',
-  'Georgia',
-  'Impact',
-];
+const FONT_FAMILY_OPTIONS = COMMON_SYSTEM_FONTS;
 
 const FONT_STYLE_OPTIONS = ['Normal', 'Bold', 'Italic', 'Bold Italic'];
 
@@ -496,6 +490,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onSave,
 }) => {
   const { isDark, setTheme } = useTheme();
+  const systemFonts = useSystemFonts();
   const [prefs, setPrefs] = useState<AppPreferences>({
     ...DEFAULT_PREFERENCES,
     ...preferences,
@@ -1226,10 +1221,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                                   font: e.target.value,
                                                 })
                                               }
+                                              style={{
+                                                fontFamily: resolveFontFamily(cfg.font || 'Verdana'),
+                                              }}
                                               className={compactSelectCls}
                                             >
-                                              {FONT_FAMILY_OPTIONS.map((f) => (
-                                                <option key={f} value={f}>
+                                              {(cfg.font &&
+                                              !systemFonts.includes(cfg.font)
+                                                ? [cfg.font, ...systemFonts]
+                                                : systemFonts.length > 0
+                                                ? systemFonts
+                                                : FONT_FAMILY_OPTIONS
+                                              ).map((f) => (
+                                                <option
+                                                  key={f}
+                                                  value={f}
+                                                  style={{ fontFamily: resolveFontFamily(f) }}
+                                                >
                                                   {f}
                                                 </option>
                                               ))}

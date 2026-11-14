@@ -250,4 +250,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * Retrieve application metadata and runtime paths.
    */
   getAppInfo: () => ipcRenderer.invoke('get-app-info'),
+
+  /**
+   * Retrieve all installed system font families on the host OS.
+   */
+  getSystemFonts: () => ipcRenderer.invoke('get-system-fonts'),
 });
+

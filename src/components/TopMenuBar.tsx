@@ -11,7 +11,6 @@ import {
   Sun, 
   Cloud, 
   Edit3, 
-  Hourglass, 
   Settings, 
   ChevronDown,
   User,
@@ -193,11 +192,8 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
       {/* LEFT: Logo & Menus */}
       <div className="flex items-center gap-1">
         {/* Brand Logo */}
-        <div className="flex items-center gap-1.5 mr-2 font-bold select-none">
-          <div className="w-5 h-5 rounded bg-cyan-500/20 border border-cyan-500/40 flex items-center justify-center shadow-xs">
-            <Hourglass className="w-3.5 h-3.5 text-cyan-400 rotate-45" />
-          </div>
-          <span className={`font-bold tracking-wider hidden sm:inline text-xs ${isDark ? 'text-white' : 'text-slate-900'}`}>
+        <div className="flex items-center mr-2 font-bold select-none">
+          <span className={`font-bold tracking-wider text-xs ${isDark ? 'text-white' : 'text-slate-900'}`}>
             PRO<span className="text-cyan-500">TIMER</span>
           </span>
         </div>

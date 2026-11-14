@@ -27,11 +27,12 @@
  *    `protimer-user-data.backup.json`) preserved across restarts, updates, and uninstalls.
  */
 
-const { app, BrowserWindow, screen, ipcMain } = require('electron');
+const { app, BrowserWindow, screen, ipcMain, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
+const { exec } = require('child_process');
 
 const APP_ID = 'com.protimer.desktop';
 const APP_NAME = 'ProTimer';
@@ -1544,11 +1545,121 @@ ipcMain.handle('get-app-info', async () => {
   };
 });
 
+let cachedSystemFonts = null;
+
+function getSystemFontsList() {
+  if (cachedSystemFonts && cachedSystemFonts.length > 0) {
+    return Promise.resolve(cachedSystemFonts);
+  }
+
+  return new Promise((resolve) => {
+    if (process.platform === 'win32') {
+      const psCmd =
+        'powershell -NoProfile -NonInteractive -WindowStyle Hidden -Command "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Add-Type -AssemblyName System.Drawing; (New-Object System.Drawing.Text.InstalledFontCollection).Families | ForEach-Object { $_.Name }"';
+      exec(psCmd, { timeout: 7000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
+        if (!err && stdout) {
+          const fonts = Array.from(
+            new Set(
+              stdout
+                .split(/\r?\n/)
+                .map((line) => line.trim())
+                .filter((line) => line.length > 0 && !line.startsWith('@'))
+            )
+          ).sort((a, b) => a.localeCompare(b));
+          if (fonts.length > 0) {
+            cachedSystemFonts = fonts;
+            resolve(fonts);
+            return;
+          }
+        }
+
+        // Fallback: query Windows Registry Fonts key
+        exec(
+          'reg query "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts"',
+          { timeout: 5000, maxBuffer: 4 * 1024 * 1024 },
+          (regErr, regOut) => {
+            if (!regErr && regOut) {
+              const names = new Set();
+              regOut.split(/\r?\n/).forEach((line) => {
+                const match = line.trim().match(/^(.+?)\s+\((?:TrueType|OpenType|All res)\)\s+REG_SZ/i);
+                if (match && match[1]) {
+                  const rawName = match[1]
+                    .replace(/\s+(?:Bold|Italic|Regular|Light|Semibold|Medium|Black|Condensed|Narrow)+$/gi, '')
+                    .trim();
+                  if (rawName && !rawName.startsWith('@')) {
+                    names.add(rawName);
+                  }
+                }
+              });
+              const list = Array.from(names).sort((a, b) => a.localeCompare(b));
+              if (list.length > 0) {
+                cachedSystemFonts = list;
+              }
+              resolve(list);
+            } else {
+              resolve([]);
+            }
+          }
+        );
+      });
+      return;
+    }
+
+    if (process.platform === 'linux') {
+      exec('fc-list : family', { timeout: 5000, maxBuffer: 2 * 1024 * 1024 }, (err, stdout) => {
+        if (err || !stdout) {
+          resolve([]);
+          return;
+        }
+        const names = new Set();
+        stdout.split(/\r?\n/).forEach((line) => {
+          line.split(',').forEach((part) => {
+            const clean = part.trim();
+            if (clean) names.add(clean);
+          });
+        });
+        const list = Array.from(names).sort((a, b) => a.localeCompare(b));
+        cachedSystemFonts = list;
+        resolve(list);
+      });
+      return;
+    }
+
+    resolve([]);
+  });
+}
+
+ipcMain.handle('get-system-fonts', async () => {
+  try {
+    return await getSystemFontsList();
+  } catch {
+    return [];
+  }
+});
+
 // =============================================================================
 // APPLICATION LIFECYCLE
 // =============================================================================
 
 app.whenReady().then(async () => {
+  try {
+    if (session && session.defaultSession) {
+      session.defaultSession.setPermissionCheckHandler((_webContents, permission) => {
+        if (permission === 'local-fonts') return true;
+        return true;
+      });
+      session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+        if (permission === 'local-fonts') {
+          callback(true);
+          return;
+        }
+        callback(true);
+      });
+    }
+  } catch {
+    // Ignore permission handler errors
+  }
+
   await startEmbeddedProductionServer();
   createMainWindow();
 

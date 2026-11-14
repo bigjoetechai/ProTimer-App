@@ -208,6 +208,7 @@ export interface ElectronAPI {
     userDataPath: string;
     lanPort: number;
   }>;
+  getSystemFonts?: () => Promise<string[]>;
 }
 
 declare global {
@@ -215,3 +216,4 @@ declare global {
     electronAPI?: ElectronAPI;
   }
 }
+
