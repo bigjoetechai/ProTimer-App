@@ -4,4 +4,5 @@ export * from './PreviewDisplay';
 export * from './FullscreenDisplay';
 export * from './MultiFullscreenDisplay';
 export * from './LanControlDisplay';
+export * from './LanDesktopDisplay';
 export * from './NdiDisplay';

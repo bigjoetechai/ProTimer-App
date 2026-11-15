@@ -10,6 +10,7 @@ import {
   FullscreenDisplay,
   MultiFullscreenDisplay,
   LanControlDisplay,
+  LanDesktopDisplay,
   NdiDisplay,
 } from '../displays';
 import { DisplayTarget } from '../types';
@@ -31,6 +32,8 @@ export const DisplayPage: React.FC<DisplayPageProps> = ({ target }) => {
       return <MultiFullscreenDisplay />;
     case 'lan_control':
       return <LanControlDisplay />;
+    case 'lan_desktop':
+      return <LanDesktopDisplay />;
     case 'ndi':
       return <NdiDisplay />;
     case 'preview':

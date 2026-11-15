@@ -61,10 +61,12 @@ class DisplaySyncService {
   private lastBusCueImages: Map<string, { bg?: string; logo?: string }> = new Map();
   private isPushingLanState: boolean = false;
   private pendingLanPush: { state: DisplaySyncPayload; timers: TimerItem[] } | null = null;
+  private trailingLanPushTimeout: any = null;
   private lastLanPushAt: number = 0;
   private lastPushedListId: string | undefined = undefined;
   private lastPushedStatus: string | undefined = undefined;
-  private lastPushedTimerId: string | undefined = undefined;
+  private lastPushedTimerId: string | null | undefined = undefined;
+  private lastPushedCuedTimerId: string | null | undefined = undefined;
   private lastRealtimeFrameAt: number = 0;
   private lastBusFrameAt: number = 0;
   private optimisticLockUntil: number = 0;
@@ -104,6 +106,14 @@ class DisplaySyncService {
     if (this.masterEventSource) {
       this.masterEventSource.close();
       this.masterEventSource = null;
+    }
+    if (typeof window !== 'undefined') {
+      const displayRole = new URLSearchParams(window.location.search).get('display');
+      if (displayRole === 'lan_desktop') {
+        timerManagerService.setRemoteCommandForwarder((cmd, payload) => {
+          this.sendRemoteCommand(cmd, payload);
+        });
+      }
     }
     // Seed initial state from local storage if available on the same machine so Fullscreen never flashes a spinner
     if (!this.lastPayload) {
@@ -248,6 +258,16 @@ class DisplaySyncService {
     const hydrated = this.resolveCachedImages(incoming);
     this.hasReceivedMasterSync = true;
     this.lastPayload = hydrated;
+    this.isBlackout = Boolean(hydrated.isBlackout);
+    this.isClockMode = Boolean(hydrated.isClockMode);
+    this.activeMessage = hydrated.activeMessage || null;
+    if (
+      !this.isMaster &&
+      typeof window !== 'undefined' &&
+      new URLSearchParams(window.location.search).get('display') === 'lan_desktop'
+    ) {
+      timerManagerService.applyRemoteMasterState(hydrated);
+    }
     this.notifyListeners(hydrated);
   }
 
@@ -439,13 +459,22 @@ class DisplaySyncService {
   private setupClientLanSync() {
     if (typeof window === 'undefined') return;
 
+    const searchParams = new URLSearchParams(window.location.search);
+    const displayRole = searchParams.get('display') || 'client';
+    const pinnedListId = searchParams.get('listId') || '';
+
     // 1. Server-Sent Events (SSE) for low latency
     const connectSse = () => {
       try {
         if (this.clientEventSource) {
           this.clientEventSource.close();
         }
-        this.clientEventSource = new EventSource('/api/lan/stream');
+        const streamQuery = new URLSearchParams();
+        streamQuery.set('role', displayRole);
+        if (pinnedListId) {
+          streamQuery.set('listId', pinnedListId);
+        }
+        this.clientEventSource = new EventSource(`/api/lan/stream?${streamQuery.toString()}`);
 
         this.clientEventSource.onmessage = (event) => {
           try {
@@ -493,27 +522,24 @@ class DisplaySyncService {
   private handleRemoteCommand(command: string, payload?: unknown) {
     const cmdUpper = String(command).toUpperCase();
     const p = payload as any;
+    const targetListId = typeof p?.listId === 'string' && p.listId ? p.listId : undefined;
 
     switch (cmdUpper) {
       case 'START':
-        if (p?.timerId) {
-          timerManagerService.start(p.timerId);
-        } else {
-          timerManagerService.start();
-        }
+        timerManagerService.start(p?.timerId, targetListId);
         break;
       case 'PAUSE':
-        timerManagerService.pause(p?.timerId);
+        timerManagerService.pause(p?.timerId, targetListId);
         break;
       case 'STOP':
-        timerManagerService.stop(p?.timerId);
+        timerManagerService.stop(p?.timerId, targetListId);
         break;
       case 'RESTART':
-        timerManagerService.restart(p?.timerId);
+        timerManagerService.restart(p?.timerId, targetListId);
         break;
       case 'SELECT_TIMER':
         if (p?.timerId) {
-          timerManagerService.cue(p.timerId);
+          timerManagerService.cue(p.timerId, targetListId);
         }
         break;
       case 'SWITCH_LIST':
@@ -523,21 +549,108 @@ class DisplaySyncService {
         break;
       case 'ADJUST_DURATION':
         if (typeof p?.secondsDelta === 'number') {
-          timerManagerService.adjustDuration(p.secondsDelta);
+          timerManagerService.adjustDuration(p.secondsDelta, p?.timerId, targetListId);
         } else if (typeof p === 'number') {
-          timerManagerService.adjustDuration(p);
+          timerManagerService.adjustDuration(p, undefined, targetListId);
         }
         break;
       case 'MOVE_NEXT':
       case 'CUE_NEXT':
-        timerManagerService.moveNextCue();
+        timerManagerService.moveNextCue(targetListId);
         break;
       case 'MOVE_PREV':
       case 'CUE_PREV':
-        timerManagerService.movePrevCue();
+        timerManagerService.movePrevCue(targetListId);
+        break;
+      case 'SET_TIMER_DURATION':
+        if (p?.timerId && typeof p?.durationSeconds === 'number') {
+          timerManagerService.setTimerDuration(p.timerId, p.durationSeconds);
+        }
+        break;
+      case 'SET_SPEED':
+        if (typeof p?.speed === 'number') {
+          timerManagerService.setSpeed(p.speed, p?.timerId);
+        }
+        break;
+      case 'RECORD_LAP':
+        timerManagerService.recordLap(p?.timerId);
+        break;
+      case 'RESET_LAPS':
+        timerManagerService.resetLaps(p?.timerId);
+        break;
+      case 'ADD_TIMER':
+        timerManagerService.addTimer(p?.timer || p || {}, targetListId);
+        break;
+      case 'UPDATE_TIMER':
+        if (p?.timerId && p?.updates) {
+          timerManagerService.updateTimer(p.timerId, p.updates);
+        }
+        break;
+      case 'DELETE_TIMER':
+        if (p?.timerId) {
+          timerManagerService.deleteTimer(p.timerId);
+        }
+        break;
+      case 'DUPLICATE_TIMER':
+        if (p?.timerId) {
+          timerManagerService.duplicateTimer(p.timerId, p?.newTimerId);
+        }
+        break;
+      case 'REORDER_TIMERS':
+        if (typeof p?.sourceIndex === 'number' && typeof p?.destinationIndex === 'number') {
+          timerManagerService.reorderTimers(p.sourceIndex, p.destinationIndex, targetListId);
+        }
+        break;
+      case 'RENAME_TIMER':
+        if (p?.timerId && typeof p?.newName === 'string') {
+          timerManagerService.renameTimer(p.timerId, p.newName);
+        }
+        break;
+      case 'ADD_LIST':
+        timerManagerService.addList(p?.name, p?.description, p?.listId);
+        break;
+      case 'RENAME_LIST':
+        if (p?.listId && typeof p?.newName === 'string') {
+          timerManagerService.renameList(p.listId, p.newName);
+        }
+        break;
+      case 'DELETE_LIST':
+        if (p?.listId) {
+          timerManagerService.deleteList(p.listId);
+        }
+        break;
+      case 'DUPLICATE_LIST':
+        if (p?.listId) {
+          timerManagerService.duplicateList(p.listId);
+        }
+        break;
+      case 'REORDER_LISTS':
+        if (typeof p?.sourceIndex === 'number' && typeof p?.destinationIndex === 'number') {
+          timerManagerService.reorderLists(p.sourceIndex, p.destinationIndex);
+        }
+        break;
+      case 'RESET_COMPLETED_TIMERS':
+        timerManagerService.resetCompletedTimers(targetListId);
+        break;
+      case 'UNDO':
+        timerManagerService.undo();
+        break;
+      case 'REDO':
+        timerManagerService.redo();
+        break;
+      case 'DELETE_RUN_LOG':
+        if (p?.logId) {
+          timerManagerService.deleteRunLog(p.logId);
+        }
+        break;
+      case 'CLEAR_RUN_LOGS':
+        timerManagerService.clearRunLogs();
         break;
       case 'TOGGLE_BLACKOUT':
         this.toggleBlackout();
+        return;
+      case 'SET_BLACKOUT':
+        this.setBlackout(Boolean(p?.blackout));
         return;
       case 'TOGGLE_CLOCK':
         this.toggleClockMode();
@@ -546,6 +659,9 @@ class DisplaySyncService {
         if (p) {
           this.setMessage(typeof p === 'string' ? { text: p } : (p as StageMessage));
         }
+        return;
+      case 'TOGGLE_MESSAGE_VISIBILITY':
+        this.toggleMessageVisibility();
         return;
       case 'CLEAR_MESSAGE':
         this.clearMessage();
@@ -622,6 +738,8 @@ class DisplaySyncService {
     return {
       activeListId,
       activeListName,
+      activeTimerId: snap.activeTimerId,
+      cuedTimerId: snap.cuedTimerId,
       lists: listsSummary,
       activeTimer: displayTarget,
       nextTimer,
@@ -650,6 +768,9 @@ class DisplaySyncService {
       preferences: prefs,
       timerList,
       listActiveCues,
+      fullLists: allLists,
+      allTimers: timerManagerService.getAllTimers(),
+      runLogs: timerManagerService.getRunLogs(),
       isFullscreenActive: this.outputStatus.isFullscreenActive,
       isMultiFullscreenActive: this.outputStatus.isMultiFullscreenActive,
       isNdiActive: this.outputStatus.isNdiActive,
@@ -741,22 +862,15 @@ class DisplaySyncService {
       preferences: busPrefs,
     });
 
-    // Push state to LAN/NDI API for remote network capture & mobile controllers
+    // Push state to LAN/NDI API for remote network capture & mobile/desktop controllers
     if (this.isMaster && typeof window !== 'undefined') {
       const now = Date.now();
       const structuralChange =
         immediate ||
         payload.activeListId !== this.lastPushedListId ||
         payload.status !== this.lastPushedStatus ||
-        payload.activeTimer?.id !== this.lastPushedTimerId;
-
-      if (!structuralChange && now - this.lastLanPushAt < 95) {
-        return;
-      }
-
-      this.lastPushedListId = payload.activeListId;
-      this.lastPushedStatus = payload.status;
-      this.lastPushedTimerId = payload.activeTimer?.id;
+        payload.activeTimerId !== this.lastPushedTimerId ||
+        payload.cuedTimerId !== this.lastPushedCuedTimerId;
 
       const lanPrefs = payload.preferences
         ? {
@@ -810,6 +924,28 @@ class DisplaySyncService {
       };
 
       this.pendingLanPush = { state: lanPayload, timers: allActiveTimers };
+
+      if (!structuralChange && now - this.lastLanPushAt < 95) {
+        if (!this.trailingLanPushTimeout) {
+          const remainingMs = Math.max(15, 95 - (now - this.lastLanPushAt));
+          this.trailingLanPushTimeout = setTimeout(() => {
+            this.trailingLanPushTimeout = null;
+            this.flushLanPushQueue();
+          }, remainingMs);
+        }
+        return;
+      }
+
+      if (this.trailingLanPushTimeout) {
+        clearTimeout(this.trailingLanPushTimeout);
+        this.trailingLanPushTimeout = null;
+      }
+
+      this.lastPushedListId = payload.activeListId;
+      this.lastPushedStatus = payload.status;
+      this.lastPushedTimerId = payload.activeTimerId;
+      this.lastPushedCuedTimerId = payload.cuedTimerId;
+
       this.flushLanPushQueue();
     }
   }
@@ -817,24 +953,40 @@ class DisplaySyncService {
   // --- DISPLAY TOGGLES ---
 
   public toggleBlackout(): void {
+    if (!this.isMaster) {
+      this.sendRemoteCommand('TOGGLE_BLACKOUT');
+      return;
+    }
     this.isBlackout = !this.isBlackout;
     const snap = timerManagerService.getSnapshot();
     this.broadcastCurrentState(snap.status, snap.currentSeconds, true);
   }
 
   public setBlackout(blackout: boolean): void {
+    if (!this.isMaster) {
+      this.sendRemoteCommand('SET_BLACKOUT', { blackout });
+      return;
+    }
     this.isBlackout = blackout;
     const snap = timerManagerService.getSnapshot();
     this.broadcastCurrentState(snap.status, snap.currentSeconds, true);
   }
 
   public toggleClockMode(): void {
+    if (!this.isMaster) {
+      this.sendRemoteCommand('TOGGLE_CLOCK');
+      return;
+    }
     this.isClockMode = !this.isClockMode;
     const snap = timerManagerService.getSnapshot();
     this.broadcastCurrentState(snap.status, snap.currentSeconds, true);
   }
 
   public setMessage(msg: Partial<StageMessage>): void {
+    if (!this.isMaster) {
+      this.sendRemoteCommand('SET_MESSAGE', msg);
+      return;
+    }
     this.activeMessage = {
       id: generateId('msg'),
       text: msg.text || '',
@@ -850,6 +1002,10 @@ class DisplaySyncService {
   }
 
   public toggleMessageVisibility(): void {
+    if (!this.isMaster) {
+      this.sendRemoteCommand('TOGGLE_MESSAGE_VISIBILITY');
+      return;
+    }
     if (!this.activeMessage) {
       this.setMessage({ text: 'STANDBY', visible: true });
       return;
@@ -860,6 +1016,10 @@ class DisplaySyncService {
   }
 
   public clearMessage(): void {
+    if (!this.isMaster) {
+      this.sendRemoteCommand('CLEAR_MESSAGE');
+      return;
+    }
     this.activeMessage = null;
     const snap = timerManagerService.getSnapshot();
     this.broadcastCurrentState(snap.status, snap.currentSeconds, true);
@@ -905,13 +1065,51 @@ class DisplaySyncService {
         next.status = 'running';
         break;
       case 'SELECT_TIMER':
-        if (p?.timerId && next.timerList) {
-          next.timerList = next.timerList.map((item) => ({
-            ...item,
-            isCued: item.id === p.timerId,
-          }));
+        if (p?.timerId) {
+          next.cuedTimerId = p.timerId;
+          if (next.timerList) {
+            next.timerList = next.timerList.map((item) => ({
+              ...item,
+              isCued: item.id === p.timerId,
+            }));
+          }
         }
         break;
+      case 'MOVE_NEXT':
+      case 'CUE_NEXT': {
+        if (next.timerList && next.timerList.length > 0) {
+          const curIdx = next.timerList.findIndex((item) => item.isCued);
+          const nextIdx = curIdx >= 0 ? (curIdx + 1) % next.timerList.length : 0;
+          const nextId = next.timerList[nextIdx]?.id;
+          if (nextId) {
+            next.cuedTimerId = nextId;
+            next.timerList = next.timerList.map((item, idx) => ({
+              ...item,
+              isCued: idx === nextIdx,
+            }));
+          }
+        }
+        break;
+      }
+      case 'MOVE_PREV':
+      case 'CUE_PREV': {
+        if (next.timerList && next.timerList.length > 0) {
+          const curIdx = next.timerList.findIndex((item) => item.isCued);
+          const prevIdx =
+            curIdx >= 0
+              ? (curIdx - 1 + next.timerList.length) % next.timerList.length
+              : 0;
+          const prevId = next.timerList[prevIdx]?.id;
+          if (prevId) {
+            next.cuedTimerId = prevId;
+            next.timerList = next.timerList.map((item, idx) => ({
+              ...item,
+              isCued: idx === prevIdx,
+            }));
+          }
+        }
+        break;
+      }
       case 'SWITCH_LIST':
         if (p?.listId) {
           next.activeListId = p.listId;
@@ -922,6 +1120,8 @@ class DisplaySyncService {
           const cueSummary = next.listActiveCues?.find((c) => c.listId === p.listId);
           if (cueSummary) {
             next.activeTimer = cueSummary.activeTimer;
+            next.activeTimerId = cueSummary.activeTimerId ?? null;
+            next.cuedTimerId = cueSummary.cuedTimerId ?? null;
             next.nextTimer = cueSummary.nextTimer;
             next.status = cueSummary.status;
             next.formattedTime = cueSummary.formattedTime;
@@ -1002,28 +1202,52 @@ class DisplaySyncService {
 
   public async sendRemoteCommand(command: string, payload?: unknown, pin?: string): Promise<{ success: boolean; error?: string }> {
     const cmdId = `cmd_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const p = payload as any;
+    const listIdFromPayload = typeof p?.listId === 'string' ? p.listId : '';
+    const listIdFromUrl =
+      typeof window !== 'undefined'
+        ? new URLSearchParams(window.location.search).get('listId') || ''
+        : '';
+    const effectiveListId = listIdFromPayload || listIdFromUrl;
+    const enrichedPayload =
+      effectiveListId && p && typeof p === 'object' && !p.listId
+        ? { ...p, listId: effectiveListId }
+        : effectiveListId && p === undefined
+        ? { listId: effectiveListId }
+        : payload;
 
     // 0. If called on Master directly (e.g. from LAN Hub modal), execute immediately in 0ms
     if (this.isMaster) {
       this.markCommandExecuted(cmdId);
-      this.handleRemoteCommand(command, payload);
+      this.handleRemoteCommand(command, enrichedPayload);
       return { success: true };
     }
 
     // 1. Instant 0ms optimistic update on the remote client UI
-    this.applyOptimisticClientUpdate(command, payload);
+    this.applyOptimisticClientUpdate(command, enrichedPayload);
 
     // 2. Same-device broadcast (instant across browser tabs on the same machine)
-    this.bus.post('COMMAND', { id: cmdId, command, payload });
+    this.bus.post('COMMAND', { id: cmdId, command, payload: enrichedPayload });
 
     // 3. LAN network dispatch (for smartphones, tablets, and other computers)
     if (typeof window !== 'undefined') {
       try {
-        const storedPin = pin || sessionStorage.getItem('protimer_lan_pin') || '';
+        const storedPin =
+          pin ||
+          (effectiveListId ? sessionStorage.getItem(`protimer_lan_pin_${effectiveListId}`) : '') ||
+          (listIdFromUrl ? sessionStorage.getItem(`protimer_lan_pin_${listIdFromUrl}`) : '') ||
+          sessionStorage.getItem('protimer_lan_pin') ||
+          '';
         const res = await fetch('/api/lan/command', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ command, payload, pin: storedPin }),
+          body: JSON.stringify({
+            command,
+            payload: enrichedPayload,
+            pin: storedPin,
+            listId: effectiveListId || undefined,
+            authListId: listIdFromUrl || undefined,
+          }),
         });
         const result = await res.json();
         return result;

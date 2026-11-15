@@ -5,6 +5,7 @@
  */
 
 import os from 'os';
+import crypto from 'crypto';
 import { createRequire } from 'module';
 import type { IncomingMessage, ServerResponse } from 'http';
 
@@ -27,11 +28,20 @@ export interface NdiNetworkStreamConfig {
   frameCount: number;
 }
 
+export interface ListLanSecurityConfig {
+  listId: string;
+  pin: string;
+  pinRequired: boolean;
+  sessionToken: string;
+  desktopSessionToken: string;
+}
+
 export interface LanState {
   masterState: unknown | null;
   timers: unknown[];
   accessPin: string;
   pinRequired: boolean;
+  listConfigs: Record<string, ListLanSecurityConfig>;
   pendingCommands: Array<{
     id: string;
     command: string;
@@ -47,6 +57,7 @@ const state: LanState = {
   timers: [],
   accessPin: '1234',
   pinRequired: true,
+  listConfigs: {},
   pendingCommands: [],
   ndiStream: {
     active: false,
@@ -66,28 +77,69 @@ const state: LanState = {
   latestNdiFrameDataUrl: null,
 };
 
-// SSE connected clients
+function getOrCreateListLanConfig(listId: string): ListLanSecurityConfig {
+  const key = listId || 'default';
+  if (!state.listConfigs[key]) {
+    state.listConfigs[key] = {
+      listId: key,
+      pin: state.accessPin || '1234',
+      pinRequired: state.pinRequired,
+      sessionToken: crypto.randomUUID(),
+      desktopSessionToken: crypto.randomUUID(),
+    };
+  } else if (!state.listConfigs[key].desktopSessionToken) {
+    state.listConfigs[key].desktopSessionToken = crypto.randomUUID();
+  }
+  return state.listConfigs[key];
+}
+
+// SSE connected clients & per-list metadata
 const sseClients: Set<ServerResponse> = new Set();
+const sseClientMeta: Map<ServerResponse, { listId: string; role: string }> = new Map();
+
+function getControlPagesCountByList(): {
+  mobileByList: Record<string, number>;
+  desktopByList: Record<string, number>;
+  totalByList: Record<string, number>;
+} {
+  const mobileByList: Record<string, number> = {};
+  const desktopByList: Record<string, number> = {};
+  const totalByList: Record<string, number> = {};
+  for (const meta of sseClientMeta.values()) {
+    const lid = meta.listId || 'all';
+    if (meta.role === 'lan_control' || meta.role === 'control') {
+      mobileByList[lid] = (mobileByList[lid] || 0) + 1;
+      totalByList[lid] = (totalByList[lid] || 0) + 1;
+    } else if (meta.role === 'lan_desktop' || meta.role === 'desktop') {
+      desktopByList[lid] = (desktopByList[lid] || 0) + 1;
+      totalByList[lid] = (totalByList[lid] || 0) + 1;
+    }
+  }
+  return { mobileByList, desktopByList, totalByList };
+}
 
 // Live NDI MJPEG / Multipart stream clients on the network
 const ndiStreamClients: Set<ServerResponse> = new Set();
 
-export function getLocalIpAddresses(): string[] {
+export function getLocalNetworkInterfaces(): Array<{ name: string; address: string }> {
   const interfaces = os.networkInterfaces();
-  const addresses: string[] = [];
+  const result: Array<{ name: string; address: string }> = [];
 
   for (const name of Object.keys(interfaces)) {
     const list = interfaces[name];
     if (!list) continue;
     for (const iface of list) {
-      // Look for non-internal IPv4
       if (iface.family === 'IPv4' && !iface.internal) {
-        addresses.push(iface.address);
+        result.push({ name, address: iface.address });
       }
     }
   }
 
-  return addresses.length > 0 ? addresses : ['127.0.0.1'];
+  return result.length > 0 ? result : [{ name: 'Ethernet', address: '127.0.0.1' }];
+}
+
+export function getLocalIpAddresses(): string[] {
+  return getLocalNetworkInterfaces().map((i) => i.address);
 }
 
 export function broadcastSse(data: unknown) {
@@ -184,7 +236,16 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
 
   // 1. GET /api/lan/info
   if (pathname === '/api/lan/info' && method === 'GET') {
-    const ips = getLocalIpAddresses();
+    const queryStr = url.includes('?') ? url.split('?')[1] : '';
+    const params = new URLSearchParams(queryStr);
+    const requestedListId =
+      params.get('listId') ||
+      (state.masterState as any)?.activeListId ||
+      'list_1';
+
+    const listConfig = getOrCreateListLanConfig(requestedListId);
+    const netInterfaces = getLocalNetworkInterfaces();
+    const ips = netInterfaces.map((i) => i.address);
     const primaryIp = ips[0] || '127.0.0.1';
     const hostHeader = req.headers.host || `${primaryIp}:3000`;
     const isLocalhost = hostHeader.startsWith('localhost') || hostHeader.startsWith('127.0.0.1');
@@ -192,27 +253,70 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
     const proto = (req.headers['x-forwarded-proto'] as string) || 'http';
     const baseOrigin = `${proto}://${resolvedHost}`;
 
+    const { mobileByList, desktopByList, totalByList } = getControlPagesCountByList();
+    const mobileControlPagesOnList =
+      (mobileByList[requestedListId] || 0) + (mobileByList['all'] || 0);
+    const desktopControlPagesOnList =
+      (desktopByList[requestedListId] || 0) + (desktopByList['all'] || 0);
+    const controlPagesOnList =
+      (totalByList[requestedListId] || 0) + (totalByList['all'] || 0);
+
     sendJson(200, {
       ip: primaryIp,
       ips,
       port: 3000,
-      pin: state.accessPin,
-      pinRequired: state.pinRequired,
-      defaultPin: state.accessPin,
-      interfaces: ips.map((addr, i) => ({ name: i === 0 ? 'Primary LAN' : `Interface ${i + 1}`, address: addr })),
-      controlUrl: `${baseOrigin}/?display=lan_control`,
-      displayUrl: `${baseOrigin}/?display=lan_display`,
+      listId: requestedListId,
+      pin: listConfig.pin,
+      pinRequired: listConfig.pinRequired,
+      sessionToken: listConfig.sessionToken,
+      desktopSessionToken: listConfig.desktopSessionToken,
+      defaultPin: listConfig.pin,
+      listConfigs: state.listConfigs,
+      interfaces: netInterfaces,
+      controlUrl: `${baseOrigin}/?display=lan_control&listId=${encodeURIComponent(requestedListId)}&id=${encodeURIComponent(listConfig.sessionToken)}`,
+      mobileControlUrl: `${baseOrigin}/?display=lan_control&listId=${encodeURIComponent(requestedListId)}&id=${encodeURIComponent(listConfig.sessionToken)}`,
+      desktopControlUrl: `${baseOrigin}/?display=lan_desktop&listId=${encodeURIComponent(requestedListId)}&id=${encodeURIComponent(listConfig.desktopSessionToken)}`,
+      displayUrl: `${baseOrigin}/?display=lan_display&listId=${encodeURIComponent(requestedListId)}&id=${encodeURIComponent(listConfig.sessionToken)}`,
       hasMaster: Boolean(state.masterState),
       connectedClients: sseClients.size,
+      controlPagesOnList,
+      mobileControlPagesOnList,
+      desktopControlPagesOnList,
+      controlPagesByList: totalByList,
       ndiStream: state.ndiStream,
       ndiClientsCount: ndiStreamClients.size,
     });
     return true;
   }
 
-  // 2. POST /api/lan/pin (Configure PIN)
+  // 2. POST /api/lan/pin (Configure PIN per list or globally)
   if (pathname === '/api/lan/pin' && method === 'POST') {
     const body = await readBody();
+    const targetListId = typeof body.listId === 'string' && body.listId ? body.listId : '';
+    if (targetListId) {
+      const cfg = getOrCreateListLanConfig(targetListId);
+      if (typeof body.pin === 'string') {
+        cfg.pin = body.pin.trim() || '1234';
+      }
+      if (typeof body.pinRequired === 'boolean') {
+        cfg.pinRequired = body.pinRequired;
+      }
+      if (body.regenerateToken) {
+        cfg.sessionToken = crypto.randomUUID();
+        cfg.desktopSessionToken = crypto.randomUUID();
+      }
+      sendJson(200, {
+        success: true,
+        listId: targetListId,
+        pin: cfg.pin,
+        pinRequired: cfg.pinRequired,
+        sessionToken: cfg.sessionToken,
+        desktopSessionToken: cfg.desktopSessionToken,
+        listConfigs: state.listConfigs,
+      });
+      return true;
+    }
+
     if (typeof body.pin === 'string') {
       state.accessPin = body.pin.trim() || '1234';
     }
@@ -223,18 +327,24 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
     return true;
   }
 
-  // 3. POST /api/lan/verify-pin (Client verification)
+  // 3. POST /api/lan/verify-pin (Client verification per list or globally)
   if (pathname === '/api/lan/verify-pin' && method === 'POST') {
     const body = await readBody();
-    if (!state.pinRequired || String(body.pin).trim() === state.accessPin) {
+    const targetListId = typeof body.listId === 'string' && body.listId ? body.listId : '';
+    const cfg = targetListId ? getOrCreateListLanConfig(targetListId) : null;
+    const effectivePinRequired = cfg ? cfg.pinRequired : state.pinRequired;
+    const effectivePin = cfg ? cfg.pin : state.accessPin;
+
+    if (!effectivePinRequired || String(body.pin || '').trim() === effectivePin) {
       sendJson(200, {
         valid: true,
+        listId: targetListId || undefined,
         token: `auth_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       });
     } else {
       sendJson(401, {
         valid: false,
-        error: 'Invalid Access PIN. Please verify the PIN displayed on the ProTimer Master console.',
+        error: 'Invalid Access PIN. Please verify the Access PIN for this list on the ProTimer console.',
       });
     }
     return true;
@@ -317,10 +427,14 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
 
   // 5. GET /api/lan/state (Client pulls state)
   if (pathname === '/api/lan/state' && method === 'GET') {
+    const queryStr = url.includes('?') ? url.split('?')[1] : '';
+    const params = new URLSearchParams(queryStr);
+    const reqListId = params.get('listId') || '';
+    const cfg = reqListId ? getOrCreateListLanConfig(reqListId) : null;
     sendJson(200, {
       state: state.masterState,
       timers: state.timers,
-      pinRequired: state.pinRequired,
+      pinRequired: cfg ? cfg.pinRequired : state.pinRequired,
       timestamp: Date.now(),
     });
     return true;
@@ -328,6 +442,11 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
 
   // 6. GET /api/lan/stream (Server-Sent Events for real-time live push)
   if (pathname === '/api/lan/stream' && method === 'GET') {
+    const queryStr = url.includes('?') ? url.split('?')[1] : '';
+    const params = new URLSearchParams(queryStr);
+    const clientListId = params.get('listId') || '';
+    const clientRole = params.get('role') || 'master';
+
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache, no-transform',
@@ -337,9 +456,11 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
 
     res.write(`data: ${JSON.stringify({ type: 'CONNECTED', state: state.masterState, timers: state.timers })}\n\n`);
     sseClients.add(res);
+    sseClientMeta.set(res, { listId: clientListId, role: clientRole });
 
     req.on('close', () => {
       sseClients.delete(res);
+      sseClientMeta.delete(res);
     });
     return true;
   }
@@ -348,10 +469,21 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
   if (pathname === '/api/lan/command' && method === 'POST') {
     const body = await readBody();
     const clientPin = String(body.pin || '').trim();
+    const cmdListId =
+      (typeof body.listId === 'string' && body.listId) ||
+      (typeof body.payload?.listId === 'string' && body.payload.listId) ||
+      '';
+    const authListId = typeof body.authListId === 'string' && body.authListId ? body.authListId : '';
+    const cfg = cmdListId ? getOrCreateListLanConfig(cmdListId) : null;
+    const authCfg = authListId ? getOrCreateListLanConfig(authListId) : null;
+    const effectivePinRequired = cfg ? cfg.pinRequired : state.pinRequired;
+    const effectivePin = cfg ? cfg.pin : state.accessPin;
+    const matchesTargetPin = !effectivePinRequired || clientPin === effectivePin;
+    const matchesAuthListPin = authCfg ? !authCfg.pinRequired || clientPin === authCfg.pin : false;
 
-    // Verify PIN if enabled
-    if (state.pinRequired && clientPin !== state.accessPin) {
-      sendJson(401, { success: false, error: 'Unauthorized: Valid Access PIN required to issue commands' });
+    // Verify PIN if enabled for this list
+    if (!matchesTargetPin && !matchesAuthListPin) {
+      sendJson(401, { success: false, error: 'Unauthorized: Valid Access PIN required to issue commands for this list' });
       return true;
     }
 

@@ -1,7 +1,7 @@
 appId: com.protimer.desktop
 productName: ProTimer
 executableName: ProTimer
-copyright: Copyright © 2026 ProTimer
+copyright: Copyright © 2026 Bigjoe Technology
 
 directories:
   buildResources: build

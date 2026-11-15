@@ -33,7 +33,8 @@ export function useDisplaySync(asClient: boolean = false) {
     toggleMessageVisibility: () => displaySyncService.toggleMessageVisibility(),
     openDisplayWindow: (
       target: Parameters<typeof displaySyncService.openDisplayWindow>[0],
-      bounds?: Parameters<typeof displaySyncService.openDisplayWindow>[1]
-    ) => displaySyncService.openDisplayWindow(target, bounds),
+      bounds?: Parameters<typeof displaySyncService.openDisplayWindow>[1],
+      listId?: Parameters<typeof displaySyncService.openDisplayWindow>[2]
+    ) => displaySyncService.openDisplayWindow(target, bounds, listId),
   };
 }

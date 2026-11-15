@@ -108,6 +108,7 @@ export const MainConsolePage: React.FC = () => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isListManagerOpen, setIsListManagerOpen] = useState(false);
   const [isLanModalOpen, setIsLanModalOpen] = useState(false);
+  const [lanModalMode, setLanModalMode] = useState<'lan_control' | 'lan_display'>('lan_control');
   const [isPreviewPopoutOpen, setIsPreviewPopoutOpen] = useState(false);
   const [isPresenterPopoutOpen, setIsPresenterPopoutOpen] = useState(false);
   const [ndiStreamStatus, setNdiStreamStatus] = useState<NdiStreamStatus>(() =>
@@ -598,12 +599,33 @@ export const MainConsolePage: React.FC = () => {
         }
         historyCount={runLogs.length}
         onOpenDisplay={(target: DisplayTarget) => {
+          const isRemoteDesktop =
+            typeof window !== 'undefined' &&
+            new URLSearchParams(window.location.search).get('display') === 'lan_desktop';
           if (target === 'fullscreen') {
-            toggleFullscreen(selectedMonitorId, snapshot.activeListId);
+            if (isRemoteDesktop) {
+              displaySyncService.sendRemoteCommand('TOGGLE_FULLSCREEN', {
+                listId: snapshot.activeListId,
+              });
+            } else {
+              toggleFullscreen(selectedMonitorId, snapshot.activeListId);
+            }
           } else if (target === 'multi_fullscreen') {
-            toggleMultiFullscreen(selectedMonitorId);
+            if (isRemoteDesktop) {
+              displaySyncService.sendRemoteCommand('TOGGLE_MULTI_FULLSCREEN', {
+                listId: snapshot.activeListId,
+              });
+            } else {
+              toggleMultiFullscreen(selectedMonitorId);
+            }
           } else if (target === 'ndi') {
-            ndiStreamService.toggleStream('single');
+            if (isRemoteDesktop) {
+              displaySyncService.sendRemoteCommand('TOGGLE_NDI', {
+                listId: snapshot.activeListId,
+              });
+            } else {
+              ndiStreamService.toggleStream('single');
+            }
           } else if (target === 'presenter') {
             if (typeof window !== 'undefined' && window.electronAPI?.isElectron && window.electronAPI.togglePresenterWindow) {
               window.electronAPI.togglePresenterWindow().then((res) => {
@@ -620,14 +642,30 @@ export const MainConsolePage: React.FC = () => {
             } else {
               setIsPreviewPopoutOpen((prev) => !prev);
             }
-          } else if (target === 'lan_control' || target === 'lan_display') {
-            setIsLanModalOpen(true);
-            openDisplayWindow(target);
+          } else if (target === 'lan_control') {
+            if (isLanModalOpen && lanModalMode === 'lan_control') {
+              setIsLanModalOpen(false);
+            } else {
+              setLanModalMode('lan_control');
+              setIsLanModalOpen(true);
+            }
+          } else if (target === 'lan_display') {
+            if (isLanModalOpen && lanModalMode === 'lan_display') {
+              setIsLanModalOpen(false);
+            } else {
+              setLanModalMode('lan_display');
+              setIsLanModalOpen(true);
+            }
           } else {
-            openDisplayWindow(target);
+            openDisplayWindow(target, undefined, snapshot.activeListId);
           }
         }}
-        onOpenLanModal={() => setIsLanModalOpen(true)}
+        onOpenLanModal={() => {
+          setLanModalMode('lan_control');
+          setIsLanModalOpen(true);
+        }}
+        isLanControlActive={isLanModalOpen && lanModalMode === 'lan_control'}
+        isLanDisplayActive={isLanModalOpen && lanModalMode === 'lan_display'}
         fullscreenMonitor={selectedMonitorId}
         onChangeMonitor={(m) => {
           setSelectedMonitor(m, snapshot.activeListId);
@@ -636,16 +674,38 @@ export const MainConsolePage: React.FC = () => {
           }
         }}
         detectedMonitors={displays}
-        isFullscreenActive={isFullscreenActive}
+        isFullscreenActive={isFullscreenActive || Boolean(payload?.isFullscreenActive)}
         activeFullscreenByList={activeFullscreenByList}
         selectedMonitorsByList={selectedMonitorsByList}
         onCloseFullscreen={() => closeFullscreen(snapshot.activeListId)}
-        isMultiFullscreenActive={isMultiFullscreenActive}
+        isMultiFullscreenActive={isMultiFullscreenActive || Boolean(payload?.isMultiFullscreenActive)}
         onCloseMultiFullscreen={closeMultiFullscreen}
         isPreviewActive={isPreviewPopoutOpen}
         isPresenterActive={isPresenterPopoutOpen}
-        ndiStreamStatus={ndiStreamStatus}
-        onToggleNdiStream={(mode) => ndiStreamService.toggleStream(mode)}
+        ndiStreamStatus={
+          typeof window !== 'undefined' &&
+          new URLSearchParams(window.location.search).get('display') === 'lan_desktop'
+            ? {
+                ...ndiStreamStatus,
+                active: Boolean(payload?.isNdiActive),
+                mode: payload?.isNdiMultiActive ? 'multi' : 'single',
+                sourceName: payload?.ndiSourceName || ndiStreamStatus.sourceName,
+              }
+            : ndiStreamStatus
+        }
+        onToggleNdiStream={(mode) => {
+          const isRemoteDesktop =
+            typeof window !== 'undefined' &&
+            new URLSearchParams(window.location.search).get('display') === 'lan_desktop';
+          if (isRemoteDesktop) {
+            displaySyncService.sendRemoteCommand(
+              mode === 'multi' ? 'TOGGLE_NDI_MULTI' : 'TOGGLE_NDI',
+              { listId: snapshot.activeListId }
+            );
+          } else {
+            ndiStreamService.toggleStream(mode);
+          }
+        }}
       />
 
       {/* ALWAYS-ON-TOP RESIZABLE PRESENTER POP-OUT SCREEN (Web mode only — Electron uses native frameless always-on-top window) */}
@@ -759,6 +819,9 @@ export const MainConsolePage: React.FC = () => {
       <LanModal
         isOpen={isLanModalOpen}
         onClose={() => setIsLanModalOpen(false)}
+        activeListId={snapshot.activeListId}
+        activeListName={currentList.name}
+        mode={lanModalMode}
       />
 
       {/* FULLSCREEN OUTPUT WINDOW OVERLAY (Web / Preview Window) */}

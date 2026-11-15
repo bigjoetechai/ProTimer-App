@@ -46,7 +46,15 @@ import {
 export const LanControlDisplay: React.FC = () => {
   const { payload, sendRemoteCommand } = useDisplaySync(true);
   const localPrefs = useLivePreferences(payload?.preferences);
-  
+
+  const pinnedListId =
+    typeof window !== 'undefined'
+      ? new URLSearchParams(window.location.search).get('listId') || ''
+      : '';
+  const pinStorageKey = pinnedListId
+    ? `protimer_lan_pin_${pinnedListId}`
+    : 'protimer_lan_pin';
+
   // Pairing & PIN authentication state
   const [isPaired, setIsPaired] = useState<boolean>(false);
   const [pinInput, setPinInput] = useState<string>('');
@@ -58,13 +66,36 @@ export const LanControlDisplay: React.FC = () => {
   const [msgSentNotice, setMsgSentNotice] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'control' | 'timers' | 'messages'>('control');
 
-  // Check saved PIN on mount
+  // Check if PIN is required for this list or if saved PIN is valid on mount
   useEffect(() => {
-    const savedPin = sessionStorage.getItem('protimer_lan_pin');
-    if (savedPin) {
-      verifyPin(savedPin);
-    }
-  }, []);
+    let cancelled = false;
+    const checkInitialAccess = async () => {
+      try {
+        const infoRes = await fetch(
+          `/api/lan/info${pinnedListId ? `?listId=${encodeURIComponent(pinnedListId)}` : ''}`
+        );
+        if (infoRes.ok) {
+          const infoData = await infoRes.json();
+          if (infoData.pinRequired === false) {
+            if (!cancelled) setIsPaired(true);
+            return;
+          }
+        }
+      } catch {
+        // Proceed to saved PIN check
+      }
+
+      const savedPin =
+        sessionStorage.getItem(pinStorageKey) || sessionStorage.getItem('protimer_lan_pin');
+      if (savedPin && !cancelled) {
+        verifyPin(savedPin);
+      }
+    };
+    checkInitialAccess();
+    return () => {
+      cancelled = true;
+    };
+  }, [pinnedListId, pinStorageKey]);
 
   const verifyPin = async (pinToTest: string) => {
     setIsVerifying(true);
@@ -73,20 +104,25 @@ export const LanControlDisplay: React.FC = () => {
       const res = await fetch('/api/lan/verify-pin', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pin: pinToTest }),
+        body: JSON.stringify({
+          pin: pinToTest,
+          listId: pinnedListId || undefined,
+        }),
       });
       const data = await res.json();
       if (data.valid) {
+        sessionStorage.setItem(pinStorageKey, pinToTest);
         sessionStorage.setItem('protimer_lan_pin', pinToTest);
         setIsPaired(true);
       } else {
-        setPinError('Invalid Access PIN. Check Master Console.');
-        sessionStorage.removeItem('protimer_lan_pin');
+        setPinError('Invalid Access PIN for this list. Check Master Console.');
+        sessionStorage.removeItem(pinStorageKey);
         setIsPaired(false);
       }
     } catch {
       // In offline or local fallback, allow default 1234
       if (pinToTest === '1234') {
+        sessionStorage.setItem(pinStorageKey, pinToTest);
         sessionStorage.setItem('protimer_lan_pin', pinToTest);
         setIsPaired(true);
       } else {
@@ -104,20 +140,30 @@ export const LanControlDisplay: React.FC = () => {
   };
 
   const handleDisconnect = () => {
+    sessionStorage.removeItem(pinStorageKey);
     sessionStorage.removeItem('protimer_lan_pin');
     setIsPaired(false);
     setPinInput('');
   };
 
+  const effectiveListId = pinnedListId || payload?.activeListId || 'list_1';
+
+  const dispatchCommand = (cmd: string, data?: Record<string, unknown>) => {
+    sendRemoteCommand(cmd, {
+      ...(data || {}),
+      listId: effectiveListId,
+    });
+  };
+
   const handleSendMessage = (text: string) => {
     if (!text.trim()) return;
-    sendRemoteCommand('SET_MESSAGE', { text: text.trim(), visible: true });
+    dispatchCommand('SET_MESSAGE', { text: text.trim(), visible: true });
     setMsgSentNotice(`Message Sent: "${text.trim()}"`);
     setTimeout(() => setMsgSentNotice(null), 3000);
   };
 
   const handleClearMessage = () => {
-    sendRemoteCommand('CLEAR_MESSAGE');
+    dispatchCommand('CLEAR_MESSAGE');
     setMsgSentNotice('Message Cleared');
     setTimeout(() => setMsgSentNotice(null), 2000);
   };
@@ -242,8 +288,30 @@ export const LanControlDisplay: React.FC = () => {
     );
   }
 
-  const isRunning = payload.status === 'running' || payload.status === 'overtime';
-  const isPaused = payload.status === 'paused';
+  const listCueSummary = payload.listActiveCues?.find((c) => c.listId === effectiveListId);
+  const currentListName =
+    listCueSummary?.listName ||
+    payload.lists?.find((l) => l.id === effectiveListId)?.name ||
+    payload.activeListName ||
+    'List 1';
+  const currentActiveTimer = listCueSummary ? listCueSummary.activeTimer : payload.activeTimer;
+  const currentNextTimer = listCueSummary ? listCueSummary.nextTimer : payload.nextTimer;
+  const currentStatus = listCueSummary ? listCueSummary.status : payload.status;
+  const currentFormattedTime = listCueSummary ? listCueSummary.formattedTime : payload.formattedTime;
+  const currentProgressPercent = listCueSummary
+    ? listCueSummary.progressPercent
+    : payload.progressPercent;
+  const currentIsOvertime = listCueSummary ? listCueSummary.isOvertime : payload.isOvertime;
+  const currentAlertLevel = listCueSummary
+    ? listCueSummary.activeAlertLevel
+    : payload.activeAlertLevel;
+  const currentAlertColor = listCueSummary ? listCueSummary.alertColor : payload.alertColor;
+  const currentAlertFlash = listCueSummary ? listCueSummary.alertFlash : payload.alertFlash;
+  const currentAlertOnOff = listCueSummary ? listCueSummary.alertOnOff : payload.alertOnOff;
+  const currentTimerList = listCueSummary?.timerList || payload.timerList || [];
+
+  const isRunning = currentStatus === 'running' || currentStatus === 'overtime';
+  const isPaused = currentStatus === 'paused';
   const availableLists = payload.lists && payload.lists.length > 0 ? payload.lists : [];
 
   return (
@@ -254,12 +322,12 @@ export const LanControlDisplay: React.FC = () => {
           <div className="flex items-center gap-2 min-w-0">
             <div className="w-2 h-2 rounded-full bg-emerald-400 animate-ping shrink-0" />
             <span className="text-xs font-bold tracking-wider text-cyan-400 uppercase truncate">
-              PROTIMER LAN CONTROL
+              PROTIMER LAN CONTROL • {currentListName}
             </span>
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800 font-mono font-semibold">
-              CONNECTED
+              {currentListName}
             </span>
             <button
               type="button"
@@ -272,14 +340,14 @@ export const LanControlDisplay: React.FC = () => {
           </div>
         </div>
 
-        {/* Cue List Selector Strip (prevents cue list ambiguity and allows clean switching) */}
-        {availableLists.length > 0 && (
+        {/* Cue List Selector Strip (only shown if not pinned to a dedicated list tab) */}
+        {!pinnedListId && availableLists.length > 0 && (
           <div className="flex items-center gap-1.5 overflow-x-auto pb-1.5 mb-2 shrink-0 no-scrollbar">
             <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-500 shrink-0 mr-0.5">
               Cue List:
             </span>
             {availableLists.map((list) => {
-              const isCurrentList = list.id === payload.activeListId;
+              const isCurrentList = list.id === effectiveListId;
               const hasRunning = (list.runningCount || 0) > 0;
               return (
                 <button
@@ -329,11 +397,9 @@ export const LanControlDisplay: React.FC = () => {
             }`}
           >
             <span>Timers</span>
-            {payload.timerList && (
-              <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-neutral-800 text-neutral-200">
-                {payload.timerList.length}
-              </span>
-            )}
+            <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-neutral-800 text-neutral-200">
+              {currentTimerList.length}
+            </span>
           </button>
           <button
             type="button"
@@ -368,27 +434,27 @@ export const LanControlDisplay: React.FC = () => {
               const countdownCfg = webElements.countdown;
               const nameCfg = webElements.name;
               const resolvedColor = resolveDisplayDigitColor({
-                isOvertime: payload.isOvertime,
-                isPaused: payload.status === 'paused',
-                activeAlertLevel: payload.activeAlertLevel,
-                alertColor: payload.alertColor,
+                isOvertime: currentIsOvertime,
+                isPaused: currentStatus === 'paused',
+                activeAlertLevel: currentAlertLevel,
+                alertColor: currentAlertColor,
                 prefs: localPrefs,
               });
               const formattedStr = payload.isClockMode
                 ? payload.clockTimeFormatted
-                : payload.isOvertime
-                ? `+${payload.formattedTime.replace(/^[+-]/, '')}`
-                : payload.formattedTime.replace(/^-/, '+');
+                : currentIsOvertime
+                ? `+${currentFormattedTime.replace(/^[+-]/, '')}`
+                : currentFormattedTime.replace(/^-/, '+');
 
               return (
                 <div className="border rounded-2xl p-3 shadow-xl bg-[#0f1420] border-[#1f2b3e]">
                   <div className="flex items-center justify-between mb-0.5">
                     <span className="text-[10px] font-bold tracking-widest text-cyan-400 uppercase">
-                      ACTIVE CUE {payload.activeListName ? `• ${payload.activeListName}` : ''}
+                      ACTIVE CUE • {currentListName}
                     </span>
-                    {payload.activeTimer?.endTime && (
+                    {currentActiveTimer?.endTime && (
                       <span className="text-[10px] text-neutral-400 font-mono">
-                        End: <span className="text-white font-bold">{payload.activeTimer.endTime}</span>
+                        End: <span className="text-white font-bold">{currentActiveTimer.endTime}</span>
                       </span>
                     )}
                   </div>
@@ -401,7 +467,7 @@ export const LanControlDisplay: React.FC = () => {
                         ...resolveFontStyleCss(nameCfg?.fontStyle || 'Bold'),
                       }}
                     >
-                      {payload.activeTimer?.name || 'No Active Timer'}
+                      {currentActiveTimer?.name || 'No Active Timer'}
                     </div>
                   )}
 
@@ -410,9 +476,9 @@ export const LanControlDisplay: React.FC = () => {
                     {countdownCfg?.visible !== false && (
                       <div
                         className={`text-4xl sm:text-5xl tracking-tight tabular-nums leading-none ${
-                          payload.isOvertime || payload.alertOnOff
+                          currentIsOvertime || currentAlertOnOff
                             ? 'animate-overtime-blink'
-                            : payload.alertFlash && localPrefs.flashAlertsEnabled !== false
+                            : currentAlertFlash && localPrefs.flashAlertsEnabled !== false
                             ? 'animate-pulse'
                             : ''
                         }`}
@@ -426,11 +492,11 @@ export const LanControlDisplay: React.FC = () => {
                       </div>
                     )}
                     <div className="flex items-center justify-center gap-2 text-[11px] text-neutral-400 mt-1.5 font-mono">
-                      <span className="uppercase text-neutral-200 font-bold tracking-wider">{payload.status}</span>
+                      <span className="uppercase text-neutral-200 font-bold tracking-wider">{currentStatus}</span>
                       <span>•</span>
-                      <span>Speed: {payload.speed}%</span>
+                      <span>Speed: {currentActiveTimer?.speed || payload.speed}%</span>
                       <span>•</span>
-                      <span>{Math.round(payload.progressPercent)}%</span>
+                      <span>{Math.round(currentProgressPercent)}%</span>
                     </div>
                   </div>
 
@@ -438,9 +504,9 @@ export const LanControlDisplay: React.FC = () => {
                   <div className="w-full h-1.5 bg-[#182232] rounded-full overflow-hidden mt-1.5">
                     <div
                       className={`h-full transition-all duration-300 ${
-                        payload.isOvertime ? 'bg-red-500' : 'bg-cyan-500'
+                        currentIsOvertime ? 'bg-red-500' : 'bg-cyan-500'
                       }`}
-                      style={{ width: `${Math.min(100, Math.max(0, payload.progressPercent))}%` }}
+                      style={{ width: `${Math.min(100, Math.max(0, currentProgressPercent))}%` }}
                     />
                   </div>
                 </div>
@@ -451,7 +517,7 @@ export const LanControlDisplay: React.FC = () => {
             <div className="grid grid-cols-4 gap-2">
               <button
                 type="button"
-                onClick={() => sendRemoteCommand('START')}
+                onClick={() => dispatchCommand('START')}
                 className={`h-13 sm:h-14 rounded-xl border flex flex-col items-center justify-center gap-0.5 font-bold transition-all active:scale-95 shadow-md cursor-pointer ${
                   isRunning
                     ? 'bg-emerald-600/35 border-emerald-400 text-emerald-300 ring-1 ring-emerald-400/50'
@@ -464,7 +530,7 @@ export const LanControlDisplay: React.FC = () => {
 
               <button
                 type="button"
-                onClick={() => sendRemoteCommand('PAUSE')}
+                onClick={() => dispatchCommand('PAUSE')}
                 className={`h-13 sm:h-14 rounded-xl border flex flex-col items-center justify-center gap-0.5 font-bold transition-all active:scale-95 shadow-md cursor-pointer ${
                   isPaused
                     ? 'bg-amber-600/35 border-amber-400 text-amber-300 ring-1 ring-amber-400/50'
@@ -477,7 +543,7 @@ export const LanControlDisplay: React.FC = () => {
 
               <button
                 type="button"
-                onClick={() => sendRemoteCommand('STOP')}
+                onClick={() => dispatchCommand('STOP')}
                 className="h-13 sm:h-14 bg-red-600/20 hover:bg-red-600/30 active:bg-red-600/40 border border-red-500/60 rounded-xl flex flex-col items-center justify-center gap-0.5 text-red-400 font-bold transition-all active:scale-95 shadow-md cursor-pointer"
               >
                 <Square className="w-4 h-4 sm:w-5 sm:h-5 fill-red-400" />
@@ -486,7 +552,7 @@ export const LanControlDisplay: React.FC = () => {
 
               <button
                 type="button"
-                onClick={() => sendRemoteCommand('RESTART')}
+                onClick={() => dispatchCommand('RESTART')}
                 className="h-13 sm:h-14 bg-blue-600/20 hover:bg-blue-600/30 active:bg-blue-600/40 border border-blue-500/60 rounded-xl flex flex-col items-center justify-center gap-0.5 text-blue-400 font-bold transition-all active:scale-95 shadow-md cursor-pointer"
               >
                 <RotateCcw className="w-4 h-4 sm:w-5 sm:h-5" />
@@ -499,7 +565,7 @@ export const LanControlDisplay: React.FC = () => {
               <div className="grid grid-cols-2 gap-1.5">
                 <button
                   type="button"
-                  onClick={() => sendRemoteCommand('TOGGLE_FULLSCREEN')}
+                  onClick={() => dispatchCommand('TOGGLE_FULLSCREEN')}
                   className={`py-2 px-2.5 rounded-lg border flex items-center justify-center gap-1.5 text-xs font-bold transition-all active:scale-95 cursor-pointer ${
                     payload.isFullscreenActive
                       ? 'bg-cyan-600 text-white border-cyan-400 shadow-md shadow-cyan-950/50'
@@ -512,7 +578,7 @@ export const LanControlDisplay: React.FC = () => {
 
                 <button
                   type="button"
-                  onClick={() => sendRemoteCommand('TOGGLE_NDI')}
+                  onClick={() => dispatchCommand('TOGGLE_NDI')}
                   className={`py-2 px-2.5 rounded-lg border flex items-center justify-center gap-1.5 text-xs font-bold transition-all active:scale-95 cursor-pointer ${
                     payload.isNdiActive && !payload.isNdiMultiActive
                       ? 'bg-emerald-600 text-white border-emerald-400 shadow-md shadow-emerald-950/50'
@@ -533,7 +599,7 @@ export const LanControlDisplay: React.FC = () => {
               <div className="grid grid-cols-2 gap-1.5">
                 <button
                   type="button"
-                  onClick={() => sendRemoteCommand('TOGGLE_MULTI_FULLSCREEN')}
+                  onClick={() => dispatchCommand('TOGGLE_MULTI_FULLSCREEN')}
                   className={`py-1.5 px-2 rounded-lg border flex items-center justify-center gap-1.5 text-[11px] font-semibold transition-all active:scale-95 cursor-pointer ${
                     payload.isMultiFullscreenActive
                       ? 'bg-cyan-950/90 text-cyan-300 border-cyan-500'
@@ -546,7 +612,7 @@ export const LanControlDisplay: React.FC = () => {
 
                 <button
                   type="button"
-                  onClick={() => sendRemoteCommand('TOGGLE_NDI_MULTI')}
+                  onClick={() => dispatchCommand('TOGGLE_NDI_MULTI')}
                   className={`py-1.5 px-2 rounded-lg border flex items-center justify-center gap-1.5 text-[11px] font-semibold transition-all active:scale-95 cursor-pointer ${
                     payload.isNdiActive && payload.isNdiMultiActive
                       ? 'bg-emerald-950/90 text-emerald-300 border-emerald-500'
@@ -568,33 +634,33 @@ export const LanControlDisplay: React.FC = () => {
             {/* Duration Adjustments: -5m, -1m, +1m, +5m */}
             <div className="bg-[#0d121c] border border-[#1b2434] rounded-xl p-2">
               <span className="text-[10px] font-semibold text-neutral-400 uppercase tracking-wider block mb-1.5">
-                ADJUST REMAINING DURATION
+                ADJUST REMAINING DURATION ({currentListName})
               </span>
               <div className="grid grid-cols-4 gap-1.5">
                 <button
                   type="button"
-                  onClick={() => sendRemoteCommand('ADJUST_DURATION', { secondsDelta: -300 })}
+                  onClick={() => dispatchCommand('ADJUST_DURATION', { secondsDelta: -300 })}
                   className="py-2 bg-[#141b26] hover:bg-[#1a2333] active:bg-[#202d42] border border-[#202c3e] rounded-lg text-xs font-mono font-bold text-neutral-300 active:scale-95 transition-all cursor-pointer"
                 >
                   -5m
                 </button>
                 <button
                   type="button"
-                  onClick={() => sendRemoteCommand('ADJUST_DURATION', { secondsDelta: -60 })}
+                  onClick={() => dispatchCommand('ADJUST_DURATION', { secondsDelta: -60 })}
                   className="py-2 bg-[#141b26] hover:bg-[#1a2333] active:bg-[#202d42] border border-[#202c3e] rounded-lg text-xs font-mono font-bold text-neutral-300 active:scale-95 transition-all cursor-pointer"
                 >
                   -1m
                 </button>
                 <button
                   type="button"
-                  onClick={() => sendRemoteCommand('ADJUST_DURATION', { secondsDelta: 60 })}
+                  onClick={() => dispatchCommand('ADJUST_DURATION', { secondsDelta: 60 })}
                   className="py-2 bg-[#141b26] hover:bg-[#1a2333] active:bg-[#202d42] border border-[#202c3e] rounded-lg text-xs font-mono font-bold text-cyan-400 active:scale-95 transition-all cursor-pointer"
                 >
                   +1m
                 </button>
                 <button
                   type="button"
-                  onClick={() => sendRemoteCommand('ADJUST_DURATION', { secondsDelta: 300 })}
+                  onClick={() => dispatchCommand('ADJUST_DURATION', { secondsDelta: 300 })}
                   className="py-2 bg-[#141b26] hover:bg-[#1a2333] active:bg-[#202d42] border border-[#202c3e] rounded-lg text-xs font-mono font-bold text-cyan-400 active:scale-95 transition-all cursor-pointer"
                 >
                   +5m
@@ -606,7 +672,7 @@ export const LanControlDisplay: React.FC = () => {
             <div className="grid grid-cols-2 gap-1.5">
               <button
                 type="button"
-                onClick={() => sendRemoteCommand('MOVE_PREV')}
+                onClick={() => dispatchCommand('MOVE_PREV')}
                 className="py-2.5 bg-[#111622] hover:bg-[#182030] active:bg-[#202c40] border border-[#202c3e] rounded-xl flex items-center justify-center gap-1.5 text-xs font-semibold text-neutral-300 active:scale-95 transition-all cursor-pointer"
               >
                 <SkipBack className="w-3.5 h-3.5" />
@@ -614,7 +680,7 @@ export const LanControlDisplay: React.FC = () => {
               </button>
               <button
                 type="button"
-                onClick={() => sendRemoteCommand('MOVE_NEXT')}
+                onClick={() => dispatchCommand('MOVE_NEXT')}
                 className="py-2.5 bg-[#111622] hover:bg-[#182030] active:bg-[#202c40] border border-[#202c3e] rounded-xl flex items-center justify-center gap-1.5 text-xs font-semibold text-cyan-400 active:scale-95 transition-all cursor-pointer"
               >
                 <span>NEXT CUE</span>
@@ -622,7 +688,7 @@ export const LanControlDisplay: React.FC = () => {
               </button>
               <button
                 type="button"
-                onClick={() => sendRemoteCommand('TOGGLE_BLACKOUT')}
+                onClick={() => dispatchCommand('TOGGLE_BLACKOUT')}
                 className={`py-2.5 rounded-xl border flex items-center justify-center gap-1.5 text-xs font-bold transition-all active:scale-95 cursor-pointer ${
                   payload.isBlackout
                     ? 'bg-red-950/80 text-red-300 border-red-700 animate-pulse'
@@ -634,7 +700,7 @@ export const LanControlDisplay: React.FC = () => {
               </button>
               <button
                 type="button"
-                onClick={() => sendRemoteCommand('TOGGLE_CLOCK')}
+                onClick={() => dispatchCommand('TOGGLE_CLOCK')}
                 className={`py-2.5 rounded-xl border flex items-center justify-center gap-1.5 text-xs font-bold transition-all active:scale-95 cursor-pointer ${
                   payload.isClockMode
                     ? 'bg-cyan-950 text-cyan-300 border-cyan-700'
@@ -655,22 +721,28 @@ export const LanControlDisplay: React.FC = () => {
           <div className="space-y-2 flex-1">
             <div className="flex items-center justify-between pb-1">
               <span className="text-xs text-neutral-400 font-semibold uppercase tracking-wider">
-                {payload.activeListName || 'RUN OF SHOW'} TIMERS
+                {currentListName} TIMERS
               </span>
               <span className="text-[11px] text-neutral-500 font-mono">
                 Tap any timer to select/cue
               </span>
             </div>
 
-            {payload.timerList && payload.timerList.length > 0 ? (
+            {currentTimerList.length > 0 ? (
               <div className="space-y-1.5">
-                {payload.timerList.map((t, idx) => {
-                  const isCurrentActive = t.id === payload.activeTimer?.id;
+                {currentTimerList.map((t, idx) => {
+                  const strictActiveId = listCueSummary
+                    ? listCueSummary.activeTimerId
+                    : payload.activeTimerId;
+                  const isCurrentActive =
+                    strictActiveId !== undefined
+                      ? t.id === strictActiveId
+                      : (isRunning || isPaused) && t.id === currentActiveTimer?.id;
                   const isCued = t.isCued;
                   return (
                     <div
                       key={t.id}
-                      onClick={() => sendRemoteCommand('SELECT_TIMER', { timerId: t.id })}
+                      onClick={() => dispatchCommand('SELECT_TIMER', { timerId: t.id })}
                       className={`p-2.5 rounded-xl border flex items-center justify-between transition-all cursor-pointer ${
                         isCurrentActive
                           ? 'bg-cyan-950/50 border-cyan-500 text-white shadow-md'
@@ -708,7 +780,7 @@ export const LanControlDisplay: React.FC = () => {
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
-                            sendRemoteCommand('START', { timerId: t.id });
+                            dispatchCommand('START', { timerId: t.id });
                           }}
                           title="Start this timer immediately"
                           className="p-2 bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-400 rounded-lg border border-emerald-500/40 cursor-pointer"
@@ -722,7 +794,7 @@ export const LanControlDisplay: React.FC = () => {
               </div>
             ) : (
               <div className="p-8 text-center text-neutral-500 bg-[#0f1420] rounded-xl border border-[#1f283a]">
-                No timers available in the active list.
+                No timers available in {currentListName}.
               </div>
             )}
           </div>
@@ -824,7 +896,7 @@ export const LanControlDisplay: React.FC = () => {
         <div className="mt-2 pt-2 border-t border-[#1b2333] flex items-center justify-between text-xs shrink-0">
           <span className="text-[10px] text-neutral-500 uppercase tracking-wider">NEXT IN RUNDOWN</span>
           <span className="text-neutral-300 font-medium truncate max-w-[65%]">
-            {payload.nextTimer ? payload.nextTimer.name : 'End of Run of Show'}
+            {currentNextTimer ? currentNextTimer.name : 'End of Run of Show'}
           </span>
         </div>
       </div>

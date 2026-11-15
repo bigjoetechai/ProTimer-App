@@ -52,6 +52,8 @@ interface BottomBarProps {
   onCloseMultiFullscreen?: () => void;
   isPreviewActive?: boolean;
   isPresenterActive?: boolean;
+  isLanControlActive?: boolean;
+  isLanDisplayActive?: boolean;
   ndiStreamStatus?: NdiStreamStatus;
   onToggleNdiStream?: (mode: 'single' | 'multi') => void;
   isHistoryTabActive?: boolean;
@@ -84,6 +86,8 @@ export const BottomBar: React.FC<BottomBarProps> = ({
   onCloseMultiFullscreen,
   isPreviewActive = false,
   isPresenterActive = false,
+  isLanControlActive = false,
+  isLanDisplayActive = false,
   ndiStreamStatus,
   onToggleNdiStream,
   isHistoryTabActive = false,
@@ -339,8 +343,16 @@ export const BottomBar: React.FC<BottomBarProps> = ({
             },
             { label: 'Multi Preview', target: 'preview' as DisplayTarget, tooltip: 'Multiview Stage Preview' },
             { label: 'Multi FS', target: 'multi_fullscreen' as DisplayTarget, tooltip: 'Multi Fullscreen: Display Active Cue of All List Tabs' },
-            { label: 'LAN Control', target: 'lan_control' as DisplayTarget, tooltip: 'Local Network Web Remote Control' },
-            { label: 'LAN Display', target: 'lan_display' as DisplayTarget, tooltip: 'Local Network Remote Stage Output' },
+            {
+              label: 'LAN Control',
+              target: 'lan_control' as DisplayTarget,
+              tooltip: `Open LAN Control QR & Access PIN Security for ${activeListName}`,
+            },
+            {
+              label: 'LAN Display',
+              target: 'lan_display' as DisplayTarget,
+              tooltip: `Open LAN Display QR & Link for ${activeListName}`,
+            },
           ].map((item) => {
             const isNdiSingleActive =
               item.label === 'NDI' &&
@@ -354,6 +366,8 @@ export const BottomBar: React.FC<BottomBarProps> = ({
               (item.label === 'Preview' && isPreviewActive) ||
               (item.label === 'Fullscreen' && isFullscreenActive) ||
               (item.label === 'Multi FS' && isMultiFullscreenActive) ||
+              (item.label === 'LAN Control' && isLanControlActive) ||
+              (item.label === 'LAN Display' && isLanDisplayActive) ||
               isNdiSingleActive ||
               isNdiMultiActive;
 
@@ -426,23 +440,6 @@ export const BottomBar: React.FC<BottomBarProps> = ({
                 {ndiStreamStatus.alphaChannel ? ' • Alpha' : ''})
               </span>
             </div>
-          )}
-
-          {/* Dedicated LAN Pairing & QR Hub Button */}
-          {onOpenLanModal && (
-            <button
-              type="button"
-              onClick={onOpenLanModal}
-              title="Open LAN Remote Pairing, QR Codes & IP Address Hub"
-              className={`px-2.5 py-1 border rounded text-[11px] font-semibold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer ${
-                isDark 
-                  ? 'bg-[#131d2b] hover:bg-[#1a283c] active:bg-[#20324c] border-cyan-500/50 hover:border-cyan-400 text-cyan-300 hover:text-white' 
-                  : 'bg-cyan-50 hover:bg-cyan-100 active:bg-cyan-200 border-cyan-300 text-cyan-800'
-              }`}
-            >
-              <Wifi className="w-3.5 h-3.5 text-emerald-500" />
-              <span>LAN Hub / QR</span>
-            </button>
           )}
         </div>
 

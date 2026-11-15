@@ -2722,13 +2722,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <div className={`h-full border rounded-xs p-5 space-y-6 ${contentCardCls}`}>
                   <div className="space-y-3">
                     <h3 className={sectionHeadingCls}>SOFTWARE VERSION & UPDATES</h3>
-                    <p className="text-[13px]">
-                      ProTimer Desktop{' '}
-                      <span className={`font-mono font-semibold ${isDark ? 'text-white' : 'text-slate-900'}`}>
-                        v1.5.0
-                      </span>{' '}
-                      (64-bit)
-                    </p>
+                    <div className="space-y-1">
+                      <p className="text-[13px]">
+                        ProTimer Desktop{' '}
+                        <span className={`font-mono font-semibold ${isDark ? 'text-white' : 'text-slate-900'}`}>
+                          v1.5.0
+                        </span>{' '}
+                        (64-bit)
+                      </p>
+                      <p className={`text-[12px] font-mono ${isDark ? 'text-neutral-400' : 'text-slate-600'}`}>
+                        Owner / Company: Bigjoe Technology • Copyright © 2026 Bigjoe Technology
+                      </p>
+                    </div>
                     <PrefCheckbox
                       isDark={isDark}
                       checked={prefs.checkForUpdatesAutomatically ?? true}

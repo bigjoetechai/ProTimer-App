@@ -2,7 +2,7 @@
  * Display targets and synchronization message contracts.
  */
 
-import { TimerItem, TimerStatus } from './timer';
+import { TimerItem, TimerList, TimerRunLogEntry, TimerStatus } from './timer';
 import { StageMessage } from './message';
 import { AppPreferences } from './settings';
 
@@ -14,6 +14,7 @@ export type DisplayTarget =
   | 'multi_fullscreen'
   | 'ndi' 
   | 'lan_control' 
+  | 'lan_desktop'
   | 'lan_display';
 
 export interface DisplayConfig {
@@ -35,6 +36,7 @@ export interface ListActiveCueSummary {
   listName: string;
   isCurrentOperatorList: boolean;
   activeTimer: TimerItem | null;
+  activeTimerId?: string | null;
   nextTimer: TimerItem | null;
   status: TimerStatus;
   formattedTime: string;
@@ -50,12 +52,22 @@ export interface ListActiveCueSummary {
   runningCuesCount: number;
   backgroundImageUrl?: string;
   logoImageUrl?: string;
+  cuedTimerId?: string | null;
+  timerList?: Array<{
+    id: string;
+    name: string;
+    durationFormatted: string;
+    status: TimerStatus;
+    isCued: boolean;
+  }>;
 }
 
 export interface DisplaySyncPayload {
   seq?: number;
   activeListId?: string;
   activeListName?: string;
+  activeTimerId?: string | null;
+  cuedTimerId?: string | null;
   lists?: Array<{
     id: string;
     name: string;
@@ -94,6 +106,9 @@ export interface DisplaySyncPayload {
     isCued: boolean;
   }>;
   listActiveCues?: ListActiveCueSummary[];
+  fullLists?: TimerList[];
+  allTimers?: TimerItem[];
+  runLogs?: TimerRunLogEntry[];
   isFullscreenActive?: boolean;
   isMultiFullscreenActive?: boolean;
   isNdiActive?: boolean;

@@ -37,6 +37,7 @@ const { ndiNativeBridge } = require('../server/ndiNativeBridge.cjs');
 
 const APP_ID = 'com.protimer.desktop';
 const APP_NAME = 'ProTimer';
+const APP_COMPANY = 'Bigjoe Technology';
 const APP_VERSION = '1.5.0';
 
 // Set Windows Application User Model ID for taskbar grouping & notifications
@@ -83,11 +84,13 @@ let localServerUrl = devServerUrl;
 let embeddedServer = null;
 
 // LAN state for mobile/tablet remote control, LAN displays & NDI network stream
+const crypto = require('crypto');
 const lanState = {
   masterState: null,
   timers: [],
   accessPin: '1234',
   pinRequired: true,
+  listConfigs: {},
   pendingCommands: [],
   ndiStream: {
     active: false,
@@ -110,7 +113,41 @@ const lanState = {
   },
 };
 const sseClients = new Set();
+const sseClientMeta = new Map();
 const ndiStreamClients = new Set();
+
+function getOrCreateEmbeddedListConfig(listId) {
+  const key = listId || 'default';
+  if (!lanState.listConfigs[key]) {
+    lanState.listConfigs[key] = {
+      listId: key,
+      pin: lanState.accessPin || '1234',
+      pinRequired: lanState.pinRequired,
+      sessionToken: crypto.randomUUID(),
+      desktopSessionToken: crypto.randomUUID(),
+    };
+  } else if (!lanState.listConfigs[key].desktopSessionToken) {
+    lanState.listConfigs[key].desktopSessionToken = crypto.randomUUID();
+  }
+  return lanState.listConfigs[key];
+}
+
+function getEmbeddedControlPagesCountByList() {
+  const mobileByList = {};
+  const desktopByList = {};
+  const totalByList = {};
+  for (const meta of sseClientMeta.values()) {
+    const lid = meta.listId || 'all';
+    if (meta.role === 'lan_control' || meta.role === 'control') {
+      mobileByList[lid] = (mobileByList[lid] || 0) + 1;
+      totalByList[lid] = (totalByList[lid] || 0) + 1;
+    } else if (meta.role === 'lan_desktop' || meta.role === 'desktop') {
+      desktopByList[lid] = (desktopByList[lid] || 0) + 1;
+      totalByList[lid] = (totalByList[lid] || 0) + 1;
+    }
+  }
+  return { mobileByList, desktopByList, totalByList };
+}
 
 function pushFrameToEmbeddedNdiClients(dataUrl) {
   if (ndiStreamClients.size === 0 || !dataUrl) return;
@@ -281,22 +318,48 @@ function handleEmbeddedLanApi(req, res) {
   }
 
   if (pathname === '/api/lan/info' && method === 'GET') {
+    const queryStr = url.includes('?') ? url.split('?')[1] : '';
+    const params = new URLSearchParams(queryStr);
+    const requestedListId =
+      params.get('listId') ||
+      (lanState.masterState && lanState.masterState.activeListId) ||
+      'list_1';
+
+    const listConfig = getOrCreateEmbeddedListConfig(requestedListId);
     const interfaces = getLocalNetworkInterfaces();
     const primaryIp = interfaces[0]?.address || '127.0.0.1';
     const baseOrigin = `http://${primaryIp}:${activeLanPort}`;
+    const { mobileByList, desktopByList, totalByList } = getEmbeddedControlPagesCountByList();
+    const mobileControlPagesOnList =
+      (mobileByList[requestedListId] || 0) + (mobileByList['all'] || 0);
+    const desktopControlPagesOnList =
+      (desktopByList[requestedListId] || 0) + (desktopByList['all'] || 0);
+    const controlPagesOnList =
+      (totalByList[requestedListId] || 0) + (totalByList['all'] || 0);
+
     sendJson(200, {
       ip: primaryIp,
       ips: getLocalIpAddresses(),
       port: activeLanPort,
-      pin: lanState.accessPin,
-      pinRequired: lanState.pinRequired,
-      defaultPin: lanState.accessPin,
+      listId: requestedListId,
+      pin: listConfig.pin,
+      pinRequired: listConfig.pinRequired,
+      sessionToken: listConfig.sessionToken,
+      desktopSessionToken: listConfig.desktopSessionToken,
+      defaultPin: listConfig.pin,
+      listConfigs: lanState.listConfigs,
       interfaces,
-      controlUrl: `${baseOrigin}/?display=lan_control`,
-      displayUrl: `${baseOrigin}/?display=lan_display`,
+      controlUrl: `${baseOrigin}/?display=lan_control&listId=${encodeURIComponent(requestedListId)}&id=${encodeURIComponent(listConfig.sessionToken)}`,
+      mobileControlUrl: `${baseOrigin}/?display=lan_control&listId=${encodeURIComponent(requestedListId)}&id=${encodeURIComponent(listConfig.sessionToken)}`,
+      desktopControlUrl: `${baseOrigin}/?display=lan_desktop&listId=${encodeURIComponent(requestedListId)}&id=${encodeURIComponent(listConfig.desktopSessionToken)}`,
+      displayUrl: `${baseOrigin}/?display=lan_display&listId=${encodeURIComponent(requestedListId)}&id=${encodeURIComponent(listConfig.sessionToken)}`,
       ndiStreamUrl: `${baseOrigin}/?display=ndi`,
       hasMaster: Boolean(lanState.masterState),
       connectedClients: sseClients.size,
+      controlPagesOnList,
+      mobileControlPagesOnList,
+      desktopControlPagesOnList,
+      controlPagesByList: totalByList,
       ndiStream: {
         active: lanState.ndiStream.active,
         multiMode: lanState.ndiStream.multiMode,
@@ -312,6 +375,31 @@ function handleEmbeddedLanApi(req, res) {
 
   if (pathname === '/api/lan/pin' && method === 'POST') {
     readBody().then((body) => {
+      const targetListId = typeof body.listId === 'string' && body.listId ? body.listId : '';
+      if (targetListId) {
+        const cfg = getOrCreateEmbeddedListConfig(targetListId);
+        if (typeof body.pin === 'string') {
+          cfg.pin = body.pin.trim() || '1234';
+        }
+        if (typeof body.pinRequired === 'boolean') {
+          cfg.pinRequired = body.pinRequired;
+        }
+        if (body.regenerateToken) {
+          cfg.sessionToken = crypto.randomUUID();
+          cfg.desktopSessionToken = crypto.randomUUID();
+        }
+        sendJson(200, {
+          success: true,
+          listId: targetListId,
+          pin: cfg.pin,
+          pinRequired: cfg.pinRequired,
+          sessionToken: cfg.sessionToken,
+          desktopSessionToken: cfg.desktopSessionToken,
+          listConfigs: lanState.listConfigs,
+        });
+        return;
+      }
+
       if (typeof body.pin === 'string') {
         lanState.accessPin = body.pin.trim() || '1234';
       }
@@ -329,16 +417,22 @@ function handleEmbeddedLanApi(req, res) {
 
   if (pathname === '/api/lan/verify-pin' && method === 'POST') {
     readBody().then((body) => {
-      if (!lanState.pinRequired || String(body.pin).trim() === lanState.accessPin) {
+      const targetListId = typeof body.listId === 'string' && body.listId ? body.listId : '';
+      const cfg = targetListId ? getOrCreateEmbeddedListConfig(targetListId) : null;
+      const effectivePinRequired = cfg ? cfg.pinRequired : lanState.pinRequired;
+      const effectivePin = cfg ? cfg.pin : lanState.accessPin;
+
+      if (!effectivePinRequired || String(body.pin || '').trim() === effectivePin) {
         sendJson(200, {
           valid: true,
+          listId: targetListId || undefined,
           token: `auth_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         });
       } else {
         sendJson(401, {
           valid: false,
           error:
-            'Invalid Access PIN. Please verify the PIN displayed on the ProTimer Master console.',
+            'Invalid Access PIN. Please verify the Access PIN for this list on the ProTimer console.',
         });
       }
     });
@@ -395,16 +489,25 @@ function handleEmbeddedLanApi(req, res) {
   }
 
   if (pathname === '/api/lan/state' && method === 'GET') {
+    const queryStr = url.includes('?') ? url.split('?')[1] : '';
+    const params = new URLSearchParams(queryStr);
+    const reqListId = params.get('listId') || '';
+    const cfg = reqListId ? getOrCreateEmbeddedListConfig(reqListId) : null;
     sendJson(200, {
       state: lanState.masterState,
       timers: lanState.timers,
-      pinRequired: lanState.pinRequired,
+      pinRequired: cfg ? cfg.pinRequired : lanState.pinRequired,
       timestamp: Date.now(),
     });
     return true;
   }
 
   if (pathname === '/api/lan/stream' && method === 'GET') {
+    const queryStr = url.includes('?') ? url.split('?')[1] : '';
+    const params = new URLSearchParams(queryStr);
+    const clientListId = params.get('listId') || '';
+    const clientRole = params.get('role') || 'master';
+
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache, no-transform',
@@ -419,8 +522,10 @@ function handleEmbeddedLanApi(req, res) {
       })}\n\n`
     );
     sseClients.add(res);
+    sseClientMeta.set(res, { listId: clientListId, role: clientRole });
     req.on('close', () => {
       sseClients.delete(res);
+      sseClientMeta.delete(res);
     });
     return true;
   }
@@ -428,10 +533,18 @@ function handleEmbeddedLanApi(req, res) {
   if (pathname === '/api/lan/command' && method === 'POST') {
     readBody().then((body) => {
       const clientPin = String(body.pin || '').trim();
-      if (lanState.pinRequired && clientPin !== lanState.accessPin) {
+      const cmdListId =
+        (typeof body.listId === 'string' && body.listId) ||
+        (body.payload && typeof body.payload.listId === 'string' && body.payload.listId) ||
+        '';
+      const cfg = cmdListId ? getOrCreateEmbeddedListConfig(cmdListId) : null;
+      const effectivePinRequired = cfg ? cfg.pinRequired : lanState.pinRequired;
+      const effectivePin = cfg ? cfg.pin : lanState.accessPin;
+
+      if (effectivePinRequired && clientPin !== effectivePin) {
         sendJson(401, {
           success: false,
-          error: 'Unauthorized: Valid Access PIN required to issue commands',
+          error: 'Unauthorized: Valid Access PIN required to issue commands for this list',
         });
         return;
       }
@@ -1864,6 +1977,7 @@ ipcMain.handle('user-data-write', async (_event, data) => {
 ipcMain.handle('get-app-info', async () => {
   return {
     name: APP_NAME,
+    company: APP_COMPANY,
     version: APP_VERSION,
     appId: APP_ID,
     userDataPath: app.getPath('userData'),
