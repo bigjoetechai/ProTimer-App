@@ -31,14 +31,22 @@ import {
 interface FullscreenDisplayProps {
   onClose?: () => void;
   isClient?: boolean;
+  listId?: string;
 }
 
 export const FullscreenDisplay: React.FC<FullscreenDisplayProps> = ({
   onClose,
   isClient = true,
+  listId,
 }) => {
   const { payload } = useDisplaySync(isClient);
   const localPrefs = useLivePreferences(payload?.preferences);
+
+  const pinnedListId =
+    listId ||
+    (typeof window !== 'undefined'
+      ? new URLSearchParams(window.location.search).get('listId') || undefined
+      : undefined);
 
   // Handle Escape key to safely close/exit fullscreen without stopping timers
   useEffect(() => {
@@ -50,7 +58,7 @@ export const FullscreenDisplay: React.FC<FullscreenDisplayProps> = ({
           return;
         }
         if (typeof window !== 'undefined' && window.electronAPI?.closeFullscreenOutput) {
-          window.electronAPI.closeFullscreenOutput();
+          window.electronAPI.closeFullscreenOutput(pinnedListId);
         } else if (document.fullscreenElement) {
           document.exitFullscreen().catch(() => {});
         } else {
@@ -61,7 +69,7 @@ export const FullscreenDisplay: React.FC<FullscreenDisplayProps> = ({
 
     window.addEventListener('keydown', handleKeyDown, true);
     return () => window.removeEventListener('keydown', handleKeyDown, true);
-  }, [onClose]);
+  }, [onClose, pinnedListId]);
 
   if (!payload) {
     return (
@@ -78,17 +86,23 @@ export const FullscreenDisplay: React.FC<FullscreenDisplayProps> = ({
   const fsExtras = getTargetExtras(localPrefs, 'fullscreen_ndi_preview');
   const textShadowStyle = getTargetShadowCss(fsExtras);
 
-  // Resolve active list's independent background image (or global default; '' when none or removed -> pure black)
-  const activeListId = payload.activeListId || 'list_1';
+  // Resolve target list's state (locked to pinnedListId when opened for a specific list tab)
+  const targetListId = pinnedListId || payload.activeListId || 'list_1';
+  const listCue = pinnedListId
+    ? payload.listActiveCues?.find((c) => c.listId === pinnedListId)
+    : undefined;
+
+  // Resolve target list's independent background image (or global default; '' when none or removed -> pure black)
   const hasExplicitListBgEntry = Boolean(
     localPrefs.listBackgroundImages &&
-      Object.prototype.hasOwnProperty.call(localPrefs.listBackgroundImages, activeListId)
+      Object.prototype.hasOwnProperty.call(localPrefs.listBackgroundImages, targetListId)
   );
-  const resolvedFromPrefs = sanitizeImageUrl(resolveBackgroundImageForList(localPrefs, activeListId));
+  const resolvedFromPrefs = sanitizeImageUrl(resolveBackgroundImageForList(localPrefs, targetListId));
+  const fallbackBgUrl = listCue ? listCue.backgroundImageUrl : payload.backgroundImageUrl;
   const activeBackgroundImageUrl =
     hasExplicitListBgEntry && !resolvedFromPrefs
       ? ''
-      : resolvedFromPrefs || sanitizeImageUrl(payload.backgroundImageUrl);
+      : resolvedFromPrefs || sanitizeImageUrl(fallbackBgUrl);
 
   const backgroundFit = payload.backgroundFit || localPrefs.backgroundFit || 'cover';
   const backgroundOpacity =
@@ -96,13 +110,14 @@ export const FullscreenDisplay: React.FC<FullscreenDisplayProps> = ({
 
   const hasExplicitListLogoEntry = Boolean(
     localPrefs.listLogoImages &&
-      Object.prototype.hasOwnProperty.call(localPrefs.listLogoImages, activeListId)
+      Object.prototype.hasOwnProperty.call(localPrefs.listLogoImages, targetListId)
   );
-  const resolvedLogoFromPrefs = sanitizeImageUrl(resolveLogoImageForList(localPrefs, activeListId));
+  const resolvedLogoFromPrefs = sanitizeImageUrl(resolveLogoImageForList(localPrefs, targetListId));
+  const fallbackLogoUrl = listCue ? listCue.logoImageUrl : payload.logoImageUrl;
   const activeLogoUrl =
     hasExplicitListLogoEntry && !resolvedLogoFromPrefs
       ? ''
-      : resolvedLogoFromPrefs || sanitizeImageUrl(payload.logoImageUrl);
+      : resolvedLogoFromPrefs || sanitizeImageUrl(fallbackLogoUrl);
 
   const { outerStyle, innerTransformStyle } = getTargetCanvasStyles(
     fsExtras,
@@ -178,9 +193,17 @@ export const FullscreenDisplay: React.FC<FullscreenDisplayProps> = ({
     );
   }
 
-  const isOvertime = payload.isOvertime;
+  const isOvertime = listCue ? listCue.isOvertime : payload.isOvertime;
+  const secondsRemaining = listCue ? listCue.secondsRemaining : payload.secondsRemaining;
+  const activeAlertLevel = listCue ? listCue.activeAlertLevel : payload.activeAlertLevel;
+  const alertColor = listCue ? listCue.alertColor : payload.alertColor;
+  const alertFlash = listCue ? listCue.alertFlash : payload.alertFlash;
+  const alertOnOff = listCue ? listCue.alertOnOff : payload.alertOnOff;
+  const activeTimer = listCue ? listCue.activeTimer : payload.activeTimer;
+  const progressPercent = listCue ? listCue.progressPercent : payload.progressPercent;
+
   const formattedCountdown = formatSeconds(
-    payload.secondsRemaining,
+    secondsRemaining,
     true,
     isOvertime,
     localPrefs
@@ -191,8 +214,8 @@ export const FullscreenDisplay: React.FC<FullscreenDisplayProps> = ({
 
   const resolvedDigitColor = resolveDisplayDigitColor({
     isOvertime,
-    activeAlertLevel: payload.activeAlertLevel,
-    alertColor: payload.alertColor,
+    activeAlertLevel,
+    alertColor,
     prefs: localPrefs,
   });
 
@@ -239,9 +262,9 @@ export const FullscreenDisplay: React.FC<FullscreenDisplayProps> = ({
             } ${
               isOvertime
                 ? 'animate-overtime-blink'
-                : payload.alertOnOff
+                : alertOnOff
                 ? 'animate-overtime-blink'
-                : payload.alertFlash && localPrefs.flashAlertsEnabled !== false
+                : alertFlash && localPrefs.flashAlertsEnabled !== false
                 ? 'animate-pulse'
                 : ''
             }`}
@@ -278,16 +301,16 @@ export const FullscreenDisplay: React.FC<FullscreenDisplayProps> = ({
                 fontSize: `calc(clamp(1.35rem, 3.4vw, 3.25rem) * ${nameScale})`,
               }}
             >
-              {payload.activeTimer?.name || 'STANDBY'}
+              {activeTimer?.name || 'STANDBY'}
             </span>
-            {payload.activeTimer?.endTime && (
+            {activeTimer?.endTime && (
               <span
                 className="text-neutral-300 mt-0.5"
                 style={{
                   fontSize: `calc(clamp(0.75rem, 1.4vw, 1.25rem) * ${nameScale})`,
                 }}
               >
-                Ends at: <span className="text-white font-bold">{payload.activeTimer.endTime}</span>
+                Ends at: <span className="text-white font-bold">{activeTimer.endTime}</span>
               </span>
             )}
           </div>
@@ -350,7 +373,7 @@ export const FullscreenDisplay: React.FC<FullscreenDisplayProps> = ({
           >
             <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-1.5">
               {payload.timerList.slice(0, 6).map((t, i) => {
-                const isCurrent = t.id === payload.activeTimer?.id;
+                const isCurrent = t.id === activeTimer?.id;
                 return (
                   <div
                     key={t.id}
@@ -372,8 +395,8 @@ export const FullscreenDisplay: React.FC<FullscreenDisplayProps> = ({
       case 'slide_text': {
         if (!slideTextCfg?.visible) return null;
         const text =
-          payload.activeTimer?.notes ||
-          payload.activeTimer?.name ||
+          activeTimer?.notes ||
+          activeTimer?.name ||
           '';
         if (!text) return null;
         return (
@@ -407,7 +430,7 @@ export const FullscreenDisplay: React.FC<FullscreenDisplayProps> = ({
           >
             <div
               className="h-full bg-cyan-400 transition-all duration-300"
-              style={{ width: `${Math.min(100, Math.max(0, payload.progressPercent))}%` }}
+              style={{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }}
             />
           </div>
         );
@@ -427,13 +450,13 @@ export const FullscreenDisplay: React.FC<FullscreenDisplayProps> = ({
           >
             <div
               className={`h-full transition-all duration-300 ${
-                isOvertime || payload.activeAlertLevel === 'danger'
+                isOvertime || activeAlertLevel === 'danger'
                   ? 'bg-red-500'
-                  : payload.activeAlertLevel === 'warning'
+                  : activeAlertLevel === 'warning'
                   ? 'bg-amber-500'
                   : 'bg-emerald-500'
               }`}
-              style={{ width: `${Math.min(100, Math.max(0, payload.progressPercent))}%` }}
+              style={{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }}
             />
           </div>
         );

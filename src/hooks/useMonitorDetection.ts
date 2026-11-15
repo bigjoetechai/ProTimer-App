@@ -1,19 +1,22 @@
 /**
- * React hook for native Windows multiple-monitor detection and independent Fullscreen / Multi FS outputs.
+ * React hook for native Windows multiple-monitor detection and independent per-list Fullscreen / Multi FS outputs.
  */
 
 import { useState, useEffect, useCallback } from 'react';
 import { DetectedMonitor, DisplayTarget } from '../types';
 import { monitorDetectionService } from '../services';
 
-export function useMonitorDetection() {
+export function useMonitorDetection(activeListId?: string) {
   const [displays, setDisplays] = useState<DetectedMonitor[]>(() =>
     monitorDetectionService.getDisplays()
   );
-  const [selectedMonitorId, setSelectedMonitorIdState] = useState<string>(() =>
-    monitorDetectionService.getSelectedMonitorId()
+  const [selectedMonitorsByList, setSelectedMonitorsByList] = useState<Record<string, string>>(
+    () => monitorDetectionService.getSelectedMonitorsByList()
   );
-  const [isFullscreenActive, setIsFullscreenActive] = useState<boolean>(() =>
+  const [activeFullscreenByList, setActiveFullscreenByList] = useState<Record<string, boolean>>(
+    () => monitorDetectionService.getActiveFullscreenByList()
+  );
+  const [isAnyFullscreenActive, setIsAnyFullscreenActive] = useState<boolean>(() =>
     monitorDetectionService.isOutputActive()
   );
   const [isMultiFullscreenActive, setIsMultiFullscreenActive] = useState<boolean>(() =>
@@ -23,12 +26,16 @@ export function useMonitorDetection() {
   useEffect(() => {
     const unsubMonitors = monitorDetectionService.subscribeMonitors((newDisplays) => {
       setDisplays([...newDisplays]);
-      setSelectedMonitorIdState(monitorDetectionService.getSelectedMonitorId());
+      setSelectedMonitorsByList(monitorDetectionService.getSelectedMonitorsByList());
     });
 
-    const unsubOutput = monitorDetectionService.subscribeOutputState((isActive) => {
-      setIsFullscreenActive(isActive);
-    });
+    const unsubOutput = monitorDetectionService.subscribeOutputState(
+      (isActive, activeByList, monitorsByList) => {
+        setIsAnyFullscreenActive(isActive);
+        setActiveFullscreenByList({ ...activeByList });
+        setSelectedMonitorsByList({ ...monitorsByList });
+      }
+    );
 
     const unsubMultiOutput = monitorDetectionService.subscribeMultiOutputState((isActive) => {
       setIsMultiFullscreenActive(isActive);
@@ -41,27 +48,52 @@ export function useMonitorDetection() {
     };
   }, []);
 
-  const setSelectedMonitor = useCallback((id: string) => {
-    setSelectedMonitorIdState(id);
-    monitorDetectionService.setSelectedMonitorId(id);
-  }, []);
+  const currentListKey = activeListId || 'default';
+  const selectedMonitorId = selectedMonitorsByList[currentListKey] || 'Auto';
+  const isFullscreenActive = Boolean(activeFullscreenByList[currentListKey]);
 
-  const openFullscreen = useCallback(
-    async (monitorId?: string, target: DisplayTarget = 'fullscreen') => {
-      return monitorDetectionService.openFullscreen(monitorId || selectedMonitorId, target);
+  const setSelectedMonitor = useCallback(
+    (monitorId: string, listId?: string) => {
+      const targetList = listId || currentListKey;
+      monitorDetectionService.setSelectedMonitorId(monitorId, targetList);
     },
-    [selectedMonitorId]
+    [currentListKey]
   );
 
-  const closeFullscreen = useCallback(async () => {
-    return monitorDetectionService.closeFullscreen();
-  }, []);
+  const isListFullscreenActive = useCallback(
+    (listId: string) => Boolean(activeFullscreenByList[listId]),
+    [activeFullscreenByList]
+  );
+
+  const getSelectedMonitorForList = useCallback(
+    (listId: string) => selectedMonitorsByList[listId] || 'Auto',
+    [selectedMonitorsByList]
+  );
+
+  const openFullscreen = useCallback(
+    async (monitorId?: string, target: DisplayTarget = 'fullscreen', listId?: string) => {
+      const targetList = listId || currentListKey;
+      const targetMon = monitorId || selectedMonitorsByList[targetList] || 'Auto';
+      return monitorDetectionService.openFullscreen(targetMon, target, targetList);
+    },
+    [currentListKey, selectedMonitorsByList]
+  );
+
+  const closeFullscreen = useCallback(
+    async (listId?: string) => {
+      const targetList = listId || currentListKey;
+      return monitorDetectionService.closeFullscreen(targetList);
+    },
+    [currentListKey]
+  );
 
   const toggleFullscreen = useCallback(
-    async (monitorId?: string) => {
-      return monitorDetectionService.toggleFullscreen(monitorId || selectedMonitorId);
+    async (monitorId?: string, listId?: string) => {
+      const targetList = listId || currentListKey;
+      const targetMon = monitorId || selectedMonitorsByList[targetList] || 'Auto';
+      return monitorDetectionService.toggleFullscreen(targetMon, targetList);
     },
-    [selectedMonitorId]
+    [currentListKey, selectedMonitorsByList]
   );
 
   const openMultiFullscreen = useCallback(
@@ -85,8 +117,13 @@ export function useMonitorDetection() {
   return {
     displays,
     selectedMonitorId,
+    selectedMonitorsByList,
     setSelectedMonitor,
+    getSelectedMonitorForList,
     isFullscreenActive,
+    isAnyFullscreenActive,
+    activeFullscreenByList,
+    isListFullscreenActive,
     openFullscreen,
     closeFullscreen,
     toggleFullscreen,

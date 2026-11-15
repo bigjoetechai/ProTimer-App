@@ -138,11 +138,15 @@ export interface ElectronAPI {
   openFullscreenOutput: (options: {
     monitorId: string | number;
     displayTarget?: DisplayTarget;
-  }) => Promise<{ success: boolean; displayId: number | string; error?: string }>;
-  closeFullscreenOutput: () => Promise<boolean>;
-  isFullscreenOutputActive: () => Promise<boolean>;
+    listId?: string;
+  }) => Promise<{ success: boolean; displayId: number | string; listId?: string; error?: string }>;
+  closeFullscreenOutput: (listId?: string) => Promise<boolean>;
+  isFullscreenOutputActive: (listId?: string) => Promise<boolean>;
+  getActiveFullscreenLists?: () => Promise<string[]>;
   onDisplaysChanged: (callback: (displays: DetectedMonitor[]) => void) => () => void;
-  onOutputClosed: (callback: () => void) => () => void;
+  onOutputClosed: (
+    callback: (info?: { listId?: string | null; activeListIds?: string[] }) => void
+  ) => () => void;
 
   // Independent Multi Fullscreen Output
   openMultiFullscreenOutput?: (options?: {

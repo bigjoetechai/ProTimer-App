@@ -48,10 +48,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // ===========================================================================
 
   /**
-   * Open or move dedicated fullscreen output window to target monitor.
+   * Open or move dedicated fullscreen output window to target monitor for a specific list tab.
    * @param {Object} options
    * @param {string|number} options.monitorId
    * @param {string} [options.displayTarget='fullscreen']
+   * @param {string} [options.listId]
    */
   openFullscreenOutput: (options = {}) => {
     const monitorId =
@@ -62,26 +63,43 @@ contextBridge.exposeInMainWorld('electronAPI', {
       options && typeof options.displayTarget === 'string' && VALID_DISPLAY_TARGETS.has(options.displayTarget)
         ? options.displayTarget
         : 'fullscreen';
-    return ipcRenderer.invoke('open-fullscreen-output', { monitorId, displayTarget });
+    const listId =
+      options && typeof options.listId === 'string' && options.listId.trim()
+        ? options.listId.trim()
+        : undefined;
+    return ipcRenderer.invoke('open-fullscreen-output', { monitorId, displayTarget, listId });
   },
 
   /**
-   * Close the fullscreen output window without affecting running timers.
+   * Close the fullscreen output window (for a specific list tab or all) without affecting running timers.
+   * @param {string} [listId]
    */
-  closeFullscreenOutput: () => ipcRenderer.invoke('close-fullscreen-output'),
+  closeFullscreenOutput: (listId) => {
+    const safeListId = typeof listId === 'string' && listId.trim() ? listId.trim() : undefined;
+    return ipcRenderer.invoke('close-fullscreen-output', safeListId);
+  },
 
   /**
-   * Check if fullscreen output window is currently active.
+   * Check if fullscreen output window is currently active (optionally for a specific list tab).
+   * @param {string} [listId]
    */
-  isFullscreenOutputActive: () => ipcRenderer.invoke('is-fullscreen-output-active'),
+  isFullscreenOutputActive: (listId) => {
+    const safeListId = typeof listId === 'string' && listId.trim() ? listId.trim() : undefined;
+    return ipcRenderer.invoke('is-fullscreen-output-active', safeListId);
+  },
 
   /**
-   * Listen for when the output window is closed (e.g. by Escape key or user).
+   * Get all list IDs that currently have an active fullscreen output window.
+   */
+  getActiveFullscreenLists: () => ipcRenderer.invoke('get-active-fullscreen-lists'),
+
+  /**
+   * Listen for when a fullscreen output window is closed (e.g. by Escape key or user).
    * @param {Function} callback
    */
   onOutputClosed: (callback) => {
     if (typeof callback !== 'function') return () => {};
-    const handler = () => callback();
+    const handler = (_event, info) => callback(info);
     ipcRenderer.on('output-closed', handler);
     return () => {
       ipcRenderer.removeListener('output-closed', handler);

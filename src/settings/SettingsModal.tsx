@@ -2573,9 +2573,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     >
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
                         <div>
-                          <span className="text-neutral-500 block">Source Name</span>
-                          <span className="font-mono font-semibold">
-                            {ndiStatus.active
+                          <span className="text-neutral-500 block">Network NDI Name</span>
+                          <span className="font-mono font-semibold text-cyan-400">
+                            {ndiStatus.nativeNdi?.hostname
+                              ? `${ndiStatus.nativeNdi.hostname} (${
+                                  ndiStatus.active
+                                    ? ndiStatus.sourceName
+                                    : prefs.ndiSourceName || 'ProTimer (Main Output)'
+                                })`
+                              : ndiStatus.active
                               ? ndiStatus.sourceName
                               : prefs.ndiSourceName || 'ProTimer (Main Output)'}
                           </span>
@@ -2606,17 +2612,86 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         </div>
                       </div>
 
+                      {/* Native NDI® Runtime (Processing.NDI.Lib.x64.dll) Diagnostic Banner */}
+                      <div
+                        className={`p-2.5 rounded border text-[11px] space-y-1.5 ${
+                          ndiStatus.nativeNdi?.nativeNdiAvailable
+                            ? isDark
+                              ? 'bg-emerald-950/30 border-emerald-500/40 text-emerald-200'
+                              : 'bg-emerald-50 border-emerald-300 text-emerald-900'
+                            : isDark
+                            ? 'bg-amber-950/30 border-amber-500/40 text-amber-200'
+                            : 'bg-amber-50 border-amber-300 text-amber-900'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="font-semibold flex items-center gap-1.5">
+                            <span
+                              className={`w-2 h-2 rounded-full ${
+                                ndiStatus.nativeNdi?.nativeNdiAvailable
+                                  ? 'bg-emerald-400'
+                                  : 'bg-amber-400'
+                              }`}
+                            />
+                            <span>
+                              {ndiStatus.nativeNdi?.nativeNdiAvailable
+                                ? `Native NDI® Runtime Ready (${ndiStatus.nativeNdi.ndiVersion || 'Processing.NDI.Lib.x64.dll'})`
+                                : 'Windows NDI® Runtime Required for Native NDI Discovery'}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => ndiStreamService.refreshDiagnostics()}
+                            className={`px-2 py-0.5 rounded text-[10px] font-semibold border cursor-pointer ${
+                              isDark
+                                ? 'bg-[#141c2b] hover:bg-[#1d283d] border-[#2b3a55] text-cyan-300'
+                                : 'bg-white hover:bg-slate-100 border-slate-300 text-cyan-700'
+                            }`}
+                          >
+                            Re-Scan Runtime
+                          </button>
+                        </div>
+
+                        {ndiStatus.nativeNdi?.nativeNdiAvailable ? (
+                          <div className="text-[10.5px] opacity-90 font-mono truncate">
+                            Loaded DLL: {ndiStatus.nativeNdi.dllPath} • Active NDI Receivers:{' '}
+                            {ndiStatus.receiversCount || 0}
+                          </div>
+                        ) : (
+                          <div className="text-[11px] leading-relaxed space-y-1">
+                            <p>
+                              To make <strong>{prefs.ndiSourceName || 'ProTimer (Main Output)'}</strong>{' '}
+                              automatically appear in the NDI source dropdown of{' '}
+                              <strong>OBS Studio, vMix, ProPresenter, NDI Studio Monitor, and Resolume</strong>{' '}
+                              on your network:
+                            </p>
+                            <ol className="list-decimal list-inside space-y-0.5 font-mono text-[10.5px]">
+                              <li>
+                                Install the free official <strong>NDI 6 Runtime</strong> on this Windows PC:{' '}
+                                <span className="text-cyan-400 select-all">http://ndi.link/NDIRedistV6</span>{' '}
+                                (or install <strong>NDI Tools</strong> from{' '}
+                                <span className="text-cyan-400 select-all">https://ndi.video/tools/</span>)
+                              </li>
+                              <li>
+                                Ensure your Windows network is set to <strong>Private Network</strong> and allow{' '}
+                                <strong>ProTimer</strong> (UDP 5353 mDNS &amp; TCP 5960–5970) through Windows Firewall.
+                              </li>
+                            </ol>
+                          </div>
+                        )}
+                      </div>
+
                       <div
                         className={`pt-2 border-t space-y-1.5 ${
                           isDark ? 'border-[#1a2232]' : 'border-slate-200'
                         }`}
                       >
                         <div className="text-[11px] text-neutral-400">
-                          Click the <strong>NDI</strong> or <strong>NDI Multi</strong> button on the bottom bar (or the button above) to broadcast directly over the network without opening a popup display window. Capture on another computer using:
+                          Click the <strong>NDI</strong> or <strong>NDI Multi</strong> button on the bottom bar (or the button above) to broadcast directly over the network without opening a popup display window. Direct network stream URLs:
                         </div>
                         <div className="grid grid-cols-1 gap-1.5 text-[11px] font-mono">
                           <div className="flex items-center justify-between gap-2 px-2 py-1 rounded bg-black/25">
-                            <span className="text-cyan-400 truncate">
+                            <span className="text-cyan-400 truncate select-all">
                               MJPEG Video Stream:{' '}
                               {ndiStatus.ips && ndiStatus.ips.length > 0
                                 ? `http://${ndiStatus.ips[0]}:${ndiStatus.port || 3000}/api/lan/ndi/mjpeg`
@@ -2624,7 +2699,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             </span>
                           </div>
                           <div className="flex items-center justify-between gap-2 px-2 py-1 rounded bg-black/25">
-                            <span className="text-emerald-400 truncate">
+                            <span className="text-emerald-400 truncate select-all">
                               Clean Alpha NDI Feed:{' '}
                               {ndiStatus.ips && ndiStatus.ips.length > 0
                                 ? `http://${ndiStatus.ips[0]}:${ndiStatus.port || 3000}/?display=ndi`

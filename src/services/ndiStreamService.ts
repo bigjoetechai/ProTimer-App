@@ -22,6 +22,20 @@ import {
 } from '../utilities/displayStyleHelper';
 import { formatClock, formatDate, formatSeconds } from '../utilities/timeFormatters';
 
+export interface NdiNativeDiagnostics {
+  nativeNdiAvailable: boolean;
+  nativeNdiSending: boolean;
+  dllPath: string | null;
+  ndiVersion: string | null;
+  networkSourceFullName: string;
+  hostname: string;
+  connectedReceivers: number;
+  mdnsActive: boolean;
+  error: string | null;
+  downloadUrl: string;
+  toolsUrl: string;
+}
+
 export interface NdiStreamStatus {
   active: boolean;
   mode: 'single' | 'multi';
@@ -37,6 +51,7 @@ export interface NdiStreamStatus {
   frameCount: number;
   ips: string[];
   port: number;
+  nativeNdi?: NdiNativeDiagnostics;
 }
 
 export type NdiStreamSubscriber = (status: NdiStreamStatus) => void;
@@ -67,6 +82,7 @@ class NdiStreamService {
   private frameCount = 0;
   private ips: string[] = [];
   private port = 3000;
+  private nativeNdi: NdiNativeDiagnostics | undefined = undefined;
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -89,6 +105,10 @@ class NdiStreamService {
     }
   }
 
+  public async refreshDiagnostics(): Promise<void> {
+    await this.fetchNetworkInfo();
+  }
+
   private async fetchNetworkInfo(): Promise<void> {
     if (typeof window === 'undefined') return;
     try {
@@ -99,6 +119,9 @@ class NdiStreamService {
         if (typeof data.port === 'number') this.port = data.port;
         if (typeof data.receiversCount === 'number') this.receiversCount = data.receiversCount;
         if (typeof data.frameCount === 'number') this.frameCount = data.frameCount;
+        if (data.nativeNdi && typeof data.nativeNdi === 'object') {
+          this.nativeNdi = data.nativeNdi;
+        }
         this.notifySubscribers();
       }
     } catch {
@@ -137,6 +160,7 @@ class NdiStreamService {
           ? [window.location.hostname]
           : ['127.0.0.1'],
       port: this.port,
+      nativeNdi: this.nativeNdi,
     };
   }
 
@@ -226,6 +250,10 @@ class NdiStreamService {
         if (data.ndiStream && typeof data.ndiStream.frameCount === 'number') {
           this.frameCount = data.ndiStream.frameCount;
         }
+        if (data.nativeNdi && typeof data.nativeNdi === 'object') {
+          this.nativeNdi = data.nativeNdi;
+        }
+        this.notifySubscribers();
       }
     } catch {
       // Ignore network error
@@ -604,10 +632,38 @@ class NdiStreamService {
       // use high-speed JPEG/WebP when opaque for ultra-low network latency
       const mime = alphaChannel ? 'image/png' : 'image/jpeg';
       const frameDataUrl = this.canvas.toDataURL(mime, alphaChannel ? undefined : 0.85);
+      let rawRgbaBase64: string | undefined;
+      const w = this.canvas.width;
+      const h = this.canvas.height;
+
+      if (this.nativeNdi?.nativeNdiAvailable && w > 0 && h > 0) {
+        try {
+          const ctx = this.canvas.getContext('2d');
+          if (ctx) {
+            const imgData = ctx.getImageData(0, 0, w, h);
+            const bytes = imgData.data;
+            let binary = '';
+            const chunkSize = 0x8000;
+            for (let i = 0; i < bytes.length; i += chunkSize) {
+              const sub = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
+              binary += String.fromCharCode.apply(null, sub as unknown as number[]);
+            }
+            rawRgbaBase64 = btoa(binary);
+          }
+        } catch {
+          // Ignore raw extraction error
+        }
+      }
+
       const res = await fetch('/api/lan/ndi/frame', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ frameDataUrl }),
+        body: JSON.stringify({
+          frameDataUrl,
+          rawRgbaBase64,
+          width: w,
+          height: h,
+        }),
       });
       if (res.ok) {
         const data = await res.json();

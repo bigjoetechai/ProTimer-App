@@ -140,7 +140,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   const dividerBg = isDark ? 'bg-[#1b2333]' : 'bg-slate-300';
 
   return (
-    <div className={`${containerBg} px-3 sm:px-4 py-2 flex flex-nowrap items-center justify-between gap-2 xl:gap-6 overflow-x-auto select-none relative min-w-0 transition-colors duration-150`}>
+    <div className={`${containerBg} px-3 sm:px-4 py-2 flex flex-nowrap items-center justify-start gap-3.5 overflow-x-auto select-none relative min-w-0 transition-colors duration-150`}>
       {/* =========================================================================
           SECTION 1: CONTROLS
           Buttons: Start, Stop, Cue/Move, Pause, Restart (+ Lap for Stopwatch)
@@ -296,13 +296,13 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
       </div>
 
       {/* Subtle Vertical Hairline Divider */}
-      <div className={`hidden lg:block w-px h-14 ${dividerBg}`} />
+      <div className={`w-px h-14 shrink-0 ${dividerBg}`} />
 
       {/* =========================================================================
           SECTION 2: CHANGE DURATION
           Large digital timer display, Increase (+), Decrease (-), Step selector
          ========================================================================= */}
-      <div className="flex items-start gap-3 shrink-0">
+      <div className="flex items-start gap-3.5 shrink-0">
         {/* 1. Large Digital Timer Display (HH:MM:SS) */}
         <div className="flex items-start">
           <DigitDisplay
@@ -490,7 +490,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
       </div>
 
       {/* Subtle Vertical Hairline Divider */}
-      <div className={`hidden lg:block w-px h-14 ${dividerBg}`} />
+      <div className={`w-px h-14 shrink-0 ${dividerBg}`} />
 
       {/* =========================================================================
           SECTION 3: DISPLAY
@@ -544,7 +544,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
       </div>
 
       {/* Subtle Vertical Hairline Divider */}
-      <div className={`hidden lg:block w-px h-14 ${dividerBg}`} />
+      <div className={`w-px h-14 shrink-0 ${dividerBg}`} />
 
       {/* =========================================================================
           SECTION 4: MESSAGE

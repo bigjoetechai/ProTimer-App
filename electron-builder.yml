@@ -10,12 +10,27 @@ directories:
 files:
   - dist/**/*
   - electron/**/*
+  - server/ndiNativeBridge.cjs
   - build/icon.ico
   - build/icon.png
   - package.json
   - "!node_modules/**/*"
+  - node_modules/koffi/index.js
+  - node_modules/koffi/package.json
+  - node_modules/koffi/build/koffi/win32_x64/**/*
+  - node_modules/koffi/build/koffi/linux_x64/**/*
 
 asar: true
+asarUnpack:
+  - node_modules/koffi/**/*
+  - server/ndiNativeBridge.cjs
+
+extraResources:
+  - from: ndi
+    to: ndi
+    filter:
+      - "**/*"
+
 compression: store
 
 win:

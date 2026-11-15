@@ -33,6 +33,7 @@ const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const { exec } = require('child_process');
+const { ndiNativeBridge } = require('../server/ndiNativeBridge.cjs');
 
 const APP_ID = 'com.protimer.desktop';
 const APP_NAME = 'ProTimer';
@@ -50,9 +51,11 @@ if (process.platform === 'win32') {
 
 let mainWindow = null;
 let outputWindow = null;
+const outputWindowsByList = new Map();
 let multiOutputWindow = null;
 let previewWindow = null;
 let presenterWindow = null;
+let ndiOffscreenWindow = null;
 let currentOutputDisplayId = null;
 const secondaryWindows = new Set();
 
@@ -88,18 +91,122 @@ const lanState = {
   pendingCommands: [],
   ndiStream: {
     active: false,
+    mode: 'single',
     multiMode: false,
-    sourceName: 'ProTimer NDI',
-    resolution: '1920x1080',
+    sourceName: 'ProTimer (Main Output)',
+    resolution: 'HD - 1920 x 1080',
+    width: 1920,
+    height: 1080,
     frameRate: 30,
     alphaChannel: false,
+    useCustomGroups: false,
+    customGroups: 'Public',
     groups: 'Public',
     startedAt: null,
+    lastFrameAt: null,
+    frameCount: 0,
     lastFrameDataUrl: null,
     lastFrameTimestamp: 0,
   },
 };
 const sseClients = new Set();
+const ndiStreamClients = new Set();
+
+function pushFrameToEmbeddedNdiClients(dataUrl) {
+  if (ndiStreamClients.size === 0 || !dataUrl) return;
+  const commaIdx = dataUrl.indexOf(',');
+  if (commaIdx === -1) return;
+  const headerPart = dataUrl.slice(0, commaIdx);
+  const base64Part = dataUrl.slice(commaIdx + 1);
+  const mimeMatch = headerPart.match(/^data:([^;]+);base64$/);
+  const contentType = mimeMatch ? mimeMatch[1] : 'image/png';
+  const buffer = Buffer.from(base64Part, 'base64');
+
+  for (const res of ndiStreamClients) {
+    try {
+      res.write('--ndi_frame\r\n');
+      res.write(`Content-Type: ${contentType}\r\n`);
+      res.write(`Content-Length: ${buffer.length}\r\n\r\n`);
+      res.write(buffer);
+      res.write('\r\n');
+    } catch {
+      ndiStreamClients.delete(res);
+    }
+  }
+}
+
+function stopElectronNdiOffscreenCapture() {
+  if (ndiOffscreenWindow && !ndiOffscreenWindow.isDestroyed()) {
+    try {
+      ndiOffscreenWindow.close();
+    } catch {
+      // Ignore close error
+    }
+  }
+  ndiOffscreenWindow = null;
+}
+
+function startElectronNdiOffscreenCapture() {
+  stopElectronNdiOffscreenCapture();
+  if (!lanState.ndiStream.active || !app.isReady()) return;
+
+  const w = Math.max(320, Number(lanState.ndiStream.width) || 1920);
+  const h = Math.max(240, Number(lanState.ndiStream.height) || 1080);
+  const fps = Math.min(60, Math.max(1, Math.round(Number(lanState.ndiStream.frameRate) || 30)));
+  const isMulti = lanState.ndiStream.mode === 'multi' || lanState.ndiStream.multiMode;
+
+  try {
+    const win = new BrowserWindow({
+      width: w,
+      height: h,
+      show: false,
+      frame: false,
+      transparent: true,
+      backgroundColor: '#00000000',
+      enableLargerThanScreen: true,
+      webPreferences: {
+        offscreen: true,
+        preload: path.join(__dirname, 'preload.cjs'),
+        contextIsolation: true,
+        nodeIntegration: false,
+        backgroundThrottling: false,
+      },
+    });
+
+    ndiOffscreenWindow = win;
+    win.setContentSize(w, h);
+    win.webContents.setFrameRate(fps);
+
+    win.webContents.on('paint', (_event, _dirty, image) => {
+      if (!lanState.ndiStream.active) return;
+      try {
+        const size = image.getSize();
+        const bitmap = image.getBitmap();
+        if (bitmap && bitmap.length >= size.width * size.height * 4) {
+          ndiNativeBridge.sendRawFrame(
+            bitmap,
+            size.width,
+            size.height,
+            'BGRA',
+            lanState.ndiStream.frameRate,
+            lanState.ndiStream.alphaChannel
+          );
+          lanState.ndiStream.frameCount += 1;
+          lanState.ndiStream.lastFrameAt = Date.now();
+        }
+      } catch {
+        // Ignore transient paint errors
+      }
+    });
+
+    const baseUrl = getBaseUrl();
+    const separator = baseUrl.includes('?') ? '&' : '?';
+    const targetDisplay = isMulti ? 'multi_fullscreen' : 'ndi';
+    win.loadURL(`${baseUrl}${separator}display=${targetDisplay}`);
+  } catch {
+    // Fallback to canvas frame push if offscreen window fails
+  }
+}
 
 function getLocalNetworkInterfaces() {
   const interfaces = os.networkInterfaces();
@@ -355,63 +462,203 @@ function handleEmbeddedLanApi(req, res) {
     return true;
   }
 
-  if (pathname === '/api/lan/ndi' && method === 'POST') {
-    readBody().then((body) => {
-      if (typeof body.active === 'boolean') {
-        lanState.ndiStream.active = body.active;
-        lanState.ndiStream.startedAt = body.active ? Date.now() : null;
-        if (!body.active) {
-          lanState.ndiStream.lastFrameDataUrl = null;
-        }
-      }
-      if (typeof body.multiMode === 'boolean') lanState.ndiStream.multiMode = body.multiMode;
-      if (typeof body.sourceName === 'string') lanState.ndiStream.sourceName = body.sourceName;
-      if (typeof body.resolution === 'string') lanState.ndiStream.resolution = body.resolution;
-      if (typeof body.frameRate === 'number') lanState.ndiStream.frameRate = body.frameRate;
-      if (typeof body.alphaChannel === 'boolean') lanState.ndiStream.alphaChannel = body.alphaChannel;
-      if (typeof body.groups === 'string') lanState.ndiStream.groups = body.groups;
-
-      broadcastSse({
-        type: 'NDI_STATUS',
-        ndiStream: {
-          active: lanState.ndiStream.active,
-          multiMode: lanState.ndiStream.multiMode,
-          sourceName: lanState.ndiStream.sourceName,
-          resolution: lanState.ndiStream.resolution,
-          frameRate: lanState.ndiStream.frameRate,
-          alphaChannel: lanState.ndiStream.alphaChannel,
-          groups: lanState.ndiStream.groups,
-          startedAt: lanState.ndiStream.startedAt,
-        },
-      });
-      sendJson(200, { success: true, ndiStream: lanState.ndiStream });
+  // GET /api/lan/ndi/status
+  if (pathname === '/api/lan/ndi/status' && method === 'GET') {
+    const ips = getLocalIpAddresses();
+    const primaryIp = ips[0] || 'localhost';
+    const nativeDiagnostics = ndiNativeBridge.getRuntimeDiagnostics();
+    const nativeReceivers = Number(nativeDiagnostics?.connectedReceivers) || 0;
+    sendJson(200, {
+      ...lanState.ndiStream,
+      ips,
+      port: activeLanPort,
+      receiversCount: ndiStreamClients.size + nativeReceivers,
+      nativeNdi: nativeDiagnostics,
+      captureUrls: {
+        browserSourceUrl: `http://${primaryIp}:${activeLanPort}/?display=ndi`,
+        mjpegStreamUrl: `http://${primaryIp}:${activeLanPort}/api/lan/ndi/mjpeg`,
+        liveFrameUrl: `http://${primaryIp}:${activeLanPort}/api/lan/ndi/frame.png`,
+      },
     });
     return true;
   }
 
+  // POST /api/lan/ndi/config or POST /api/lan/ndi
+  if ((pathname === '/api/lan/ndi/config' || pathname === '/api/lan/ndi') && method === 'POST') {
+    readBody().then((body) => {
+      const wasActive = lanState.ndiStream.active;
+      const nextActive =
+        typeof body.active === 'boolean' ? body.active : lanState.ndiStream.active;
+
+      lanState.ndiStream.active = nextActive;
+      if (body.mode === 'multi' || body.multiMode === true) {
+        lanState.ndiStream.mode = 'multi';
+        lanState.ndiStream.multiMode = true;
+      } else if (body.mode === 'single' || body.multiMode === false) {
+        lanState.ndiStream.mode = 'single';
+        lanState.ndiStream.multiMode = false;
+      }
+      if (typeof body.sourceName === 'string' && body.sourceName.trim()) {
+        lanState.ndiStream.sourceName = body.sourceName.trim();
+      }
+      if (typeof body.resolution === 'string') {
+        lanState.ndiStream.resolution = body.resolution;
+      }
+      if (typeof body.width === 'number') {
+        lanState.ndiStream.width = body.width;
+      }
+      if (typeof body.height === 'number') {
+        lanState.ndiStream.height = body.height;
+      }
+      if (typeof body.frameRate === 'number') {
+        lanState.ndiStream.frameRate = body.frameRate;
+      }
+      if (typeof body.alphaChannel === 'boolean') {
+        lanState.ndiStream.alphaChannel = body.alphaChannel;
+      }
+      if (typeof body.useCustomGroups === 'boolean') {
+        lanState.ndiStream.useCustomGroups = body.useCustomGroups;
+      }
+      if (typeof body.customGroups === 'string') {
+        lanState.ndiStream.customGroups = body.customGroups;
+        lanState.ndiStream.groups = body.customGroups;
+      } else if (typeof body.groups === 'string') {
+        lanState.ndiStream.groups = body.groups;
+        lanState.ndiStream.customGroups = body.groups;
+      }
+
+      lanState.ndiStream.startedAt = nextActive
+        ? wasActive
+          ? lanState.ndiStream.startedAt
+          : Date.now()
+        : null;
+
+      let nativeDiagnostics;
+      if (nextActive) {
+        nativeDiagnostics = ndiNativeBridge.startSender({
+          sourceName: lanState.ndiStream.sourceName,
+          groups: lanState.ndiStream.customGroups,
+          useCustomGroups: lanState.ndiStream.useCustomGroups,
+          width: lanState.ndiStream.width,
+          height: lanState.ndiStream.height,
+          frameRate: lanState.ndiStream.frameRate,
+          alphaChannel: lanState.ndiStream.alphaChannel,
+          ips: getLocalIpAddresses(),
+          port: 5961,
+        });
+        startElectronNdiOffscreenCapture();
+      } else {
+        lanState.ndiStream.lastFrameDataUrl = null;
+        lanState.ndiStream.frameCount = 0;
+        stopElectronNdiOffscreenCapture();
+        nativeDiagnostics = ndiNativeBridge.stopSender();
+      }
+
+      broadcastSse({
+        type: 'NDI_STREAM_UPDATED',
+        ndiStream: lanState.ndiStream,
+        nativeNdi: nativeDiagnostics,
+        timestamp: Date.now(),
+      });
+      sendJson(200, {
+        success: true,
+        ndiStream: lanState.ndiStream,
+        nativeNdi: nativeDiagnostics,
+      });
+    });
+    return true;
+  }
+
+  // POST /api/lan/ndi/frame
   if (pathname === '/api/lan/ndi/frame' && method === 'POST') {
     readBody().then((body) => {
-      if (typeof body.frame === 'string') {
-        lanState.ndiStream.lastFrameDataUrl = body.frame;
+      const dataUrl = body.frameDataUrl || body.frame;
+      if (typeof dataUrl === 'string' && dataUrl.startsWith('data:image/')) {
+        lanState.ndiStream.lastFrameDataUrl = dataUrl;
         lanState.ndiStream.lastFrameTimestamp = Date.now();
+        lanState.ndiStream.lastFrameAt = Date.now();
+        lanState.ndiStream.frameCount += 1;
+        pushFrameToEmbeddedNdiClients(dataUrl);
       }
-      sendJson(200, { success: true });
+      if (
+        typeof body.rawRgbaBase64 === 'string' &&
+        typeof body.width === 'number' &&
+        typeof body.height === 'number' &&
+        !ndiOffscreenWindow
+      ) {
+        try {
+          const rawBuf = Buffer.from(body.rawRgbaBase64, 'base64');
+          ndiNativeBridge.sendRawFrame(
+            rawBuf,
+            body.width,
+            body.height,
+            'RGBA',
+            lanState.ndiStream.frameRate,
+            lanState.ndiStream.alphaChannel
+          );
+        } catch {
+          // Ignore decode error
+        }
+      }
+      const nativeReceivers = ndiNativeBridge.getConnectedReceiversCount();
+      sendJson(200, {
+        success: true,
+        receiversCount: ndiStreamClients.size + nativeReceivers,
+        frameCount: lanState.ndiStream.frameCount,
+      });
+    });
+    return true;
+  }
+
+  // GET /api/lan/ndi/frame or /api/lan/ndi/frame.png
+  if (
+    (pathname === '/api/lan/ndi/frame' || pathname === '/api/lan/ndi/frame.png') &&
+    method === 'GET'
+  ) {
+    if (!lanState.ndiStream.active || !lanState.ndiStream.lastFrameDataUrl) {
+      sendJson(404, { error: 'NDI stream is currently inactive or no frame available' });
+      return true;
+    }
+    const commaIdx = lanState.ndiStream.lastFrameDataUrl.indexOf(',');
+    const headerPart = lanState.ndiStream.lastFrameDataUrl.slice(0, commaIdx);
+    const base64Part = lanState.ndiStream.lastFrameDataUrl.slice(commaIdx + 1);
+    const mimeMatch = headerPart.match(/^data:([^;]+);base64$/);
+    const contentType = mimeMatch ? mimeMatch[1] : 'image/png';
+    const buffer = Buffer.from(base64Part, 'base64');
+
+    res.writeHead(200, {
+      'Content-Type': contentType,
+      'Content-Length': buffer.length,
+      'Cache-Control': 'no-store, no-cache, must-revalidate',
+      'Access-Control-Allow-Origin': '*',
+      'X-NDI-Source-Name': lanState.ndiStream.sourceName,
+    });
+    res.end(buffer);
+    return true;
+  }
+
+  // GET /api/lan/ndi/mjpeg
+  if (pathname === '/api/lan/ndi/mjpeg' && method === 'GET') {
+    res.writeHead(200, {
+      'Content-Type': 'multipart/x-mixed-replace; boundary=ndi_frame',
+      'Cache-Control': 'no-store, no-cache, must-revalidate',
+      Pragma: 'no-cache',
+      Connection: 'keep-alive',
+      'Access-Control-Allow-Origin': '*',
+      'X-NDI-Source-Name': lanState.ndiStream.sourceName,
+    });
+    ndiStreamClients.add(res);
+    req.on('close', () => {
+      ndiStreamClients.delete(res);
     });
     return true;
   }
 
   if (pathname === '/api/lan/ndi' && method === 'GET') {
     sendJson(200, {
-      active: lanState.ndiStream.active,
-      multiMode: lanState.ndiStream.multiMode,
-      sourceName: lanState.ndiStream.sourceName,
-      resolution: lanState.ndiStream.resolution,
-      frameRate: lanState.ndiStream.frameRate,
-      alphaChannel: lanState.ndiStream.alphaChannel,
-      groups: lanState.ndiStream.groups,
-      startedAt: lanState.ndiStream.startedAt,
-      lastFrameTimestamp: lanState.ndiStream.lastFrameTimestamp,
+      ...lanState.ndiStream,
       frame: lanState.ndiStream.lastFrameDataUrl,
+      nativeNdi: ndiNativeBridge.getRuntimeDiagnostics(),
     });
     return true;
   }
@@ -745,9 +992,18 @@ function notifyDisplaysChanged() {
   }
 }
 
-function notifyOutputClosed() {
+function notifyOutputClosed(closedListId) {
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('output-closed');
+    const activeListIds = [];
+    for (const [k, entry] of outputWindowsByList.entries()) {
+      if (entry && entry.win && !entry.win.isDestroyed()) {
+        activeListIds.push(k);
+      }
+    }
+    mainWindow.webContents.send('output-closed', {
+      listId: closedListId || null,
+      activeListIds,
+    });
   }
 }
 
@@ -904,6 +1160,12 @@ function createMainWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+    for (const entry of outputWindowsByList.values()) {
+      if (entry && entry.win && !entry.win.isDestroyed()) {
+        entry.win.close();
+      }
+    }
+    outputWindowsByList.clear();
     if (outputWindow && !outputWindow.isDestroyed()) {
       outputWindow.close();
       outputWindow = null;
@@ -920,6 +1182,8 @@ function createMainWindow() {
       presenterWindow.close();
       presenterWindow = null;
     }
+    stopElectronNdiOffscreenCapture();
+    ndiNativeBridge.stopSender();
     for (const win of secondaryWindows) {
       if (!win.isDestroyed()) {
         win.close();
@@ -1137,21 +1401,24 @@ function resolveTargetDisplay(monitorId) {
   return matched || primary;
 }
 
-function openFullscreenOutput(monitorId, displayTarget = 'fullscreen') {
+function openFullscreenOutput(monitorId, displayTarget = 'fullscreen', listId = 'default') {
+  const key = String(listId || 'default');
   const targetDisplay = resolveTargetDisplay(monitorId);
   const { x, y, width, height } = targetDisplay.bounds;
   currentOutputDisplayId = targetDisplay.id;
 
-  if (outputWindow && !outputWindow.isDestroyed()) {
-    outputWindow.setFullScreen(false);
-    outputWindow.setBounds({ x, y, width, height });
-    outputWindow.setFullScreen(true);
-    outputWindow.show();
-    outputWindow.focus();
-    return { success: true, displayId: targetDisplay.id };
+  const existing = outputWindowsByList.get(key);
+  if (existing && existing.win && !existing.win.isDestroyed()) {
+    existing.displayId = targetDisplay.id;
+    existing.win.setFullScreen(false);
+    existing.win.setBounds({ x, y, width, height });
+    existing.win.setFullScreen(true);
+    existing.win.show();
+    existing.win.focus();
+    return { success: true, displayId: targetDisplay.id, listId: key };
   }
 
-  outputWindow = new BrowserWindow({
+  const win = new BrowserWindow({
     x,
     y,
     width,
@@ -1164,7 +1431,7 @@ function openFullscreenOutput(monitorId, displayTarget = 'fullscreen') {
     paintWhenInitiallyHidden: true,
     icon: getAppIconPath(),
     backgroundColor: '#000000',
-    title: 'ProTimer - Fullscreen Live Output',
+    title: `ProTimer - Fullscreen Live Output (${key})`,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -1173,44 +1440,77 @@ function openFullscreenOutput(monitorId, displayTarget = 'fullscreen') {
     },
   });
 
-  outputWindow.webContents.on('before-input-event', (_event, input) => {
+  outputWindow = win;
+  outputWindowsByList.set(key, {
+    win,
+    displayId: targetDisplay.id,
+    listId: key,
+  });
+
+  win.webContents.on('before-input-event', (_event, input) => {
     if (input.key === 'Escape' && input.type === 'keyDown') {
-      closeFullscreenOutput();
+      closeFullscreenOutput(key);
     }
   });
 
   const baseUrl = getBaseUrl();
   const separator = baseUrl.includes('?') ? '&' : '?';
-  const outputUrl = `${baseUrl}${separator}display=${encodeURIComponent(displayTarget)}`;
+  const listParam = key !== 'default' ? `&listId=${encodeURIComponent(key)}` : '';
+  const outputUrl = `${baseUrl}${separator}display=${encodeURIComponent(displayTarget)}${listParam}`;
 
-  outputWindow.once('ready-to-show', () => {
-    if (outputWindow && !outputWindow.isDestroyed()) {
-      outputWindow.setFullScreen(true);
-      outputWindow.show();
-      outputWindow.focus();
+  win.once('ready-to-show', () => {
+    if (win && !win.isDestroyed()) {
+      win.setFullScreen(true);
+      win.show();
+      win.focus();
     }
   });
 
-  outputWindow.loadURL(outputUrl);
+  win.loadURL(outputUrl);
 
-  outputWindow.on('closed', () => {
-    outputWindow = null;
-    currentOutputDisplayId = null;
-    notifyOutputClosed();
+  win.on('closed', () => {
+    outputWindowsByList.delete(key);
+    if (outputWindow === win) {
+      outputWindow = null;
+      currentOutputDisplayId = null;
+    }
+    notifyOutputClosed(key);
   });
 
-  return { success: true, displayId: targetDisplay.id };
+  return { success: true, displayId: targetDisplay.id, listId: key };
 }
 
-function closeFullscreenOutput() {
+function closeFullscreenOutput(listId) {
+  if (listId && typeof listId === 'string') {
+    const key = String(listId);
+    const existing = outputWindowsByList.get(key);
+    if (existing && existing.win && !existing.win.isDestroyed()) {
+      outputWindowsByList.delete(key);
+      existing.win.close();
+      notifyOutputClosed(key);
+      return true;
+    }
+    return false;
+  }
+
+  let closedAny = false;
+  for (const [key, entry] of Array.from(outputWindowsByList.entries())) {
+    outputWindowsByList.delete(key);
+    if (entry && entry.win && !entry.win.isDestroyed()) {
+      entry.win.close();
+      closedAny = true;
+    }
+  }
   if (outputWindow && !outputWindow.isDestroyed()) {
     outputWindow.close();
     outputWindow = null;
-    currentOutputDisplayId = null;
-    notifyOutputClosed();
-    return true;
+    closedAny = true;
   }
-  return false;
+  currentOutputDisplayId = null;
+  if (closedAny) {
+    notifyOutputClosed(null);
+  }
+  return closedAny;
 }
 
 // =============================================================================
@@ -1323,11 +1623,13 @@ function toggleAppFullscreen(monitorId) {
 function handleDisplayRemoved(oldDisplay) {
   const primary = screen.getPrimaryDisplay();
 
-  if (outputWindow && !outputWindow.isDestroyed() && currentOutputDisplayId === oldDisplay.id) {
-    currentOutputDisplayId = primary.id;
-    outputWindow.setFullScreen(false);
-    outputWindow.setBounds(primary.bounds);
-    outputWindow.setFullScreen(true);
+  for (const entry of outputWindowsByList.values()) {
+    if (entry && entry.win && !entry.win.isDestroyed() && entry.displayId === oldDisplay.id) {
+      entry.displayId = primary.id;
+      entry.win.setFullScreen(false);
+      entry.win.setBounds(primary.bounds);
+      entry.win.setFullScreen(true);
+    }
   }
 
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -1370,15 +1672,37 @@ ipcMain.handle('open-fullscreen-output', async (_event, options = {}) => {
       : 'Auto';
   const displayTarget =
     typeof safeOptions.displayTarget === 'string' ? safeOptions.displayTarget : 'fullscreen';
-  return openFullscreenOutput(monitorId, displayTarget);
+  const listId =
+    typeof safeOptions.listId === 'string' && safeOptions.listId.trim()
+      ? safeOptions.listId.trim()
+      : 'default';
+  return openFullscreenOutput(monitorId, displayTarget, listId);
 });
 
-ipcMain.handle('close-fullscreen-output', async () => {
-  return closeFullscreenOutput();
+ipcMain.handle('close-fullscreen-output', async (_event, listId) => {
+  const safeListId = typeof listId === 'string' && listId.trim() ? listId.trim() : undefined;
+  return closeFullscreenOutput(safeListId);
 });
 
-ipcMain.handle('is-fullscreen-output-active', async () => {
+ipcMain.handle('is-fullscreen-output-active', async (_event, listId) => {
+  if (typeof listId === 'string' && listId.trim()) {
+    const entry = outputWindowsByList.get(listId.trim());
+    return Boolean(entry && entry.win && !entry.win.isDestroyed());
+  }
+  for (const entry of outputWindowsByList.values()) {
+    if (entry && entry.win && !entry.win.isDestroyed()) return true;
+  }
   return Boolean(outputWindow && !outputWindow.isDestroyed());
+});
+
+ipcMain.handle('get-active-fullscreen-lists', async () => {
+  const active = [];
+  for (const [k, entry] of outputWindowsByList.entries()) {
+    if (entry && entry.win && !entry.win.isDestroyed()) {
+      active.push(k);
+    }
+  }
+  return active;
 });
 
 ipcMain.handle('open-multi-fullscreen-output', async (_event, options = {}) => {

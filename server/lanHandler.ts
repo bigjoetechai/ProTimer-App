@@ -5,7 +5,11 @@
  */
 
 import os from 'os';
+import { createRequire } from 'module';
 import type { IncomingMessage, ServerResponse } from 'http';
+
+const requireCjs = createRequire(import.meta.url);
+const { ndiNativeBridge } = requireCjs('./ndiNativeBridge.cjs');
 
 export interface NdiNetworkStreamConfig {
   active: boolean;
@@ -387,11 +391,14 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
   if (pathname === '/api/lan/ndi/status' && method === 'GET') {
     const ips = getLocalIpAddresses();
     const primaryIp = ips[0] || 'localhost';
+    const nativeDiagnostics = ndiNativeBridge.getRuntimeDiagnostics();
+    const nativeReceivers = Number(nativeDiagnostics?.connectedReceivers) || 0;
     sendJson(200, {
       ...state.ndiStream,
       ips,
       port: 3000,
-      receiversCount: ndiStreamClients.size,
+      receiversCount: ndiStreamClients.size + nativeReceivers,
+      nativeNdi: nativeDiagnostics,
       captureUrls: {
         browserSourceUrl: `http://${primaryIp}:3000/?display=ndi`,
         mjpegStreamUrl: `http://${primaryIp}:3000/api/lan/ndi/mjpeg`,
@@ -433,17 +440,36 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
       frameCount: nextActive ? state.ndiStream.frameCount : 0,
     };
 
-    if (!nextActive) {
+    let nativeDiagnostics;
+    if (nextActive) {
+      nativeDiagnostics = ndiNativeBridge.startSender({
+        sourceName: state.ndiStream.sourceName,
+        groups: state.ndiStream.customGroups,
+        useCustomGroups: state.ndiStream.useCustomGroups,
+        width: state.ndiStream.width,
+        height: state.ndiStream.height,
+        frameRate: state.ndiStream.frameRate,
+        alphaChannel: state.ndiStream.alphaChannel,
+        ips: getLocalIpAddresses(),
+        port: 5961,
+      });
+    } else {
       state.latestNdiFrameDataUrl = null;
+      nativeDiagnostics = ndiNativeBridge.stopSender();
     }
 
     broadcastSse({
       type: 'NDI_STREAM_UPDATED',
       ndiStream: state.ndiStream,
+      nativeNdi: nativeDiagnostics,
       timestamp: Date.now(),
     });
 
-    sendJson(200, { success: true, ndiStream: state.ndiStream });
+    sendJson(200, {
+      success: true,
+      ndiStream: state.ndiStream,
+      nativeNdi: nativeDiagnostics,
+    });
     return true;
   }
 
@@ -456,9 +482,29 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
       state.ndiStream.frameCount += 1;
       pushFrameToNdiClients(body.frameDataUrl);
     }
+    if (
+      typeof body.rawRgbaBase64 === 'string' &&
+      typeof body.width === 'number' &&
+      typeof body.height === 'number'
+    ) {
+      try {
+        const rawBuf = Buffer.from(body.rawRgbaBase64, 'base64');
+        ndiNativeBridge.sendRawFrame(
+          rawBuf,
+          body.width,
+          body.height,
+          'RGBA',
+          state.ndiStream.frameRate,
+          state.ndiStream.alphaChannel
+        );
+      } catch {
+        // Ignore raw buffer decode error
+      }
+    }
+    const nativeReceivers = ndiNativeBridge.getConnectedReceiversCount();
     sendJson(200, {
       success: true,
-      receiversCount: ndiStreamClients.size,
+      receiversCount: ndiStreamClients.size + nativeReceivers,
       frameCount: state.ndiStream.frameCount,
     });
     return true;

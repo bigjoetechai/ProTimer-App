@@ -150,15 +150,17 @@ export const MainConsolePage: React.FC = () => {
   const {
     displays,
     selectedMonitorId,
+    selectedMonitorsByList,
     setSelectedMonitor,
     isFullscreenActive,
+    activeFullscreenByList,
     openFullscreen,
     closeFullscreen,
     toggleFullscreen,
     isMultiFullscreenActive,
     closeMultiFullscreen,
     toggleMultiFullscreen,
-  } = useMonitorDetection();
+  } = useMonitorDetection(snapshot.activeListId);
   const { toggleAppFullscreen } = useWindowManager();
 
   // Sync live Fullscreen, Multi Fullscreen, and NDI states to LAN / Remote controllers
@@ -177,13 +179,13 @@ export const MainConsolePage: React.FC = () => {
     return displaySyncService.registerOutputController((command) => {
       switch (command) {
         case 'TOGGLE_FULLSCREEN':
-          toggleFullscreen(selectedMonitorId);
+          toggleFullscreen(selectedMonitorId, snapshot.activeListId);
           break;
         case 'OPEN_FULLSCREEN':
-          openFullscreen(selectedMonitorId, 'fullscreen');
+          openFullscreen(selectedMonitorId, 'fullscreen', snapshot.activeListId);
           break;
         case 'CLOSE_FULLSCREEN':
-          closeFullscreen();
+          closeFullscreen(snapshot.activeListId);
           break;
         case 'TOGGLE_MULTI_FULLSCREEN':
           toggleMultiFullscreen(selectedMonitorId);
@@ -198,6 +200,7 @@ export const MainConsolePage: React.FC = () => {
     });
   }, [
     selectedMonitorId,
+    snapshot.activeListId,
     toggleFullscreen,
     openFullscreen,
     closeFullscreen,
@@ -215,7 +218,7 @@ export const MainConsolePage: React.FC = () => {
       Space: () => togglePlayPause(),
       Escape: () => {
         if (isFullscreenActive) {
-          closeFullscreen();
+          closeFullscreen(snapshot.activeListId);
         } else if (isMultiFullscreenActive) {
           closeMultiFullscreen();
         } else {
@@ -596,7 +599,7 @@ export const MainConsolePage: React.FC = () => {
         historyCount={runLogs.length}
         onOpenDisplay={(target: DisplayTarget) => {
           if (target === 'fullscreen') {
-            toggleFullscreen(selectedMonitorId);
+            toggleFullscreen(selectedMonitorId, snapshot.activeListId);
           } else if (target === 'multi_fullscreen') {
             toggleMultiFullscreen(selectedMonitorId);
           } else if (target === 'ndi') {
@@ -627,14 +630,16 @@ export const MainConsolePage: React.FC = () => {
         onOpenLanModal={() => setIsLanModalOpen(true)}
         fullscreenMonitor={selectedMonitorId}
         onChangeMonitor={(m) => {
-          setSelectedMonitor(m);
+          setSelectedMonitor(m, snapshot.activeListId);
           if (isFullscreenActive) {
-            openFullscreen(m, 'fullscreen');
+            openFullscreen(m, 'fullscreen', snapshot.activeListId);
           }
         }}
         detectedMonitors={displays}
         isFullscreenActive={isFullscreenActive}
-        onCloseFullscreen={closeFullscreen}
+        activeFullscreenByList={activeFullscreenByList}
+        selectedMonitorsByList={selectedMonitorsByList}
+        onCloseFullscreen={() => closeFullscreen(snapshot.activeListId)}
         isMultiFullscreenActive={isMultiFullscreenActive}
         onCloseMultiFullscreen={closeMultiFullscreen}
         isPreviewActive={isPreviewPopoutOpen}
@@ -759,7 +764,11 @@ export const MainConsolePage: React.FC = () => {
       {/* FULLSCREEN OUTPUT WINDOW OVERLAY (Web / Preview Window) */}
       {isFullscreenActive && !(typeof window !== 'undefined' && window.electronAPI?.isElectron) && (
         <div className="fixed inset-0 z-[9998]">
-          <FullscreenDisplay isClient={false} onClose={() => closeFullscreen()} />
+          <FullscreenDisplay
+            listId={snapshot.activeListId}
+            isClient={false}
+            onClose={() => closeFullscreen(snapshot.activeListId)}
+          />
         </div>
       )}
 

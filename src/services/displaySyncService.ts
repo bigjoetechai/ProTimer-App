@@ -1060,10 +1060,12 @@ class DisplaySyncService {
 
   public openDisplayWindow(
     target: DisplayTarget,
-    bounds?: { x: number; y: number; width: number; height: number }
+    bounds?: { x: number; y: number; width: number; height: number },
+    listId?: string
   ): Window | null {
-    const url = `${window.location.origin}${window.location.pathname}?display=${target}`;
-    const windowName = `ProTimer_${target}_Window`;
+    const listQuery = listId ? `&listId=${encodeURIComponent(listId)}` : '';
+    const url = `${window.location.origin}${window.location.pathname}?display=${target}${listQuery}`;
+    const windowName = listId ? `ProTimer_${target}_${listId}_Window` : `ProTimer_${target}_Window`;
     const isCompactPopout = target === 'preview' || target === 'presenter';
     const width = bounds?.width || (isCompactPopout ? 360 : 1280);
     const height = bounds?.height || (isCompactPopout ? 240 : 720);

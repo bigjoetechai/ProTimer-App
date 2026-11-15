@@ -45,6 +45,8 @@ interface BottomBarProps {
   onChangeMonitor: (monitor: string) => void;
   detectedMonitors?: DetectedMonitor[];
   isFullscreenActive?: boolean;
+  activeFullscreenByList?: Record<string, boolean>;
+  selectedMonitorsByList?: Record<string, string>;
   onCloseFullscreen?: () => void;
   isMultiFullscreenActive?: boolean;
   onCloseMultiFullscreen?: () => void;
@@ -75,6 +77,8 @@ export const BottomBar: React.FC<BottomBarProps> = ({
   onChangeMonitor,
   detectedMonitors = [],
   isFullscreenActive = false,
+  activeFullscreenByList = {},
+  selectedMonitorsByList = {},
   onCloseFullscreen,
   isMultiFullscreenActive = false,
   onCloseMultiFullscreen,
@@ -87,6 +91,8 @@ export const BottomBar: React.FC<BottomBarProps> = ({
   historyCount = 0,
 }) => {
   const { isDark } = useTheme();
+  const activeListObj = lists.find((l) => l.id === activeListId) || lists[0];
+  const activeListName = activeListObj?.name || 'List';
 
   // Context Menu state
   const [contextMenu, setContextMenu] = useState<{
@@ -153,6 +159,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
           {lists.map((list) => {
             const isActive = !isHistoryTabActive && list.id === activeListId;
             const runningCount = getRunningTimerCount ? getRunningTimerCount(list.id) : 0;
+            const isListFsActive = Boolean(activeFullscreenByList[list.id]);
             const isEditing = inlineEditingId === list.id;
 
             if (isEditing) {
@@ -217,6 +224,17 @@ export const BottomBar: React.FC<BottomBarProps> = ({
                   >
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
                     <span>{runningCount}</span>
+                  </span>
+                )}
+
+                {/* Independent Fullscreen Active Badge on Tab */}
+                {isListFsActive && (
+                  <span
+                    title={`Fullscreen output is active for ${list.name}`}
+                    className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded-full text-[9px] font-mono bg-cyan-500/20 text-cyan-300 border border-cyan-500/40"
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+                    <span>FS</span>
                   </span>
                 )}
               </button>
@@ -302,7 +320,11 @@ export const BottomBar: React.FC<BottomBarProps> = ({
           {[
             { label: 'Presenter', target: 'presenter' as DisplayTarget, tooltip: 'Open Speaker Confidence Display' },
             { label: 'Preview', target: 'preview' as DisplayTarget, tooltip: 'Open Control Room Preview Window' },
-            { label: 'Fullscreen', target: 'fullscreen' as DisplayTarget, tooltip: 'Display Active Timer on Selected Fullscreen Monitor' },
+            {
+              label: 'Fullscreen',
+              target: 'fullscreen' as DisplayTarget,
+              tooltip: `Toggle Independent Fullscreen Output for ${activeListName} on its Selected Monitor`,
+            },
             {
               label: 'NDI',
               target: 'ndi' as DisplayTarget,
@@ -351,6 +373,8 @@ export const BottomBar: React.FC<BottomBarProps> = ({
                     ? `NDI Stream Active on Network: ${ndiStreamStatus.sourceName} (${ndiStreamStatus.width}x${ndiStreamStatus.height} @ ${ndiStreamStatus.frameRate} FPS${
                         ndiStreamStatus.alphaChannel ? ', Alpha ON' : ''
                       }) — Click to Stop`
+                    : item.label === 'Fullscreen' && isActive
+                    ? `Fullscreen Active for ${activeListName} (Click to Close ${activeListName} Fullscreen)`
                     : isActive
                     ? `${item.label} Active (Click to Toggle)`
                     : item.tooltip
@@ -422,9 +446,16 @@ export const BottomBar: React.FC<BottomBarProps> = ({
           )}
         </div>
 
-        {/* Fullscreen Monitor Selector Dropdown */}
-        <div className={`flex items-center gap-2 whitespace-nowrap pl-4 border-l shrink-0 ${isDark ? 'border-[#1a2333]' : 'border-slate-200'}`}>
-          <span className={`text-[11px] ${isDark ? 'text-neutral-400' : 'text-slate-500'}`}>Fullscreen monitor</span>
+        {/* Fullscreen Monitor Selector Dropdown (Independent per List Tab) */}
+        <div
+          title={`Select dedicated Fullscreen monitor for ${activeListName}`}
+          className={`flex items-center gap-2 whitespace-nowrap pl-4 border-l shrink-0 ${
+            isDark ? 'border-[#1a2333]' : 'border-slate-200'
+          }`}
+        >
+          <span className={`text-[11px] ${isDark ? 'text-neutral-400' : 'text-slate-500'}`}>
+            Fullscreen monitor ({activeListName})
+          </span>
           <div className="relative">
             <select
               value={fullscreenMonitor}
@@ -442,9 +473,20 @@ export const BottomBar: React.FC<BottomBarProps> = ({
               </option>
               {detectedMonitors.map((m) => {
                 const displayName = m.name?.startsWith('Display') ? m.name : `Display ${m.displayIndex}`;
+                const assignedOtherLists = lists
+                  .filter(
+                    (l) =>
+                      l.id !== activeListId &&
+                      String(selectedMonitorsByList[l.id]) === String(m.id)
+                  )
+                  .map((l) => l.name);
+                const suffix =
+                  assignedOtherLists.length > 0
+                    ? ` [${assignedOtherLists.join(', ')}]`
+                    : '';
                 return (
                   <option key={String(m.id)} value={String(m.id)}>
-                    {displayName} – {m.resolution}{m.isPrimary ? ' (Primary)' : ' (External)'}
+                    {displayName} – {m.resolution}{m.isPrimary ? ' (Primary)' : ' (External)'}{suffix}
                   </option>
                 );
               })}
