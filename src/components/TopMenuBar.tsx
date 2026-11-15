@@ -21,6 +21,12 @@ import {
   CheckCircle2,
   Wifi,
   Maximize2,
+  Info,
+  Mail,
+  FileText,
+  Lock,
+  RotateCcw,
+  X,
 } from 'lucide-react';
 import { useWindowManager } from '../hooks';
 
@@ -91,6 +97,9 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
   const [showCloudMenu, setShowCloudMenu] = useState(false);
   const [operatorName, setOperatorName] = useState('Production Lead');
   const [cloudStatus] = useState<'local' | 'synced'>('local');
+  const [activeBrandDialog, setActiveBrandDialog] = useState<
+    'about' | 'support' | 'guide' | 'activation' | 'updates' | null
+  >(null);
 
   const {
     toggleMaximize,
@@ -191,11 +200,107 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
     >
       {/* LEFT: Logo & Menus */}
       <div className="flex items-center gap-1">
-        {/* Brand Logo */}
-        <div className="flex items-center mr-2 font-bold select-none">
-          <span className={`font-bold tracking-wider text-xs ${isDark ? 'text-white' : 'text-slate-900'}`}>
-            PRO<span className="text-cyan-500">TIMER</span>
-          </span>
+        {/* Brand Logo & PROTIMER Dropdown Menu */}
+        <div className="relative mr-1">
+          <button
+            type="button"
+            onClick={() => setActiveMenu(activeMenu === 'brand' ? null : 'brand')}
+            className={`flex items-center gap-1.5 px-2 py-1 rounded font-bold select-none transition-colors cursor-pointer ${
+              activeMenu === 'brand'
+                ? isDark
+                  ? 'bg-[#1e293b] text-white'
+                  : 'bg-slate-300 text-slate-900'
+                : isDark
+                  ? 'hover:bg-[#161c27]'
+                  : 'hover:bg-[#d5dce7]'
+            }`}
+          >
+            <img
+              src="/assets/aistudio/ProTimer_icon_ec9a41ea.png"
+              onError={(e) => {
+                const target = e.currentTarget;
+                if (!target.src.endsWith('/icon.png')) {
+                  target.src = './icon.png';
+                }
+              }}
+              alt="ProTimer Logo"
+              draggable={false}
+              className="w-5 h-5 object-contain shrink-0"
+            />
+            <span className={`font-bold tracking-wider text-xs ${isDark ? 'text-white' : 'text-slate-900'}`}>
+              PRO<span className="text-cyan-500">TIMER</span>
+            </span>
+            <ChevronDown className="w-3 h-3 opacity-60" />
+          </button>
+
+          {activeMenu === 'brand' && (
+            <div className={dropdownBaseClass('w-56')}>
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveBrandDialog('about');
+                  setActiveMenu(null);
+                }}
+                className={`${dropdownItemClass} justify-between py-2`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <Info className={`w-3.5 h-3.5 shrink-0 ${isDark ? 'text-neutral-400' : 'text-slate-500'}`} />
+                  <span>About ProTimer</span>
+                </div>
+                <span className={`text-[11px] font-normal ${isDark ? 'text-neutral-400' : 'text-slate-500'}`}>
+                  v1.5.0
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveBrandDialog('support');
+                  setActiveMenu(null);
+                }}
+                className={`${dropdownItemClass} gap-2.5 py-2`}
+              >
+                <Mail className={`w-3.5 h-3.5 shrink-0 ${isDark ? 'text-neutral-400' : 'text-slate-500'}`} />
+                <span>Contact / Support</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveBrandDialog('guide');
+                  setActiveMenu(null);
+                }}
+                className={`${dropdownItemClass} gap-2.5 py-2`}
+              >
+                <FileText className={`w-3.5 h-3.5 shrink-0 ${isDark ? 'text-neutral-400' : 'text-slate-500'}`} />
+                <span>User Guide</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveBrandDialog('activation');
+                  setActiveMenu(null);
+                }}
+                className={`${dropdownItemClass} gap-2.5 py-2`}
+              >
+                <Lock className={`w-3.5 h-3.5 shrink-0 ${isDark ? 'text-neutral-400' : 'text-slate-500'}`} />
+                <span>Activation</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveBrandDialog('updates');
+                  setActiveMenu(null);
+                }}
+                className={`${dropdownItemClass} gap-2.5 py-2`}
+              >
+                <RotateCcw className={`w-3.5 h-3.5 shrink-0 ${isDark ? 'text-neutral-400' : 'text-slate-500'}`} />
+                <span>Check for Updates</span>
+              </button>
+            </div>
+          )}
         </div>
 
         {/* 1. FILE MENU */}
@@ -821,6 +926,143 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
           )}
         </div>
       </div>
+
+      {/* Brand Dropdown Info Modals (About, Contact / Support, User Guide, Activation, Check for Updates) */}
+      {activeBrandDialog && (
+        <div
+          className="fixed inset-0 z-[200] bg-black/60 flex items-center justify-center p-4"
+          onClick={() => setActiveBrandDialog(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className={`w-full max-w-md rounded-md border shadow-2xl overflow-hidden text-xs ${
+              isDark
+                ? 'bg-[#111622] border-[#222e42] text-neutral-200'
+                : 'bg-[#e6ebf3] border-slate-300 text-slate-800'
+            }`}
+          >
+            <div
+              className={`flex items-center justify-between px-4 py-3 border-b ${
+                isDark ? 'bg-[#0c1018] border-[#1e2636]' : 'bg-[#d8dfe9] border-slate-300'
+              }`}
+            >
+              <div className="flex items-center gap-2 font-bold text-sm">
+                <img
+                  src="/assets/aistudio/ProTimer_icon_ec9a41ea.png"
+                  onError={(e) => {
+                    const target = e.currentTarget;
+                    if (!target.src.endsWith('/icon.png')) {
+                      target.src = './icon.png';
+                    }
+                  }}
+                  alt="ProTimer"
+                  className="w-5 h-5 object-contain"
+                />
+                <span>
+                  {activeBrandDialog === 'about' && 'About ProTimer'}
+                  {activeBrandDialog === 'support' && 'Contact / Support'}
+                  {activeBrandDialog === 'guide' && 'ProTimer User Guide'}
+                  {activeBrandDialog === 'activation' && 'License & Activation'}
+                  {activeBrandDialog === 'updates' && 'Software Updates'}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveBrandDialog(null)}
+                className={`p-1 rounded transition-colors cursor-pointer ${
+                  isDark ? 'hover:bg-[#1e293b] text-neutral-400 hover:text-white' : 'hover:bg-slate-300 text-slate-600'
+                }`}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-3 leading-relaxed">
+              {activeBrandDialog === 'about' && (
+                <>
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-sm">ProTimer Desktop</span>
+                    <span className="px-2 py-0.5 rounded bg-cyan-500/15 text-cyan-400 border border-cyan-500/30 font-mono font-semibold">
+                      v1.5.0
+                    </span>
+                  </div>
+                  <p className={isDark ? 'text-neutral-400' : 'text-slate-600'}>
+                    Professional multi-timer and stage cue management software for live events,
+                    broadcast production, NDI workflows, and multi-monitor stage displays.
+                  </p>
+                  <div className={`pt-2 border-t text-[11px] font-mono ${isDark ? 'border-[#1e2636] text-neutral-500' : 'border-slate-300 text-slate-500'}`}>
+                    Build: v1.5.0 (64-bit) • Copyright © 2026 ProTimer
+                  </div>
+                </>
+              )}
+
+              {activeBrandDialog === 'support' && (
+                <>
+                  <p className={isDark ? 'text-neutral-300' : 'text-slate-700'}>
+                    Need technical assistance or broadcast workflow support?
+                  </p>
+                  <div className={`p-3 rounded border space-y-1.5 font-mono text-[11px] ${
+                    isDark ? 'bg-[#0b0e14] border-[#1e2636]' : 'bg-slate-200/70 border-slate-300'
+                  }`}>
+                    <div>Support Email: support@protimer.app</div>
+                    <div>Version: ProTimer v1.5.0</div>
+                  </div>
+                </>
+              )}
+
+              {activeBrandDialog === 'guide' && (
+                <div className="space-y-2">
+                  <div className="font-semibold">Quick Operator Reference:</div>
+                  <ul className={`list-disc pl-4 space-y-1 ${isDark ? 'text-neutral-300' : 'text-slate-700'}`}>
+                    <li>Double-click any cue row to edit duration, alerts, and end actions.</li>
+                    <li>Use <strong>Fullscreen</strong> or <strong>Multi FS</strong> to send live output to an external monitor.</li>
+                    <li>Click <strong>Preview</strong> or <strong>Presenter</strong> to toggle floating always-on-top monitors.</li>
+                    <li>Open <strong>Options → Preferences</strong> to customize fonts, sizes, positions, and backgrounds.</li>
+                  </ul>
+                </div>
+              )}
+
+              {activeBrandDialog === 'activation' && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-emerald-500 font-semibold">
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>ProTimer v1.5.0 — Activated (Full Production License)</span>
+                  </div>
+                  <p className={isDark ? 'text-neutral-400' : 'text-slate-600'}>
+                    All broadcast features—including Multi-List Fullscreen, NDI Output, and LAN Remote Control—are unlocked and active on this workstation.
+                  </p>
+                </div>
+              )}
+
+              {activeBrandDialog === 'updates' && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-emerald-500 font-semibold">
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>You are running the latest version (v1.5.0)</span>
+                  </div>
+                  <p className={isDark ? 'text-neutral-400' : 'text-slate-600'}>
+                    ProTimer v1.5.0 is up to date.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div
+              className={`px-4 py-2.5 border-t flex justify-end ${
+                isDark ? 'bg-[#0c1018] border-[#1e2636]' : 'bg-[#d8dfe9] border-slate-300'
+              }`}
+            >
+              <button
+                type="button"
+                onClick={() => setActiveBrandDialog(null)}
+                className="px-4 py-1 bg-cyan-600 hover:bg-cyan-500 text-white rounded font-semibold transition-colors cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </header>
   );
 };

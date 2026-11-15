@@ -36,7 +36,7 @@ const { exec } = require('child_process');
 
 const APP_ID = 'com.protimer.desktop';
 const APP_NAME = 'ProTimer';
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.5.0';
 
 // Set Windows Application User Model ID for taskbar grouping & notifications
 app.setName(APP_NAME);
@@ -507,6 +507,8 @@ function getAppIconPath() {
     path.join(__dirname, '../build/icon.ico'),
     path.join(__dirname, '../build/icon.png'),
     path.join(__dirname, '../public/icon.ico'),
+    path.join(__dirname, '../public/icon.png'),
+    path.join(__dirname, '../public/assets/aistudio/ProTimer_icon_ec9a41ea.png'),
   ];
   for (const candidate of candidates) {
     if (fs.existsSync(candidate)) {

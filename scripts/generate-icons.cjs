@@ -1,6 +1,7 @@
 /**
- * Generates valid 256x256 PNG and multi-resolution Windows ICO files for ProTimer
- * in build/icon.ico, build/icon.png, and public/icon.ico.
+ * Generates multi-resolution Windows ICO and PNG application icons for ProTimer
+ * directly from the user's custom icon asset (public/assets/aistudio/icon_83ffa438.png)
+ * into build/icon.ico, build/icon.png, public/icon.ico, and public/icon.png.
  */
 const fs = require('fs');
 const path = require('path');
@@ -34,65 +35,144 @@ function makeChunk(type, data) {
   return Buffer.concat([len, typeBuf, data, crcBuf]);
 }
 
-function createProTimerPng(size = 256) {
-  const rawData = Buffer.alloc(size * (size * 4 + 1));
-  const cx = size / 2;
-  const cy = size / 2;
-  const outerRadius = size * 0.44;
-  const ringInner = size * 0.36;
-  const bgRadius = size * 0.47;
+function paethPredictor(a, b, c) {
+  const p = a + b - c;
+  const pa = Math.abs(p - a);
+  const pb = Math.abs(p - b);
+  const pc = Math.abs(p - c);
+  if (pa <= pb && pa <= pc) return a;
+  if (pb <= pc) return b;
+  return c;
+}
 
-  for (let y = 0; y < size; y++) {
-    const rowOffset = y * (size * 4 + 1);
-    rawData[rowOffset] = 0; // filter type 0
+/**
+ * Decodes an 8-bit RGBA PNG buffer into { width, height, pixels: Uint8Array(width * height * 4) }.
+ */
+function decodeRgbaPng(pngBuffer) {
+  let offset = 8; // skip PNG signature
+  let width = 0;
+  let height = 0;
+  const idatChunks = [];
 
-    for (let x = 0; x < size; x++) {
-      const px = rowOffset + 1 + x * 4;
-      const dx = x - cx;
-      const dy = y - cy;
-      const dist = Math.sqrt(dx * dx + dy * dy);
+  while (offset < pngBuffer.length) {
+    const length = pngBuffer.readUInt32BE(offset);
+    const type = pngBuffer.slice(offset + 4, offset + 8).toString('ascii');
+    const data = pngBuffer.slice(offset + 8, offset + 8 + length);
 
-      if (dist > bgRadius) {
-        // Transparent outside rounded badge
-        rawData[px] = 0;
-        rawData[px + 1] = 0;
-        rawData[px + 2] = 0;
-        rawData[px + 3] = 0;
-      } else if (dist >= ringInner && dist <= outerRadius) {
-        // Cyan/Emerald precision timer ring (#10b981 -> #06b6d4)
-        rawData[px] = 16;
-        rawData[px + 1] = 185;
-        rawData[px + 2] = 129;
-        rawData[px + 3] = 255;
-      } else {
-        // Deep broadcast slate background (#0c1017)
-        let r = 12;
-        let g = 16;
-        let b = 23;
+    if (type === 'IHDR') {
+      width = data.readUInt32BE(0);
+      height = data.readUInt32BE(4);
+    } else if (type === 'IDAT') {
+      idatChunks.push(data);
+    } else if (type === 'IEND') {
+      break;
+    }
+    offset += 12 + length;
+  }
 
-        // Draw clock hands (minute hand pointing up, hour hand pointing right-down)
-        const isVerticalHand = Math.abs(dx) < size * 0.032 && dy < 0 && dy > -size * 0.25;
-        const isHorizontalHand = Math.abs(dy) < size * 0.032 && dx >= -size * 0.02 && dx < size * 0.2;
-        const isCenterDot = dist < size * 0.055;
+  const compressed = Buffer.concat(idatChunks);
+  const raw = zlib.inflateSync(compressed);
+  const bpp = 4;
+  const stride = width * bpp;
+  const pixels = new Uint8Array(width * height * bpp);
 
-        if (isCenterDot || isVerticalHand || isHorizontalHand) {
-          r = 56;
-          g = 189;
-          b = 248;
-        }
+  for (let y = 0; y < height; y++) {
+    const rowStart = y * (stride + 1);
+    const filterType = raw[rowStart];
+    const outRowOffset = y * stride;
+    const prevRowOffset = (y - 1) * stride;
 
-        rawData[px] = r;
-        rawData[px + 1] = g;
-        rawData[px + 2] = b;
-        rawData[px + 3] = 255;
+    for (let x = 0; x < stride; x++) {
+      const rawByte = raw[rowStart + 1 + x];
+      const a = x >= bpp ? pixels[outRowOffset + x - bpp] : 0;
+      const b = y > 0 ? pixels[prevRowOffset + x] : 0;
+      const c = y > 0 && x >= bpp ? pixels[prevRowOffset + x - bpp] : 0;
+
+      let val = rawByte;
+      if (filterType === 1) {
+        val = (rawByte + a) & 0xff;
+      } else if (filterType === 2) {
+        val = (rawByte + b) & 0xff;
+      } else if (filterType === 3) {
+        val = (rawByte + Math.floor((a + b) / 2)) & 0xff;
+      } else if (filterType === 4) {
+        val = (rawByte + paethPredictor(a, b, c)) & 0xff;
       }
+      pixels[outRowOffset + x] = val;
+    }
+  }
+
+  return { width, height, pixels };
+}
+
+/**
+ * Downsamples RGBA pixel data to targetSize x targetSize using area-averaging with premultiplied alpha.
+ */
+function resizeRgba(src, targetSize) {
+  const { width: srcW, height: srcH, pixels: srcPixels } = src;
+  const dstPixels = new Uint8Array(targetSize * targetSize * 4);
+  const scaleX = srcW / targetSize;
+  const scaleY = srcH / targetSize;
+
+  for (let y = 0; y < targetSize; y++) {
+    const srcY0 = Math.floor(y * scaleY);
+    const srcY1 = Math.min(srcH, Math.ceil((y + 1) * scaleY));
+
+    for (let x = 0; x < targetSize; x++) {
+      const srcX0 = Math.floor(x * scaleX);
+      const srcX1 = Math.min(srcW, Math.ceil((x + 1) * scaleX));
+
+      let rSum = 0;
+      let gSum = 0;
+      let bSum = 0;
+      let aSum = 0;
+      let count = 0;
+
+      for (let sy = srcY0; sy < srcY1; sy++) {
+        for (let sx = srcX0; sx < srcX1; sx++) {
+          const idx = (sy * srcW + sx) * 4;
+          const a = srcPixels[idx + 3];
+          rSum += srcPixels[idx] * a;
+          gSum += srcPixels[idx + 1] * a;
+          bSum += srcPixels[idx + 2] * a;
+          aSum += a;
+          count++;
+        }
+      }
+
+      const dstIdx = (y * targetSize + x) * 4;
+      if (count > 0 && aSum > 0) {
+        dstPixels[dstIdx] = Math.round(rSum / aSum);
+        dstPixels[dstIdx + 1] = Math.round(gSum / aSum);
+        dstPixels[dstIdx + 2] = Math.round(bSum / aSum);
+        dstPixels[dstIdx + 3] = Math.round(aSum / count);
+      }
+    }
+  }
+
+  return { width: targetSize, height: targetSize, pixels: dstPixels };
+}
+
+/**
+ * Encodes { width, height, pixels } into a valid RGBA PNG Buffer.
+ */
+function encodeRgbaPng({ width, height, pixels }) {
+  const stride = width * 4;
+  const rawData = Buffer.alloc(height * (stride + 1));
+
+  for (let y = 0; y < height; y++) {
+    const rowOffset = y * (stride + 1);
+    rawData[rowOffset] = 0; // filter type 0
+    const srcOffset = y * stride;
+    for (let i = 0; i < stride; i++) {
+      rawData[rowOffset + 1 + i] = pixels[srcOffset + i];
     }
   }
 
   const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
   const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(size, 0);
-  ihdr.writeUInt32BE(size, 4);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
   ihdr[8] = 8; // bit depth
   ihdr[9] = 6; // RGBA
   ihdr[10] = 0;
@@ -110,36 +190,63 @@ function createProTimerPng(size = 256) {
   ]);
 }
 
-function createIcoFromPng(pngBuffer) {
-  // ICO header (6 bytes) + 1 Directory Entry (16 bytes) + PNG payload
+/**
+ * Creates a multi-resolution Windows ICO file containing 256x256, 64x64, 48x48, 32x32, and 16x16 PNGs.
+ */
+function createMultiResIco(entries) {
+  const count = entries.length;
   const header = Buffer.alloc(6);
   header.writeUInt16LE(0, 0); // Reserved
   header.writeUInt16LE(1, 2); // Type 1 = ICO
-  header.writeUInt16LE(1, 4); // 1 image
+  header.writeUInt16LE(count, 4);
 
-  const dir = Buffer.alloc(16);
-  dir[0] = 0; // 0 means 256px width
-  dir[1] = 0; // 0 means 256px height
-  dir[2] = 0; // palette
-  dir[3] = 0; // reserved
-  dir.writeUInt16LE(1, 4); // color planes
-  dir.writeUInt16LE(32, 6); // bits per pixel
-  dir.writeUInt32LE(pngBuffer.length, 8); // image size
-  dir.writeUInt32LE(22, 12); // offset (6 + 16 = 22)
+  const dirBuffers = [];
+  let dataOffset = 6 + count * 16;
 
-  return Buffer.concat([header, dir, pngBuffer]);
+  for (const entry of entries) {
+    const dir = Buffer.alloc(16);
+    dir[0] = entry.size >= 256 ? 0 : entry.size;
+    dir[1] = entry.size >= 256 ? 0 : entry.size;
+    dir[2] = 0; // color palette
+    dir[3] = 0; // reserved
+    dir.writeUInt16LE(1, 4); // color planes
+    dir.writeUInt16LE(32, 6); // bits per pixel
+    dir.writeUInt32LE(entry.png.length, 8); // byte size
+    dir.writeUInt32LE(dataOffset, 12); // byte offset
+    dirBuffers.push(dir);
+    dataOffset += entry.png.length;
+  }
+
+  return Buffer.concat([
+    header,
+    ...dirBuffers,
+    ...entries.map((e) => e.png),
+  ]);
 }
 
+const sourceIconPath = path.join(__dirname, '../public/assets/aistudio/ProTimer_icon_ec9a41ea.png');
 const buildDir = path.join(__dirname, '../build');
 const publicDir = path.join(__dirname, '../public');
+
 if (!fs.existsSync(buildDir)) fs.mkdirSync(buildDir, { recursive: true });
 if (!fs.existsSync(publicDir)) fs.mkdirSync(publicDir, { recursive: true });
 
-const png256 = createProTimerPng(256);
-const ico256 = createIcoFromPng(png256);
+const sourcePngBuffer = fs.readFileSync(sourceIconPath);
+const decoded = decodeRgbaPng(sourcePngBuffer);
 
-fs.writeFileSync(path.join(buildDir, 'icon.png'), png256);
-fs.writeFileSync(path.join(buildDir, 'icon.ico'), ico256);
-fs.writeFileSync(path.join(publicDir, 'icon.ico'), ico256);
+const sizes = [256, 64, 48, 32, 16];
+const icoEntries = sizes.map((size) => ({
+  size,
+  png: encodeRgbaPng(resizeRgba(decoded, size)),
+}));
 
-console.log('Generated build/icon.ico, build/icon.png, and public/icon.ico successfully.');
+const icoBuffer = createMultiResIco(icoEntries);
+
+// Save original 512x512 PNG for build/icon.png and public/icon.png, and multi-res ICO for .ico
+fs.writeFileSync(path.join(buildDir, 'icon.png'), sourcePngBuffer);
+fs.writeFileSync(path.join(publicDir, 'icon.png'), sourcePngBuffer);
+fs.writeFileSync(path.join(buildDir, 'icon.ico'), icoBuffer);
+fs.writeFileSync(path.join(publicDir, 'icon.ico'), icoBuffer);
+
+console.log('Generated ProTimer icons from ProTimer_icon_ec9a41ea.png into build/ and public/ successfully.');
+
