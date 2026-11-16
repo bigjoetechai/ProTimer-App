@@ -745,9 +745,9 @@ export const LanControlDisplay: React.FC = () => {
                       onClick={() => dispatchCommand('SELECT_TIMER', { timerId: t.id })}
                       className={`p-2.5 rounded-xl border flex items-center justify-between transition-all cursor-pointer ${
                         isCurrentActive
-                          ? 'bg-cyan-950/50 border-cyan-500 text-white shadow-md'
+                          ? 'bg-red-950/55 border-red-500 text-white shadow-md ring-1 ring-red-500/40'
                           : isCued
-                          ? 'bg-amber-950/30 border-amber-500 text-amber-200'
+                          ? 'bg-[#10243e] border-cyan-400 text-cyan-100 ring-1 ring-cyan-500/30'
                           : 'bg-[#101420] border-[#1f283a] text-neutral-300 hover:bg-[#161c2c]'
                       }`}
                     >
@@ -759,13 +759,13 @@ export const LanControlDisplay: React.FC = () => {
                           <div className="font-semibold text-sm truncate flex items-center gap-1.5">
                             <span>{t.name}</span>
                             {isCurrentActive && (
-                              <span className="text-[9px] uppercase px-1.5 py-0.2 rounded bg-cyan-500 text-black font-bold">
+                              <span className="text-[9px] uppercase px-1.5 py-0.2 rounded bg-red-600 text-white font-bold">
                                 ACTIVE
                               </span>
                             )}
                             {isCued && !isCurrentActive && (
-                              <span className="text-[9px] uppercase px-1.5 py-0.2 rounded bg-amber-500 text-black font-bold">
-                                CUED
+                              <span className="text-[9px] uppercase px-1.5 py-0.2 rounded bg-cyan-950 text-cyan-300 border border-cyan-700/60 font-bold">
+                                NEXT
                               </span>
                             )}
                           </div>

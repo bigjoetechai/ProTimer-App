@@ -9,6 +9,7 @@ import { AppPreferences } from './settings';
 export type DisplayTarget = 
   | 'presenter' 
   | 'preview' 
+  | 'multi_preview'
   | 'stage' 
   | 'fullscreen' 
   | 'multi_fullscreen'
@@ -171,12 +172,18 @@ export interface ElectronAPI {
   isMultiFullscreenOutputActive?: () => Promise<boolean>;
   onMultiOutputClosed?: (callback: () => void) => () => void;
 
-  // Singleton Frameless Always-On-Top Resizable Preview & Presenter Windows
+  // Singleton Frameless Always-On-Top Resizable Preview, Multi Preview & Presenter Windows
   togglePreviewWindow?: () => Promise<{ active: boolean }>;
   openPreviewWindow?: () => Promise<{ active: boolean }>;
   closePreviewWindow?: () => Promise<{ active: boolean }>;
   isPreviewWindowActive?: () => Promise<boolean>;
   onPreviewStateChanged?: (callback: (isOpen: boolean) => void) => () => void;
+
+  toggleMultiPreviewWindow?: () => Promise<{ active: boolean }>;
+  openMultiPreviewWindow?: () => Promise<{ active: boolean }>;
+  closeMultiPreviewWindow?: () => Promise<{ active: boolean }>;
+  isMultiPreviewWindowActive?: () => Promise<boolean>;
+  onMultiPreviewStateChanged?: (callback: (isOpen: boolean) => void) => () => void;
 
   togglePresenterWindow?: () => Promise<{ active: boolean }>;
   openPresenterWindow?: () => Promise<{ active: boolean }>;

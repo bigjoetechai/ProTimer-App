@@ -3,7 +3,7 @@
  * Fully supports Light and Dark themes.
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, Send, EyeOff, AlertCircle } from 'lucide-react';
 import { StageMessage } from '../types';
 import { useTheme } from '../hooks';
@@ -37,6 +37,15 @@ export const MessageEditorModal: React.FC<MessageEditorModalProps> = ({
   const [flash, setFlash] = useState(currentMessage?.flash ?? false);
   const [urgent, setUrgent] = useState(currentMessage?.urgent ?? false);
   const [color, setColor] = useState(currentMessage?.color || '#f97316');
+
+  useEffect(() => {
+    if (isOpen && currentMessage) {
+      setText(currentMessage.text || '');
+      setFlash(currentMessage.flash ?? false);
+      setUrgent(currentMessage.urgent ?? false);
+      setColor(currentMessage.color || '#f97316');
+    }
+  }, [isOpen, currentMessage]);
 
   if (!isOpen) return null;
 

@@ -20,11 +20,13 @@ import {
   Pin,
 } from 'lucide-react';
 import {
+  StageMessage,
   TimerItem,
   TimerStatus,
   resolveBackgroundImageForList,
   resolveLogoImageForList,
 } from '../types';
+import { MessageOverlay } from '../messages/MessageOverlay';
 import { formatClock, formatDate, formatSeconds } from '../utilities/timeFormatters';
 import {
   getElementOffsetTransform,
@@ -59,6 +61,7 @@ interface FloatingPreviewWindowProps {
   isBlackout?: boolean;
   isClockMode?: boolean;
   clockTimeFormatted?: string;
+  activeMessage?: StageMessage | null;
   onStart: () => void;
   onPause: () => void;
   onStop: () => void;
@@ -90,6 +93,7 @@ export const FloatingPreviewWindow: React.FC<FloatingPreviewWindowProps> = ({
   isBlackout = false,
   isClockMode = false,
   clockTimeFormatted,
+  activeMessage = null,
   onStart,
   onPause,
   onStop,
@@ -653,6 +657,13 @@ export const FloatingPreviewWindow: React.FC<FloatingPreviewWindowProps> = ({
             </span>
           </div>
         </div>
+
+        <MessageOverlay
+          message={activeMessage}
+          config={fsElements.message}
+          compact
+          textShadow={textShadowStyle}
+        />
       </div>
 
       {/* Floating Step Dropdown Menu (pops out above all windows) */}

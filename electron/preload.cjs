@@ -10,6 +10,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 const VALID_DISPLAY_TARGETS = new Set([
   'presenter',
   'preview',
+  'multi_preview',
   'stage',
   'fullscreen',
   'multi_fullscreen',
@@ -152,6 +153,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('preview-window-state', handler);
     return () => {
       ipcRenderer.removeListener('preview-window-state', handler);
+    };
+  },
+
+  toggleMultiPreviewWindow: () => ipcRenderer.invoke('toggle-multi-preview-window'),
+  openMultiPreviewWindow: () => ipcRenderer.invoke('open-multi-preview-window'),
+  closeMultiPreviewWindow: () => ipcRenderer.invoke('close-multi-preview-window'),
+  isMultiPreviewWindowActive: () => ipcRenderer.invoke('is-multi-preview-window-active'),
+  onMultiPreviewStateChanged: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const handler = (_event, isOpen) => callback(Boolean(isOpen));
+    ipcRenderer.on('multi-preview-window-state', handler);
+    return () => {
+      ipcRenderer.removeListener('multi-preview-window-state', handler);
     };
   },
 

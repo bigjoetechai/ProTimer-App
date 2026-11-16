@@ -89,38 +89,22 @@ export const TimerRow: React.FC<TimerRowProps> = ({
   const rowAlertLevel = alertInfo.level;
 
   // Background and borders based on state:
-  // - Overtime: Pulsing red
-  // - Alert 2: Alert 2 danger red border and tint
-  // - Alert 1: Alert 1 warning yellow/amber border and tint
-  // - Running (normal): Professional emerald/green cue active
-  // - Paused: Amber
-  // - Cued: Cyan
+  // - Active cue: Reddish highlight
+  // - Cued (Next cue): Cyan highlight with NEXT badge
   let rowStyle = isDark ? 'bg-[#0b0e14] hover:bg-[#121824] text-neutral-300' : 'bg-white hover:bg-slate-50 text-slate-800';
   if (isActive) {
     if (rowAlertLevel === 'overtime') {
       rowStyle = isDark
-        ? 'bg-red-950/65 text-red-200 border-l-4 border-l-red-600 font-bold'
+        ? 'bg-red-950/75 text-red-100 border-l-4 border-l-red-600 font-bold ring-1 ring-red-500/50 shadow-sm'
         : 'bg-red-100 text-red-950 border-l-4 border-l-red-700 font-bold ring-1 ring-red-500/40 shadow-xs';
-    } else if (rowAlertLevel === 'alert2') {
-      rowStyle = isDark 
-        ? 'bg-red-950/45 text-red-100 border-l-4 border-l-red-500 font-semibold ring-1 ring-red-500/50 shadow-sm'
-        : 'bg-red-50 text-red-900 border-l-4 border-l-red-600 font-semibold ring-1 ring-red-500/30 shadow-xs';
     } else if (rowAlertLevel === 'alert1') {
       rowStyle = isDark 
-        ? 'bg-amber-950/45 text-amber-100 border-l-4 border-l-amber-500 font-semibold ring-1 ring-amber-500/50 shadow-sm'
-        : 'bg-amber-50 text-amber-900 border-l-4 border-l-amber-600 font-semibold ring-1 ring-amber-500/30 shadow-xs';
-    } else if (isRunning) {
-      rowStyle = isDark 
-        ? 'bg-[#0d1e1f] text-emerald-100 border-l-4 border-l-emerald-500 font-semibold ring-1 ring-emerald-500/40 shadow-sm'
-        : 'bg-emerald-50 text-emerald-900 border-l-4 border-l-emerald-600 font-semibold ring-1 ring-emerald-500/30 shadow-xs';
-    } else if (isPaused) {
-      rowStyle = isDark
-        ? 'bg-amber-950/30 text-amber-100 border-l-4 border-l-amber-400 font-semibold'
-        : 'bg-amber-50 text-amber-900 border-l-4 border-l-amber-600 font-semibold ring-1 ring-amber-500/30 shadow-xs';
+        ? 'bg-red-950/55 text-red-100 border-l-4 border-l-amber-500 font-semibold ring-1 ring-red-500/45 shadow-sm'
+        : 'bg-red-50 text-red-900 border-l-4 border-l-amber-600 font-semibold ring-1 ring-red-500/30 shadow-xs';
     } else {
-      rowStyle = isDark
-        ? 'bg-[#121c2c] text-cyan-100 border-l-4 border-l-cyan-500 font-semibold'
-        : 'bg-cyan-50 text-cyan-900 border-l-4 border-l-cyan-500 font-semibold';
+      rowStyle = isDark 
+        ? 'bg-red-950/55 text-red-100 border-l-4 border-l-red-500 font-semibold ring-1 ring-red-500/45 shadow-sm'
+        : 'bg-red-50 text-red-900 border-l-4 border-l-red-600 font-semibold ring-1 ring-red-500/30 shadow-xs';
     }
   } else if (isCued) {
     rowStyle = isDark
@@ -268,7 +252,7 @@ export const TimerRow: React.FC<TimerRowProps> = ({
                 <span className={`px-1.5 py-0.5 rounded text-[9px] uppercase font-bold tracking-wider shrink-0 border ${
                   isDark ? 'bg-cyan-950 text-cyan-300 border-cyan-700/60' : 'bg-cyan-100 text-cyan-800 border-cyan-300'
                 }`}>
-                  {status === 'running' ? 'NEXT' : 'CUED'}
+                  NEXT
                 </span>
               )}
             </div>
@@ -293,13 +277,9 @@ export const TimerRow: React.FC<TimerRowProps> = ({
       {/* 3. Start Time */}
       <td className={`py-2 px-3 font-mono ${cellBorder} tabular-nums whitespace-nowrap ${
         isActive 
-          ? (rowAlertLevel === 'alert2' || rowAlertLevel === 'overtime'
-              ? (isDark ? 'text-red-200 font-semibold' : 'text-red-800 font-semibold')
-              : rowAlertLevel === 'alert1'
+          ? (rowAlertLevel === 'alert1'
               ? (isDark ? 'text-amber-200 font-semibold' : 'text-amber-800 font-semibold')
-              : isRunning
-              ? (isDark ? 'text-emerald-200 font-semibold' : 'text-emerald-800 font-semibold')
-              : (isDark ? 'text-cyan-200 font-semibold' : 'text-cyan-800 font-semibold'))
+              : (isDark ? 'text-red-200 font-semibold' : 'text-red-800 font-semibold'))
           : secondaryText
       }`}>
         {isEmptyCue ? (timer.startTime || '') : (timer.startTime || '--:--:--')}
@@ -307,7 +287,7 @@ export const TimerRow: React.FC<TimerRowProps> = ({
 
       {/* 4. Duration */}
       <td className={`py-2 px-3 font-mono ${cellBorder} tabular-nums whitespace-nowrap ${
-        isActive ? (isDark ? 'text-neutral-100 font-bold' : 'text-slate-900 font-bold') : (isDark ? 'text-neutral-200' : 'text-slate-800')
+        isActive ? (isDark ? 'text-red-100 font-bold' : 'text-red-950 font-bold') : (isDark ? 'text-neutral-200' : 'text-slate-800')
       }`}>
         {isEmptyCue && timer.durationSeconds === 0 ? '' : formatSeconds(timer.durationSeconds, true)}
       </td>
@@ -315,13 +295,9 @@ export const TimerRow: React.FC<TimerRowProps> = ({
       {/* 5. End Time */}
       <td className={`py-2 px-3 font-mono ${cellBorder} tabular-nums whitespace-nowrap ${
         isActive 
-          ? (rowAlertLevel === 'alert2' || rowAlertLevel === 'overtime'
-              ? (isDark ? 'text-red-200 font-bold' : 'text-red-800 font-bold')
-              : rowAlertLevel === 'alert1'
+          ? (rowAlertLevel === 'alert1'
               ? (isDark ? 'text-amber-200 font-bold' : 'text-amber-800 font-bold')
-              : isRunning
-              ? (isDark ? 'text-emerald-200 font-bold' : 'text-emerald-800 font-bold')
-              : (isDark ? 'text-cyan-200 font-bold' : 'text-cyan-800 font-bold'))
+              : (isDark ? 'text-red-200 font-bold' : 'text-red-800 font-bold'))
           : secondaryText
       }`}>
         {isEmptyCue && !timer.endTime && timer.durationSeconds === 0
@@ -334,13 +310,9 @@ export const TimerRow: React.FC<TimerRowProps> = ({
         isEmptyCue && !isActive && timer.durationSeconds === 0
           ? ''
           : isActive 
-          ? (rowAlertLevel === 'overtime' || rowAlertLevel === 'alert2'
-              ? (isDark ? 'bg-red-950/60' : 'bg-red-100/60') 
-              : rowAlertLevel === 'alert1'
+          ? (rowAlertLevel === 'alert1'
               ? (isDark ? 'bg-amber-950/60' : 'bg-amber-100/60')
-              : isRunning
-              ? (isDark ? 'bg-emerald-950/40' : 'bg-emerald-50/60')
-              : (isDark ? 'bg-cyan-950/30' : 'bg-cyan-50/60'))
+              : (isDark ? 'bg-red-950/60' : 'bg-red-100/60'))
           : (isDark ? 'bg-black/20' : 'bg-slate-100/60')
       }`}>
         {isEmptyCue && !isActive && timer.durationSeconds === 0 ? (
@@ -356,7 +328,7 @@ export const TimerRow: React.FC<TimerRowProps> = ({
                       ? 'animate-pulse font-black'
                       : 'font-black'
                   } ${
-                    !rowAlertColor ? (isPaused ? 'text-amber-400' : isRunning ? 'text-emerald-400' : 'text-white') : ''
+                    !rowAlertColor ? (isPaused ? 'text-amber-400' : isDark ? 'text-red-300' : 'text-red-700') : ''
                   }`
                 : (isDark ? 'text-neutral-100' : 'text-slate-900')
             }

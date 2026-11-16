@@ -754,7 +754,7 @@ class DisplaySyncService {
       alertColor,
       alertFlash,
       alertOnOff,
-      activeMessage: this.activeMessage?.visible ? this.activeMessage : null,
+      activeMessage: this.activeMessage ? { ...this.activeMessage } : null,
       clockTimeFormatted: formatClock(new Date(), undefined, prefs),
       dateFormatted: formatDate(new Date(), prefs),
       isBlackout: this.isBlackout,
@@ -1183,6 +1183,24 @@ class DisplaySyncService {
           next.activeMessage = {
             id: 'optimistic_msg',
             text,
+            visible: typeof p === 'object' && p.visible !== undefined ? Boolean(p.visible) : true,
+            flash: typeof p === 'object' ? Boolean(p.flash) : false,
+            urgent: typeof p === 'object' ? Boolean(p.urgent) : false,
+            color: (typeof p === 'object' && p.color) || '#f97316',
+            createdAt: Date.now(),
+          };
+        }
+        break;
+      case 'TOGGLE_MESSAGE_VISIBILITY':
+        if (next.activeMessage) {
+          next.activeMessage = {
+            ...next.activeMessage,
+            visible: !next.activeMessage.visible,
+          };
+        } else {
+          next.activeMessage = {
+            id: 'optimistic_msg',
+            text: 'STANDBY',
             visible: true,
             flash: false,
             urgent: false,

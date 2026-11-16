@@ -55,6 +55,7 @@ let outputWindow = null;
 const outputWindowsByList = new Map();
 let multiOutputWindow = null;
 let previewWindow = null;
+let multiPreviewWindow = null;
 let presenterWindow = null;
 let ndiOffscreenWindow = null;
 let currentOutputDisplayId = null;
@@ -1132,6 +1133,12 @@ function notifyPreviewStateChanged(isOpen) {
   }
 }
 
+function notifyMultiPreviewStateChanged(isOpen) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('multi-preview-window-state', Boolean(isOpen));
+  }
+}
+
 function notifyPresenterStateChanged(isOpen) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('presenter-window-state', Boolean(isOpen));
@@ -1185,10 +1192,15 @@ function createMainWindow() {
   // Route preview/presenter to singleton frameless always-on-top windows so 2 windows never open
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     const isPreviewWindow = typeof url === 'string' && url.includes('display=preview');
+    const isMultiPreviewWindow = typeof url === 'string' && url.includes('display=multi_preview');
     const isPresenterWindow = typeof url === 'string' && url.includes('display=presenter');
 
     if (isPreviewWindow) {
       openPreviewWindow();
+      return { action: 'deny' };
+    }
+    if (isMultiPreviewWindow) {
+      openMultiPreviewWindow();
       return { action: 'deny' };
     }
     if (isPresenterWindow) {
@@ -1290,6 +1302,10 @@ function createMainWindow() {
     if (previewWindow && !previewWindow.isDestroyed()) {
       previewWindow.close();
       previewWindow = null;
+    }
+    if (multiPreviewWindow && !multiPreviewWindow.isDestroyed()) {
+      multiPreviewWindow.close();
+      multiPreviewWindow = null;
     }
     if (presenterWindow && !presenterWindow.isDestroyed()) {
       presenterWindow.close();
@@ -1406,6 +1422,94 @@ function togglePreviewWindow() {
     return closePreviewWindow();
   }
   return openPreviewWindow();
+}
+
+function openMultiPreviewWindow() {
+  if (multiPreviewWindow && !multiPreviewWindow.isDestroyed()) {
+    applyAlwaysOnTopOverlap(multiPreviewWindow);
+    multiPreviewWindow.show();
+    multiPreviewWindow.focus();
+    notifyMultiPreviewStateChanged(true);
+    return { active: true };
+  }
+
+  const primary = screen.getPrimaryDisplay();
+  const workArea = primary.workArea;
+  const defaultW = 540;
+  const defaultH = 360;
+  const defaultX = workArea.x + Math.max(20, Math.floor((workArea.width - defaultW) / 2));
+  const defaultY = workArea.y + Math.max(48, workArea.height - defaultH - 96);
+
+  multiPreviewWindow = new BrowserWindow({
+    x: defaultX,
+    y: defaultY,
+    width: defaultW,
+    height: defaultH,
+    minWidth: 320,
+    minHeight: 200,
+    frame: false,
+    resizable: true,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    alwaysOnTop: true,
+    autoHideMenuBar: true,
+    hasShadow: true,
+    show: false,
+    paintWhenInitiallyHidden: true,
+    icon: getAppIconPath(),
+    backgroundColor: '#06080d',
+    title: 'ProTimer - Multi Preview',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      backgroundThrottling: false,
+    },
+  });
+
+  applyAlwaysOnTopOverlap(multiPreviewWindow);
+
+  const baseUrl = getBaseUrl();
+  const separator = baseUrl.includes('?') ? '&' : '?';
+  const multiPreviewUrl = `${baseUrl}${separator}display=multi_preview`;
+
+  multiPreviewWindow.once('ready-to-show', () => {
+    if (multiPreviewWindow && !multiPreviewWindow.isDestroyed()) {
+      applyAlwaysOnTopOverlap(multiPreviewWindow);
+      multiPreviewWindow.show();
+      notifyMultiPreviewStateChanged(true);
+    }
+  });
+
+  multiPreviewWindow.on('blur', () => applyAlwaysOnTopOverlap(multiPreviewWindow));
+  multiPreviewWindow.on('show', () => applyAlwaysOnTopOverlap(multiPreviewWindow));
+
+  multiPreviewWindow.loadURL(multiPreviewUrl);
+
+  multiPreviewWindow.on('closed', () => {
+    multiPreviewWindow = null;
+    notifyMultiPreviewStateChanged(false);
+  });
+
+  notifyMultiPreviewStateChanged(true);
+  return { active: true };
+}
+
+function closeMultiPreviewWindow() {
+  if (multiPreviewWindow && !multiPreviewWindow.isDestroyed()) {
+    multiPreviewWindow.close();
+    multiPreviewWindow = null;
+  }
+  notifyMultiPreviewStateChanged(false);
+  return { active: false };
+}
+
+function toggleMultiPreviewWindow() {
+  if (multiPreviewWindow && !multiPreviewWindow.isDestroyed()) {
+    return closeMultiPreviewWindow();
+  }
+  return openMultiPreviewWindow();
 }
 
 function openPresenterWindow() {
@@ -1849,6 +1953,22 @@ ipcMain.handle('close-preview-window', async () => {
 
 ipcMain.handle('is-preview-window-active', async () => {
   return Boolean(previewWindow && !previewWindow.isDestroyed());
+});
+
+ipcMain.handle('toggle-multi-preview-window', async () => {
+  return toggleMultiPreviewWindow();
+});
+
+ipcMain.handle('open-multi-preview-window', async () => {
+  return openMultiPreviewWindow();
+});
+
+ipcMain.handle('close-multi-preview-window', async () => {
+  return closeMultiPreviewWindow();
+});
+
+ipcMain.handle('is-multi-preview-window-active', async () => {
+  return Boolean(multiPreviewWindow && !multiPreviewWindow.isDestroyed());
 });
 
 ipcMain.handle('toggle-presenter-window', async () => {

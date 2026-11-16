@@ -879,6 +879,18 @@ class TimerManagerService {
     if (trackedCuedId && list.timerIds.includes(trackedCuedId)) {
       return this.timers.get(trackedCuedId) || null;
     }
+    const activeInList = this.getActiveTimerInList(listId);
+    if (activeInList) {
+      const activeIdx = list.timerIds.indexOf(activeInList.id);
+      for (let step = 1; step < list.timerIds.length; step++) {
+        const candidateId = list.timerIds[(activeIdx + step) % list.timerIds.length];
+        const candidate = this.timers.get(candidateId);
+        if (candidate && candidate.type !== 'spacer' && candidateId !== activeInList.id) {
+          return candidate;
+        }
+      }
+      return null;
+    }
     if (list.timerIds.length > 0) {
       const cuedId =
         list.timerIds.find((tid) => this.timers.get(tid)?.status === 'cued') ||
@@ -985,11 +997,21 @@ class TimerManagerService {
 
     this.runningTimerIds.add(idToStart);
     this.activeTimerIdByList.set(targetList.id, idToStart);
-    this.cuedTimerIdByList.set(targetList.id, idToStart);
+
+    // Advance the next-cue pointer (cuedTimerId) to the next playable cue in sequence
+    const startedIndex = targetList.timerIds.indexOf(idToStart);
+    const nextCueId = findNextPlayableId(startedIndex);
+    const nextCuedTarget = nextCueId && nextCueId !== idToStart ? nextCueId : null;
+
+    this.cuedTimerIdByList.set(targetList.id, nextCuedTarget);
     if (isTargetListActive) {
       this.activeTimerId = idToStart;
-      this.cuedTimerId = idToStart;
+      this.cuedTimerId = nextCuedTarget;
     }
+    if (nextCuedTarget) {
+      this.primeCuedTimerInList(nextCuedTarget, targetList);
+    }
+
     this.ensureTickerRunning();
     this.recordTimerStart(timer, wasPaused);
     this.saveTimerToStorage(timer);
@@ -1057,6 +1079,7 @@ class TimerManagerService {
           this.activeTimerId = null;
         }
       }
+      this.primeCuedTimerInList(idToStop, parentList);
     }
 
     this.saveTimerToStorage(timer);
@@ -1177,11 +1200,28 @@ class TimerManagerService {
     (timer as unknown as { lastWallClockTime: number }).lastWallClockTime = now.getTime();
 
     if (parentList) {
+      const findNextPlayableId = (fromIndex: number): string | null => {
+        for (let step = 1; step <= parentList.timerIds.length; step++) {
+          const candidateId = parentList.timerIds[(fromIndex + step) % parentList.timerIds.length];
+          const candidate = this.timers.get(candidateId);
+          if (candidate && candidate.type !== 'spacer') {
+            return candidateId;
+          }
+        }
+        return null;
+      };
+      const startedIndex = parentList.timerIds.indexOf(idToRestart);
+      const nextCueId = findNextPlayableId(startedIndex);
+      const nextCuedTarget = nextCueId && nextCueId !== idToRestart ? nextCueId : null;
+
       this.activeTimerIdByList.set(parentList.id, idToRestart);
-      this.cuedTimerIdByList.set(parentList.id, idToRestart);
+      this.cuedTimerIdByList.set(parentList.id, nextCuedTarget);
       if (parentList.id === this.activeListId) {
         this.activeTimerId = idToRestart;
-        this.cuedTimerId = idToRestart;
+        this.cuedTimerId = nextCuedTarget;
+      }
+      if (nextCuedTarget) {
+        this.primeCuedTimerInList(nextCuedTarget, parentList);
       }
     }
     this.runningTimerIds.add(idToRestart);
@@ -2252,10 +2292,16 @@ class TimerManagerService {
 
     if (runningTimerInList) {
       this.activeTimerId = runningTimerInList;
-      this.cuedTimerId = cuedTimerInList || runningTimerInList;
+      this.cuedTimerId =
+        cuedTimerInList && cuedTimerInList !== runningTimerInList
+          ? cuedTimerInList
+          : this.getCuedTimerInList(listId)?.id || null;
     } else if (pausedTimerInList) {
       this.activeTimerId = pausedTimerInList;
-      this.cuedTimerId = cuedTimerInList || pausedTimerInList;
+      this.cuedTimerId =
+        cuedTimerInList && cuedTimerInList !== pausedTimerInList
+          ? cuedTimerInList
+          : this.getCuedTimerInList(listId)?.id || null;
     } else if (list.timerIds.length > 0) {
       this.activeTimerId = null;
       this.cuedTimerId =
@@ -3076,18 +3122,7 @@ class TimerManagerService {
   }
 
   public getCuedTimer(): TimerItem | null {
-    const list = this.lists.get(this.activeListId);
-    if (this.cuedTimerId && (!list || list.timerIds.includes(this.cuedTimerId))) {
-      return this.timers.get(this.cuedTimerId) || null;
-    }
-    if (list && list.timerIds.length > 0) {
-      const cuedId =
-        list.timerIds.find((tid) => this.timers.get(tid)?.status === 'cued') ||
-        list.timerIds.find((tid) => this.timers.get(tid)?.type !== 'spacer') ||
-        list.timerIds[0];
-      return cuedId ? this.timers.get(cuedId) || null : null;
-    }
-    return null;
+    return this.getCuedTimerInList(this.activeListId);
   }
 
   public getNextTimer(): TimerItem | null {

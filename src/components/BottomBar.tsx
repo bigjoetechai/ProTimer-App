@@ -51,6 +51,7 @@ interface BottomBarProps {
   isMultiFullscreenActive?: boolean;
   onCloseMultiFullscreen?: () => void;
   isPreviewActive?: boolean;
+  isMultiPreviewActive?: boolean;
   isPresenterActive?: boolean;
   isLanControlActive?: boolean;
   isLanDisplayActive?: boolean;
@@ -85,6 +86,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
   isMultiFullscreenActive = false,
   onCloseMultiFullscreen,
   isPreviewActive = false,
+  isMultiPreviewActive = false,
   isPresenterActive = false,
   isLanControlActive = false,
   isLanDisplayActive = false,
@@ -341,7 +343,11 @@ export const BottomBar: React.FC<BottomBarProps> = ({
               ndiMode: 'multi' as const,
               tooltip: 'Activate Multi-List NDI Network Broadcast Stream (uses Preferences → NDI settings)',
             },
-            { label: 'Multi Preview', target: 'preview' as DisplayTarget, tooltip: 'Multiview Stage Preview' },
+            {
+              label: 'Multi Preview',
+              target: 'multi_preview' as DisplayTarget,
+              tooltip: 'Open Multi Preview Pop-Out Window (Active Cues Across All List Tabs)',
+            },
             { label: 'Multi FS', target: 'multi_fullscreen' as DisplayTarget, tooltip: 'Multi Fullscreen: Display Active Cue of All List Tabs' },
             {
               label: 'LAN Control',
@@ -364,6 +370,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
             const isActive =
               (item.label === 'Presenter' && isPresenterActive) ||
               (item.label === 'Preview' && isPreviewActive) ||
+              (item.label === 'Multi Preview' && isMultiPreviewActive) ||
               (item.label === 'Fullscreen' && isFullscreenActive) ||
               (item.label === 'Multi FS' && isMultiFullscreenActive) ||
               (item.label === 'LAN Control' && isLanControlActive) ||

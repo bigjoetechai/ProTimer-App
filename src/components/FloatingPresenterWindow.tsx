@@ -11,11 +11,13 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Pin } from 'lucide-react';
 import {
+  StageMessage,
   TimerItem,
   TimerStatus,
   resolveBackgroundImageForList,
   resolveLogoImageForList,
 } from '../types';
+import { MessageOverlay } from '../messages/MessageOverlay';
 import { formatClock, formatDate, formatSeconds } from '../utilities/timeFormatters';
 import {
   getElementOffsetTransform,
@@ -50,6 +52,7 @@ interface FloatingPresenterWindowProps {
   isBlackout?: boolean;
   isClockMode?: boolean;
   clockTimeFormatted?: string;
+  activeMessage?: StageMessage | null;
 }
 
 type ResizeDirection = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
@@ -76,6 +79,7 @@ export const FloatingPresenterWindow: React.FC<FloatingPresenterWindowProps> = (
   isBlackout = false,
   isClockMode = false,
   clockTimeFormatted,
+  activeMessage = null,
 }) => {
   const localPrefs = useLivePreferences();
 
@@ -501,6 +505,13 @@ export const FloatingPresenterWindow: React.FC<FloatingPresenterWindowProps> = (
           </span>
         </div>
       </div>
+
+      <MessageOverlay
+        message={activeMessage}
+        config={presElements.message}
+        compact
+        textShadow={textShadowStyle}
+      />
     </div>
   );
 };

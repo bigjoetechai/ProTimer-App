@@ -5,6 +5,7 @@ export * from './BottomBar';
 export * from './ListManagerModal';
 export * from './LanModal';
 export * from './FloatingPreviewWindow';
+export * from './FloatingMultiPreviewWindow';
 export * from './FloatingPresenterWindow';
 export * from './TimerHistoryLogView';
 

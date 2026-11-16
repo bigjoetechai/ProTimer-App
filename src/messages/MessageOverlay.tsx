@@ -26,21 +26,20 @@ export const MessageOverlay: React.FC<MessageOverlayProps> = ({
   textShadow,
 }) => {
   if (!message || !message.visible || !message.text) return null;
-  if (config && config.visible === false) return null;
 
   const location = config?.location || 'Top';
   const positionCls =
     location === 'Top'
       ? compact
-        ? 'top-9'
+        ? 'top-10'
         : 'top-8'
       : location === 'Middle'
       ? 'top-1/2 -translate-y-1/2'
       : compact
-      ? 'bottom-8'
+      ? 'bottom-9'
       : 'bottom-8';
 
-  const baseFontPx = compact ? 14 : 34;
+  const baseFontPx = compact ? 13 : 34;
   const textStyle = getElementStyle(config, {
     baseFontSizePx: baseFontPx,
     defaultSizePercent: 33,
@@ -51,13 +50,13 @@ export const MessageOverlay: React.FC<MessageOverlayProps> = ({
 
   return (
     <div
-      className={`fixed ${positionCls} left-1/2 -translate-x-1/2 max-w-[92vw] ${
-        compact ? 'px-3 py-1.5 rounded-lg' : 'px-8 py-4 rounded-xl'
-      } shadow-2xl border text-center transition-all duration-300 z-50 pointer-events-none ${
+      className={`absolute ${positionCls} left-1/2 -translate-x-1/2 w-max max-w-[92%] ${
+        compact ? 'px-3 py-1 rounded-md' : 'px-8 py-4 rounded-xl'
+      } shadow-2xl border text-center transition-all duration-300 z-40 pointer-events-none ${
         message.flash ? 'animate-pulse' : ''
       } ${
         message.urgent
-          ? 'bg-red-950/90 border-red-500 text-white'
+          ? 'bg-red-950/95 border-red-500 text-white'
           : 'bg-[#181a20]/95 border-[#454c59] text-white'
       }`}
       style={{
@@ -68,7 +67,7 @@ export const MessageOverlay: React.FC<MessageOverlayProps> = ({
       }}
     >
       <div
-        className="tracking-wider uppercase leading-snug"
+        className="tracking-wider uppercase leading-snug break-words"
         style={{
           fontFamily: textStyle.fontFamily,
           fontWeight: textStyle.fontWeight,
@@ -83,3 +82,4 @@ export const MessageOverlay: React.FC<MessageOverlayProps> = ({
     </div>
   );
 };
+

@@ -7,6 +7,7 @@ import {
   PresenterDisplay, 
   StageDisplay, 
   PreviewDisplay, 
+  MultiPreviewDisplay,
   FullscreenDisplay,
   MultiFullscreenDisplay,
   LanControlDisplay,
@@ -30,6 +31,8 @@ export const DisplayPage: React.FC<DisplayPageProps> = ({ target }) => {
       return <FullscreenDisplay />;
     case 'multi_fullscreen':
       return <MultiFullscreenDisplay />;
+    case 'multi_preview':
+      return <MultiPreviewDisplay />;
     case 'lan_control':
       return <LanControlDisplay />;
     case 'lan_desktop':

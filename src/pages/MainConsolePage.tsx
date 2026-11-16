@@ -14,6 +14,7 @@ import {
   ListManagerModal,
   LanModal,
   FloatingPreviewWindow,
+  FloatingMultiPreviewWindow,
   FloatingPresenterWindow,
   TimerHistoryLogView,
 } from '../components';
@@ -26,6 +27,7 @@ import { formatSeconds } from '../utilities/timeFormatters';
 import { TimerItem, DisplayTarget, AppPreferences } from '../types';
 import { storageService } from '../services/storageService';
 import { displaySyncService } from '../services/displaySyncService';
+import { timerManagerService } from '../services/timerManager';
 import { ndiStreamService, NdiStreamStatus } from '../services/ndiStreamService';
 
 export const MainConsolePage: React.FC = () => {
@@ -110,6 +112,7 @@ export const MainConsolePage: React.FC = () => {
   const [isLanModalOpen, setIsLanModalOpen] = useState(false);
   const [lanModalMode, setLanModalMode] = useState<'lan_control' | 'lan_display'>('lan_control');
   const [isPreviewPopoutOpen, setIsPreviewPopoutOpen] = useState(false);
+  const [isMultiPreviewPopoutOpen, setIsMultiPreviewPopoutOpen] = useState(false);
   const [isPresenterPopoutOpen, setIsPresenterPopoutOpen] = useState(false);
   const [ndiStreamStatus, setNdiStreamStatus] = useState<NdiStreamStatus>(() =>
     ndiStreamService.getStatus()
@@ -121,16 +124,20 @@ export const MainConsolePage: React.FC = () => {
     });
   }, []);
 
-  // Keep Preview & Presenter active state synced with native Electron windows when running as desktop app
+  // Keep Preview, Multi Preview & Presenter active state synced with native Electron windows when running as desktop app
   useEffect(() => {
     const api = typeof window !== 'undefined' ? window.electronAPI : undefined;
     if (!api?.isElectron) return;
 
     api.isPreviewWindowActive?.().then((active) => setIsPreviewPopoutOpen(Boolean(active)));
+    api.isMultiPreviewWindowActive?.().then((active) => setIsMultiPreviewPopoutOpen(Boolean(active)));
     api.isPresenterWindowActive?.().then((active) => setIsPresenterPopoutOpen(Boolean(active)));
 
     const unsubPreview = api.onPreviewStateChanged?.((isOpen) => {
       setIsPreviewPopoutOpen(Boolean(isOpen));
+    });
+    const unsubMultiPreview = api.onMultiPreviewStateChanged?.((isOpen) => {
+      setIsMultiPreviewPopoutOpen(Boolean(isOpen));
     });
     const unsubPresenter = api.onPresenterStateChanged?.((isOpen) => {
       setIsPresenterPopoutOpen(Boolean(isOpen));
@@ -138,6 +145,7 @@ export const MainConsolePage: React.FC = () => {
 
     return () => {
       if (unsubPreview) unsubPreview();
+      if (unsubMultiPreview) unsubMultiPreview();
       if (unsubPresenter) unsubPresenter();
     };
   }, []);
@@ -462,8 +470,8 @@ export const MainConsolePage: React.FC = () => {
         activeTimer={activeTimer || cuedTimer}
         isBlackout={payload?.isBlackout ?? false}
         isClockMode={payload?.isClockMode ?? false}
-        hasActiveMessage={!!payload?.activeMessage}
-        messageVisible={payload?.activeMessage?.visible ?? false}
+        hasActiveMessage={Boolean(payload?.activeMessage?.text)}
+        messageVisible={Boolean(payload?.activeMessage?.visible)}
         onStart={() => start()}
         onStop={() => stop()}
         onMove={() => skipEvent()}
@@ -642,6 +650,14 @@ export const MainConsolePage: React.FC = () => {
             } else {
               setIsPreviewPopoutOpen((prev) => !prev);
             }
+          } else if (target === 'multi_preview') {
+            if (typeof window !== 'undefined' && window.electronAPI?.isElectron && window.electronAPI.toggleMultiPreviewWindow) {
+              window.electronAPI.toggleMultiPreviewWindow().then((res) => {
+                setIsMultiPreviewPopoutOpen(Boolean(res?.active));
+              });
+            } else {
+              setIsMultiPreviewPopoutOpen((prev) => !prev);
+            }
           } else if (target === 'lan_control') {
             if (isLanModalOpen && lanModalMode === 'lan_control') {
               setIsLanModalOpen(false);
@@ -681,6 +697,7 @@ export const MainConsolePage: React.FC = () => {
         isMultiFullscreenActive={isMultiFullscreenActive || Boolean(payload?.isMultiFullscreenActive)}
         onCloseMultiFullscreen={closeMultiFullscreen}
         isPreviewActive={isPreviewPopoutOpen}
+        isMultiPreviewActive={isMultiPreviewPopoutOpen}
         isPresenterActive={isPresenterPopoutOpen}
         ndiStreamStatus={
           typeof window !== 'undefined' &&
@@ -728,6 +745,7 @@ export const MainConsolePage: React.FC = () => {
           isBlackout={payload?.isBlackout ?? false}
           isClockMode={payload?.isClockMode ?? false}
           clockTimeFormatted={payload?.clockTimeFormatted}
+          activeMessage={payload?.activeMessage ?? null}
         />
       )}
 
@@ -751,11 +769,34 @@ export const MainConsolePage: React.FC = () => {
           isBlackout={payload?.isBlackout ?? false}
           isClockMode={payload?.isClockMode ?? false}
           clockTimeFormatted={payload?.clockTimeFormatted}
+          activeMessage={payload?.activeMessage ?? null}
           onStart={() => start()}
           onPause={() => pause()}
           onStop={() => stop()}
           onNextCue={() => skipEvent()}
           onAdjustDuration={(delta) => adjustDuration(delta)}
+        />
+      )}
+
+      {/* ALWAYS-ON-TOP RESIZABLE MULTI PREVIEW POP-OUT SCREEN (Web mode only — Electron uses native frameless always-on-top window) */}
+      {!(typeof window !== 'undefined' && window.electronAPI?.isElectron) && (
+        <FloatingMultiPreviewWindow
+          isOpen={isMultiPreviewPopoutOpen}
+          onClose={() => setIsMultiPreviewPopoutOpen(false)}
+          listActiveCues={payload?.listActiveCues || timerManagerService.getAllListsActiveCues()}
+          activeListId={snapshot.activeListId}
+          isBlackout={payload?.isBlackout ?? false}
+          isClockMode={payload?.isClockMode ?? false}
+          clockTimeFormatted={payload?.clockTimeFormatted}
+          activeMessage={payload?.activeMessage ?? null}
+          onSelectList={(id) => switchList(id)}
+          onStartList={(listId) => timerManagerService.start(undefined, listId)}
+          onPauseList={(listId) => timerManagerService.pause(undefined, listId)}
+          onStopList={(listId) => timerManagerService.stop(undefined, listId)}
+          onNextCueList={(listId) => timerManagerService.moveNextCue(listId)}
+          onAdjustDurationList={(listId, delta) =>
+            timerManagerService.adjustDuration(delta, undefined, listId)
+          }
         />
       )}
 
