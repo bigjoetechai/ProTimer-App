@@ -2811,7 +2811,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <p className="text-[13px]">
                         ProTimer Desktop{' '}
                         <span className={`font-mono font-semibold ${isDark ? 'text-white' : 'text-slate-900'}`}>
-                          v1.5.0
+                          v2.0.0
                         </span>{' '}
                         (64-bit)
                       </p>

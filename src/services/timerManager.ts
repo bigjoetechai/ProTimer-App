@@ -2536,7 +2536,7 @@ class TimerManagerService {
       .filter((t): t is TimerItem => Boolean(t));
 
     return {
-      version: '1.0.0',
+      version: '2.0.0',
       exportedAt: Date.now(),
       type: 'single_list',
       list,
@@ -2746,7 +2746,7 @@ class TimerManagerService {
     const allTimers = Array.from(this.timers.values());
 
     return {
-      version: '1.0.0',
+      version: '2.0.0',
       exportedAt: Date.now(),
       type: 'all_lists',
       activeListId: this.activeListId,

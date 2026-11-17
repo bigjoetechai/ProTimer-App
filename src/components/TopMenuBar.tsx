@@ -248,7 +248,7 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
                   <span>About ProTimer</span>
                 </div>
                 <span className={`text-[11px] font-normal ${isDark ? 'text-neutral-400' : 'text-slate-500'}`}>
-                  v1.5.0
+                  v2.0.0
                 </span>
               </button>
 
@@ -988,7 +988,7 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
                       </div>
                     </div>
                     <span className="px-2 py-0.5 rounded bg-cyan-500/15 text-cyan-400 border border-cyan-500/30 font-mono font-semibold">
-                      v1.5.0
+                      v2.0.0
                     </span>
                   </div>
                   <p className={isDark ? 'text-neutral-400' : 'text-slate-600'}>
@@ -997,7 +997,7 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
                   </p>
                   <div className={`pt-2 border-t text-[11px] font-mono space-y-0.5 ${isDark ? 'border-[#1e2636] text-neutral-400' : 'border-slate-300 text-slate-600'}`}>
                     <div>Owner / Company: Bigjoe Technology</div>
-                    <div>Build: v1.5.0 (64-bit) • Copyright © 2026 Bigjoe Technology</div>
+                    <div>Build: v2.0.0 (64-bit) • Copyright © 2026 Bigjoe Technology</div>
                   </div>
                 </>
               )}
@@ -1012,7 +1012,7 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
                   }`}>
                     <div>Company: Bigjoe Technology</div>
                     <div>Support Email: support@protimer.app</div>
-                    <div>Version: ProTimer v1.5.0</div>
+                    <div>Version: ProTimer v2.0.0</div>
                   </div>
                 </>
               )}
@@ -1033,7 +1033,7 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
                 <div className="space-y-2">
                   <div className="flex items-center gap-2 text-emerald-500 font-semibold">
                     <CheckCircle2 className="w-4 h-4" />
-                    <span>ProTimer v1.5.0 — Activated (Full Production License)</span>
+                    <span>ProTimer v2.0.0 — Activated (Full Production License)</span>
                   </div>
                   <p className={isDark ? 'text-neutral-400' : 'text-slate-600'}>
                     All broadcast features—including Multi-List Fullscreen, NDI Output, and LAN Remote Control—are unlocked and active on this workstation.
@@ -1048,10 +1048,10 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
                 <div className="space-y-2">
                   <div className="flex items-center gap-2 text-emerald-500 font-semibold">
                     <CheckCircle2 className="w-4 h-4" />
-                    <span>You are running the latest version (v1.5.0)</span>
+                    <span>You are running the latest version (v2.0.0)</span>
                   </div>
                   <p className={isDark ? 'text-neutral-400' : 'text-slate-600'}>
-                    ProTimer v1.5.0 is up to date.
+                    ProTimer v2.0.0 is up to date.
                   </p>
                 </div>
               )}
