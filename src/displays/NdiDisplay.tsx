@@ -9,7 +9,11 @@
 import React, { useState } from 'react';
 import { useDisplaySync } from '../hooks/useDisplaySync';
 import { MessageOverlay } from '../messages/MessageOverlay';
-import { resolveBackgroundImageForList, resolveLogoImageForList } from '../types';
+import {
+  formatListNdiSourceName,
+  resolveBackgroundImageForList,
+  resolveLogoImageForList,
+} from '../types';
 import { formatClock, formatDate, formatSeconds } from '../utilities/timeFormatters';
 import {
   getElementOffsetTransform,
@@ -24,21 +28,51 @@ import {
   resolveFontStyleCss,
   useLivePreferences,
 } from '../utilities/displayStyleHelper';
-import { Radio, Layers } from 'lucide-react';
+import { Radio, Layers, LayoutGrid } from 'lucide-react';
 
 export const NdiDisplay: React.FC = () => {
   const { payload } = useDisplaySync(true);
   const prefs = useLivePreferences(payload?.preferences);
   const [bgMode, setBgMode] = useState<'transparent' | 'black' | 'green'>('black');
   const [showSafeMargins, setShowSafeMargins] = useState(false);
+  const urlMode =
+    typeof window !== 'undefined'
+      ? new URLSearchParams(window.location.search).get('mode')
+      : null;
+  const [multiViewOverride, setMultiViewOverride] = useState<boolean | null>(
+    urlMode === 'multi' ? true : urlMode === 'single' ? false : null
+  );
 
   if (!payload || payload.isBlackout) {
     return <div className="h-screen w-screen bg-transparent" />;
   }
 
+  const requestedListId =
+    typeof window !== 'undefined'
+      ? new URLSearchParams(window.location.search).get('listId') ||
+        new URLSearchParams(window.location.search).get('id')
+      : null;
+
+  const listActiveCues = payload.listActiveCues || [];
+  const targetCueSummary = requestedListId
+    ? listActiveCues.find((c) => c.listId === requestedListId)
+    : listActiveCues.find((c) => c.listId === payload.activeListId) || listActiveCues[0];
+
+  const activeListName =
+    targetCueSummary?.listName ||
+    payload.activeListName ||
+    'List 1';
+
   const ndiRes = prefs.ndiResolution || 'HD - 1920 x 1080';
   const ndiFps = prefs.ndiFrameRate || 30;
-  const ndiSourceName = prefs.ndiSourceName || 'ProTimer (Main Output)';
+  const ndiSourceName =
+    (requestedListId && payload.ndiSourceNamesByList?.[requestedListId]) ||
+    (payload.activeListId && payload.ndiSourceNamesByList?.[payload.activeListId]) ||
+    formatListNdiSourceName(activeListName, prefs.ndiSourceName);
+  const isMultiDisplay =
+    multiViewOverride !== null
+      ? multiViewOverride
+      : Boolean(payload.isNdiMultiActive && !requestedListId && listActiveCues.length > 1);
   const ndiGroupLabel =
     prefs.ndiUseCustomGroups && prefs.ndiCustomGroups
       ? `Groups: ${prefs.ndiCustomGroups}`
@@ -166,13 +200,30 @@ export const NdiDisplay: React.FC = () => {
       <div className="flex items-center justify-between opacity-50 hover:opacity-100 transition-opacity z-20">
         <div className="flex items-center gap-2 text-xs">
           <Radio className="w-4 h-4 text-red-500 animate-pulse" />
-          <span className="font-bold text-red-400">NDI|HX OUT: {ndiSourceName}</span>
+          <span className="font-bold text-red-400">
+            NDI|HX OUT:{' '}
+            {isMultiDisplay
+              ? listActiveCues
+                  .map((c) => formatListNdiSourceName(c.listName, prefs.ndiSourceName))
+                  .join(' • ')
+              : ndiSourceName}
+          </span>
           <span className="text-neutral-400">
             {ndiRes} @ {ndiFps} FPS • {ndiGroupLabel}
           </span>
         </div>
 
         <div className="flex items-center gap-2 text-xs">
+          {listActiveCues.length > 1 && (
+            <button
+              type="button"
+              onClick={() => setMultiViewOverride(!isMultiDisplay)}
+              className="px-2 py-1 bg-black/70 hover:bg-black rounded text-[11px] text-emerald-300 border border-emerald-700/60 flex items-center gap-1 cursor-pointer"
+            >
+              <LayoutGrid className="w-3 h-3 text-emerald-400" />
+              {isMultiDisplay ? 'Multi NDI Grid' : `Single (${activeListName})`}
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setShowSafeMargins(!showSafeMargins)}
@@ -194,104 +245,181 @@ export const NdiDisplay: React.FC = () => {
         </div>
       </div>
 
-      {/* Center Digital Clock / Counter */}
-      <div
-        className="relative z-10 my-auto flex flex-col items-center justify-center text-center"
-        style={innerTransformStyle}
-      >
-        {(clockCfg?.visible || dateCfg?.visible) && (
-          <div className="flex items-center gap-4 mb-3">
-            {clockCfg?.visible && (
-              <span
-                className="text-neutral-200 tabular-nums"
-                style={{
-                  fontFamily: resolveFontFamily(clockCfg?.font),
-                  ...resolveFontStyleCss(clockCfg?.fontStyle),
-                  fontSize: `calc(clamp(1.25rem, 2.5vw, 2.5rem) * ${clockScale})`,
-                  textShadow: textShadowStyle,
-                }}
+      {/* Center Digital Clock / Counter or Multi-NDI Display Grid */}
+      {isMultiDisplay && listActiveCues.length > 0 ? (
+        <div
+          className={`relative z-10 my-auto grid gap-4 w-full h-[78vh] ${
+            listActiveCues.length === 1
+              ? 'grid-cols-1'
+              : listActiveCues.length === 2
+              ? 'grid-cols-2'
+              : listActiveCues.length <= 4
+              ? 'grid-cols-2 grid-rows-2'
+              : 'grid-cols-3'
+          }`}
+        >
+          {listActiveCues.map((cueItem) => {
+            const tileSourceName =
+              payload.ndiSourceNamesByList?.[cueItem.listId] ||
+              formatListNdiSourceName(cueItem.listName, prefs.ndiSourceName);
+            const tileTime = formatSeconds(
+              cueItem.secondsRemaining,
+              true,
+              cueItem.isOvertime,
+              prefs
+            );
+            const tileDisplayTime = payload.isClockMode
+              ? formattedClock
+              : cueItem.isOvertime
+              ? `+${tileTime.replace(/^[+-]/, '')}`
+              : tileTime.replace(/^-/, '+');
+            const tileDigitColor = resolveDisplayDigitColor({
+              isOvertime: cueItem.isOvertime,
+              isPaused: cueItem.status === 'paused',
+              activeAlertLevel: cueItem.activeAlertLevel,
+              alertColor: cueItem.alertColor,
+              prefs,
+            });
+            return (
+              <div
+                key={cueItem.listId}
+                className="rounded-xl border border-emerald-500/40 bg-black/65 p-4 flex flex-col justify-between relative overflow-hidden"
               >
-                {formattedClock}
-              </span>
-            )}
-            {dateCfg?.visible && (
-              <span
-                className="text-neutral-300"
-                style={{
-                  fontFamily: resolveFontFamily(dateCfg?.font),
-                  ...resolveFontStyleCss(dateCfg?.fontStyle),
-                  fontSize: `calc(clamp(1.1rem, 2.2vw, 2.2rem) * ${dateScale})`,
-                  textShadow: textShadowStyle,
-                }}
-              >
-                {formattedDate}
-              </span>
-            )}
-          </div>
-        )}
+                <div className="flex items-center justify-between text-xs border-b border-white/10 pb-2">
+                  <span className="font-bold text-emerald-400 flex items-center gap-1.5">
+                    <Radio className="w-3.5 h-3.5 animate-pulse" />
+                    {tileSourceName}
+                  </span>
+                  <span className="px-2 py-0.5 rounded bg-white/10 text-[10px] uppercase tracking-wider text-neutral-300">
+                    {cueItem.status}
+                  </span>
+                </div>
 
-        {nameCfg?.visible !== false && payload.activeTimer && (
-          <div
-            className="tracking-wider uppercase text-cyan-300 mb-2 drop-shadow-md"
-            style={{
-              fontFamily: resolveFontFamily(nameCfg?.font),
-              ...resolveFontStyleCss(nameCfg?.fontStyle),
-              fontSize: `calc(clamp(1.35rem, 3vw, 2.75rem) * ${nameScale})`,
-              textShadow: textShadowStyle,
-              transform: getElementOffsetTransform(nameCfg, 3),
-            }}
-          >
-            {payload.activeTimer.name}
-          </div>
-        )}
+                <div className="my-auto text-center">
+                  {cueItem.activeTimer && (
+                    <div className="text-cyan-300 uppercase tracking-wider font-semibold text-sm sm:text-base mb-1 truncate">
+                      {cueItem.activeTimer.name}
+                    </div>
+                  )}
+                  <div
+                    className="font-bold tabular-nums tracking-tighter leading-none"
+                    style={{
+                      fontSize: 'clamp(2.5rem, 6vw, 6.5rem)',
+                      color: tileDigitColor,
+                      fontFamily: resolveFontFamily(countdownCfg?.font),
+                    }}
+                  >
+                    {renderTimeWithColonOffset(tileDisplayTime, fsElements.colon?.vert)}
+                  </div>
+                </div>
 
-        {countdownCfg?.visible !== false && (
-          <div
-            className={`tracking-tighter tabular-nums leading-none drop-shadow-2xl ${
-              prefs.smoothTransitions !== false ? 'transition-colors duration-300' : ''
-            } ${
-              payload.isOvertime
-                ? 'animate-overtime-blink'
-                : payload.alertOnOff
-                ? 'animate-overtime-blink'
-                : payload.alertFlash && prefs.flashAlertsEnabled !== false
-                ? 'animate-pulse'
-                : ''
-            }`}
-            style={{
-              fontSize: `calc(clamp(4.5rem, 15vw, 16rem) * ${countdownScale})`,
-              color: resolvedDigitColor,
-              fontFamily: resolveFontFamily(countdownCfg?.font),
-              ...resolveFontStyleCss(countdownCfg?.fontStyle),
-              textShadow: textShadowStyle,
-              transform: getElementOffsetTransform(countdownCfg, 4),
-            }}
-          >
-            {renderTimeWithColonOffset(displayTime, fsElements.colon?.vert)}
-          </div>
-        )}
+                <div className="flex items-center justify-between text-[11px] text-neutral-400 border-t border-white/10 pt-2">
+                  <span>LIST: {cueItem.listName}</span>
+                  <span>NEXT: {cueItem.nextTimer?.name || 'STANDBY'}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div
+          className="relative z-10 my-auto flex flex-col items-center justify-center text-center"
+          style={innerTransformStyle}
+        >
+          {(clockCfg?.visible || dateCfg?.visible) && (
+            <div className="flex items-center gap-4 mb-3">
+              {clockCfg?.visible && (
+                <span
+                  className="text-neutral-200 tabular-nums"
+                  style={{
+                    fontFamily: resolveFontFamily(clockCfg?.font),
+                    ...resolveFontStyleCss(clockCfg?.fontStyle),
+                    fontSize: `calc(clamp(1.25rem, 2.5vw, 2.5rem) * ${clockScale})`,
+                    textShadow: textShadowStyle,
+                  }}
+                >
+                  {formattedClock}
+                </span>
+              )}
+              {dateCfg?.visible && (
+                <span
+                  className="text-neutral-300"
+                  style={{
+                    fontFamily: resolveFontFamily(dateCfg?.font),
+                    ...resolveFontStyleCss(dateCfg?.fontStyle),
+                    fontSize: `calc(clamp(1.1rem, 2.2vw, 2.2rem) * ${dateScale})`,
+                    textShadow: textShadowStyle,
+                  }}
+                >
+                  {formattedDate}
+                </span>
+              )}
+            </div>
+          )}
 
-        {showProgressBar && (
-          <div
-            className="bg-neutral-900/85 rounded-full overflow-hidden border border-white/10 mt-6 mx-auto"
-            style={{
-              width: `${Math.min(100, Math.max(15, progressBarCfg?.sizePercent ?? 100))}%`,
-              height: `${prefs.progressBarHeightPx ?? 12}px`,
-            }}
-          >
+          {nameCfg?.visible !== false && payload.activeTimer && (
             <div
-              className={`h-full transition-all duration-300 ${
-                payload.isOvertime || payload.activeAlertLevel === 'danger'
-                  ? 'bg-red-500'
-                  : payload.activeAlertLevel === 'warning'
-                  ? 'bg-amber-500'
-                  : 'bg-emerald-500'
+              className="tracking-wider uppercase text-cyan-300 mb-2 drop-shadow-md"
+              style={{
+                fontFamily: resolveFontFamily(nameCfg?.font),
+                ...resolveFontStyleCss(nameCfg?.fontStyle),
+                fontSize: `calc(clamp(1.35rem, 3vw, 2.75rem) * ${nameScale})`,
+                textShadow: textShadowStyle,
+                transform: getElementOffsetTransform(nameCfg, 3),
+              }}
+            >
+              {payload.activeTimer.name}
+            </div>
+          )}
+
+          {countdownCfg?.visible !== false && (
+            <div
+              className={`tracking-tighter tabular-nums leading-none drop-shadow-2xl ${
+                prefs.smoothTransitions !== false ? 'transition-colors duration-300' : ''
+              } ${
+                payload.isOvertime
+                  ? 'animate-overtime-blink'
+                  : payload.alertOnOff
+                  ? 'animate-overtime-blink'
+                  : payload.alertFlash && prefs.flashAlertsEnabled !== false
+                  ? 'animate-pulse'
+                  : ''
               }`}
-              style={{ width: `${Math.min(100, Math.max(0, payload.progressPercent))}%` }}
-            />
-          </div>
-        )}
-      </div>
+              style={{
+                fontSize: `calc(clamp(4.5rem, 15vw, 16rem) * ${countdownScale})`,
+                color: resolvedDigitColor,
+                fontFamily: resolveFontFamily(countdownCfg?.font),
+                ...resolveFontStyleCss(countdownCfg?.fontStyle),
+                textShadow: textShadowStyle,
+                transform: getElementOffsetTransform(countdownCfg, 4),
+              }}
+            >
+              {renderTimeWithColonOffset(displayTime, fsElements.colon?.vert)}
+            </div>
+          )}
+
+          {showProgressBar && (
+            <div
+              className="bg-neutral-900/85 rounded-full overflow-hidden border border-white/10 mt-6 mx-auto"
+              style={{
+                width: `${Math.min(100, Math.max(15, progressBarCfg?.sizePercent ?? 100))}%`,
+                height: `${prefs.progressBarHeightPx ?? 12}px`,
+              }}
+            >
+              <div
+                className={`h-full transition-all duration-300 ${
+                  payload.isOvertime || payload.activeAlertLevel === 'danger'
+                    ? 'bg-red-500'
+                    : payload.activeAlertLevel === 'warning'
+                    ? 'bg-amber-500'
+                    : 'bg-emerald-500'
+                }`}
+                style={{ width: `${Math.min(100, Math.max(0, payload.progressPercent))}%` }}
+              />
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Bottom Info Bar */}
       <div

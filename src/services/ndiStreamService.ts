@@ -1,19 +1,26 @@
 /**
  * NDI Network Broadcast Stream Service.
- * Activates and transmits the live NDI video stream in the background
- * using the Preferences -> NDI tab settings (Resolution, Framerate, Groups,
- * Source Name, and Transparent Alpha Channel) without popping out a window,
- * allowing any other computer on the network to capture the stream.
+ * Supports:
+ * 1. Independent per-list NDI activation (`activeByList[listId]`):
+ *    - Clicking NDI on List 1 activates `ProTimer (List 1)` independently.
+ *    - Clicking NDI on List 2 activates `ProTimer (List 2)` independently.
+ *    - Renaming any list tab dynamically updates its NDI source name in the brackets: `ProTimer (<List Name>)`.
+ * 2. Independent "NDI Multi" activation (`multiActive`):
+ *    - Broadcasts multiple NDI displays simultaneously across all active list tabs
+ *      (`ProTimer (List 1)`, `ProTimer (List 2)`, ..., plus `ProTimer (Multi Output)`).
  */
 
 import {
   AppPreferences,
   DisplaySyncPayload,
+  ListActiveCueSummary,
+  formatListNdiSourceName,
   resolveBackgroundImageForList,
   resolveLogoImageForList,
 } from '../types';
 import { storageService } from './storageService';
 import { displaySyncService } from './displaySyncService';
+import { timerManagerService } from './timerManager';
 import {
   getTargetElements,
   getTargetExtras,
@@ -34,12 +41,18 @@ export interface NdiNativeDiagnostics {
   error: string | null;
   downloadUrl: string;
   toolsUrl: string;
+  activeSources?: string[];
 }
 
 export interface NdiStreamStatus {
   active: boolean;
   mode: 'single' | 'multi';
+  multiActive: boolean;
+  activeByList: Record<string, boolean>;
+  sourceNamesByList: Record<string, string>;
+  activeSourceNames: string[];
   sourceName: string;
+  multiSourceName: string;
   resolution: string;
   width: number;
   height: number;
@@ -69,8 +82,9 @@ export function parseNdiResolution(resLabel?: string): { width: number; height: 
 }
 
 class NdiStreamService {
-  private active = false;
-  private mode: 'single' | 'multi' = 'single';
+  private activeByList: Record<string, boolean> = {};
+  private multiActive = false;
+  private lastKnownNamesSig = '';
   private subscribers: Set<NdiStreamSubscriber> = new Set();
   private canvas: HTMLCanvasElement | null = null;
   private renderTimer: ReturnType<typeof setInterval> | null = null;
@@ -88,14 +102,15 @@ class NdiStreamService {
     if (typeof window !== 'undefined') {
       displaySyncService.subscribe((payload) => {
         this.latestPayload = payload;
-        if (this.active) {
+        this.reconcileListsAndNames(payload);
+        if (this.isAnyStreamActive()) {
           this.renderAndTransmitFrame();
         }
       });
 
       window.addEventListener('protimer-prefs-updated', () => {
-        if (this.active) {
-          this.syncConfigToServer(true);
+        if (this.isAnyStreamActive()) {
+          this.syncConfigToServer();
           this.restartRenderLoop();
         }
         this.notifySubscribers();
@@ -103,6 +118,65 @@ class NdiStreamService {
 
       this.fetchNetworkInfo();
     }
+  }
+
+  private isAnyStreamActive(): boolean {
+    if (this.multiActive) return true;
+    return Object.values(this.activeByList).some(Boolean);
+  }
+
+  private getCurrentLists(): Array<{ id: string; name: string }> {
+    if (this.latestPayload?.lists && this.latestPayload.lists.length > 0) {
+      return this.latestPayload.lists;
+    }
+    const all = timerManagerService.getAllLists();
+    if (all && all.length > 0) {
+      return all.map((l) => ({ id: l.id, name: l.name }));
+    }
+    return [{ id: 'list_1', name: 'List 1' }];
+  }
+
+  private reconcileListsAndNames(payload?: DisplaySyncPayload | null): void {
+    const lists =
+      payload?.lists && payload.lists.length > 0 ? payload.lists : this.getCurrentLists();
+    const validIds = new Set(lists.map((l) => l.id));
+
+    let activeMapChanged = false;
+    for (const listId of Object.keys(this.activeByList)) {
+      if (!validIds.has(listId)) {
+        delete this.activeByList[listId];
+        activeMapChanged = true;
+      }
+    }
+
+    const prefs = storageService.getPreferences();
+    const sig = lists
+      .map((l) => `${l.id}:${formatListNdiSourceName(l.name, prefs.ndiSourceName)}`)
+      .join('|');
+
+    if (sig !== this.lastKnownNamesSig || activeMapChanged) {
+      const hadPrevSig = Boolean(this.lastKnownNamesSig);
+      this.lastKnownNamesSig = sig;
+      if (hadPrevSig) {
+        if (this.isAnyStreamActive()) {
+          this.syncConfigToServer();
+        }
+        this.notifySubscribers();
+      }
+    }
+  }
+
+  public isListActive(listId?: string): boolean {
+    const id =
+      listId ||
+      this.latestPayload?.activeListId ||
+      timerManagerService.getSnapshot().activeListId ||
+      'list_1';
+    return Boolean(this.activeByList[id]);
+  }
+
+  public isMultiActive(): boolean {
+    return this.multiActive;
   }
 
   public async refreshDiagnostics(): Promise<void> {
@@ -129,21 +203,70 @@ class NdiStreamService {
     }
   }
 
-  public getStatus(): NdiStreamStatus {
+  public getStatus(forListId?: string): NdiStreamStatus {
     const prefs: AppPreferences = storageService.getPreferences();
     const resolution = prefs.ndiResolution || 'HD - 1920 x 1080';
     const { width, height } = parseNdiResolution(resolution);
     const frameRate = Number(prefs.ndiFrameRate) || 30;
-    const baseSourceName = prefs.ndiSourceName || 'ProTimer (Main Output)';
-    const sourceName =
-      this.mode === 'multi' && !baseSourceName.toLowerCase().includes('multi')
-        ? `${baseSourceName} [Multi]`
-        : baseSourceName;
+
+    const lists = this.getCurrentLists();
+    const activeListId =
+      forListId ||
+      this.latestPayload?.activeListId ||
+      timerManagerService.getSnapshot().activeListId ||
+      lists[0]?.id ||
+      'list_1';
+    const currentListObj = lists.find((l) => l.id === activeListId) || lists[0] || {
+      id: activeListId,
+      name: 'List 1',
+    };
+
+    const sourceNamesByList: Record<string, string> = {};
+    for (const l of lists) {
+      sourceNamesByList[l.id] = formatListNdiSourceName(l.name, prefs.ndiSourceName);
+    }
+    if (!sourceNamesByList[activeListId]) {
+      sourceNamesByList[activeListId] = formatListNdiSourceName(
+        currentListObj.name,
+        prefs.ndiSourceName
+      );
+    }
+
+    const multiSourceName = formatListNdiSourceName('Multi Output', prefs.ndiSourceName);
+    const currentListSourceName = sourceNamesByList[activeListId];
+
+    const activeSourceNames: string[] = [];
+    if (this.multiActive) {
+      for (const l of lists) {
+        const sName = sourceNamesByList[l.id];
+        if (sName && !activeSourceNames.includes(sName)) {
+          activeSourceNames.push(sName);
+        }
+      }
+      if (!activeSourceNames.includes(multiSourceName)) {
+        activeSourceNames.push(multiSourceName);
+      }
+    } else {
+      for (const l of lists) {
+        if (this.activeByList[l.id] && sourceNamesByList[l.id]) {
+          activeSourceNames.push(sourceNamesByList[l.id]);
+        }
+      }
+    }
+
+    const anySingleActive = Object.values(this.activeByList).some(Boolean);
+    const overallActive = anySingleActive || this.multiActive;
+    const mode: 'single' | 'multi' = this.multiActive ? 'multi' : 'single';
 
     return {
-      active: this.active,
-      mode: this.mode,
-      sourceName,
+      active: overallActive,
+      mode,
+      multiActive: this.multiActive,
+      activeByList: { ...this.activeByList },
+      sourceNamesByList,
+      activeSourceNames,
+      sourceName: currentListSourceName,
+      multiSourceName,
       resolution,
       width,
       height,
@@ -172,7 +295,7 @@ class NdiStreamService {
     };
   }
 
-  private notifySubscribers(): void {
+  public notifySubscribers(): void {
     const status = this.getStatus();
     this.subscribers.forEach((cb) => {
       try {
@@ -183,35 +306,86 @@ class NdiStreamService {
     });
   }
 
-  public toggleStream(requestedMode: 'single' | 'multi' = 'single'): boolean {
-    if (this.active && this.mode === requestedMode) {
-      this.stopStream();
-      return false;
+  /**
+   * Toggle NDI for a specific Cue List tab (`requestedMode === 'single'`)
+   * or toggle Multi-NDI across all Cue List tabs (`requestedMode === 'multi'`).
+   */
+  public toggleStream(
+    requestedMode: 'single' | 'multi' = 'single',
+    listId?: string
+  ): boolean {
+    if (requestedMode === 'multi') {
+      this.multiActive = !this.multiActive;
+      this.applyStreamStateChange();
+      return this.multiActive;
     }
-    this.startStream(requestedMode);
-    return true;
+
+    const targetListId =
+      listId ||
+      this.latestPayload?.activeListId ||
+      timerManagerService.getSnapshot().activeListId ||
+      'list_1';
+    const nextState = !this.activeByList[targetListId];
+    if (nextState) {
+      this.activeByList[targetListId] = true;
+    } else {
+      delete this.activeByList[targetListId];
+    }
+
+    this.applyStreamStateChange();
+    return nextState;
   }
 
-  public startStream(requestedMode: 'single' | 'multi' = 'single'): void {
-    this.active = true;
-    this.mode = requestedMode;
-    this.syncConfigToServer(true);
-    this.restartRenderLoop();
-    this.startStatusPolling();
-    this.notifySubscribers();
+  public startStream(
+    requestedMode: 'single' | 'multi' = 'single',
+    listId?: string
+  ): void {
+    if (requestedMode === 'multi') {
+      this.multiActive = true;
+    } else {
+      const targetListId =
+        listId ||
+        this.latestPayload?.activeListId ||
+        timerManagerService.getSnapshot().activeListId ||
+        'list_1';
+      this.activeByList[targetListId] = true;
+    }
+    this.applyStreamStateChange();
   }
 
-  public stopStream(): void {
-    this.active = false;
-    if (this.renderTimer) {
-      clearInterval(this.renderTimer);
-      this.renderTimer = null;
+  public stopStream(listId?: string, stopAll = false): void {
+    if (stopAll) {
+      this.activeByList = {};
+      this.multiActive = false;
+    } else if (listId) {
+      delete this.activeByList[listId];
+    } else {
+      const targetListId =
+        this.latestPayload?.activeListId ||
+        timerManagerService.getSnapshot().activeListId ||
+        'list_1';
+      delete this.activeByList[targetListId];
     }
-    if (this.statusPollTimer) {
-      clearInterval(this.statusPollTimer);
-      this.statusPollTimer = null;
+    this.applyStreamStateChange();
+  }
+
+  private applyStreamStateChange(): void {
+    const anyActive = this.isAnyStreamActive();
+    if (anyActive) {
+      this.syncConfigToServer();
+      this.restartRenderLoop();
+      this.startStatusPolling();
+    } else {
+      if (this.renderTimer) {
+        clearInterval(this.renderTimer);
+        this.renderTimer = null;
+      }
+      if (this.statusPollTimer) {
+        clearInterval(this.statusPollTimer);
+        this.statusPollTimer = null;
+      }
+      this.syncConfigToServer();
     }
-    this.syncConfigToServer(false);
     this.notifySubscribers();
   }
 
@@ -220,12 +394,12 @@ class NdiStreamService {
       clearInterval(this.statusPollTimer);
     }
     this.statusPollTimer = setInterval(() => {
-      if (!this.active) return;
+      if (!this.isAnyStreamActive()) return;
       this.fetchNetworkInfo();
     }, 2500);
   }
 
-  private async syncConfigToServer(active: boolean): Promise<void> {
+  public async syncConfigToServer(): Promise<void> {
     if (typeof window === 'undefined') return;
     const status = this.getStatus();
     try {
@@ -233,9 +407,14 @@ class NdiStreamService {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          active,
+          active: status.active,
           mode: status.mode,
+          multiActive: status.multiActive,
+          activeByList: status.activeByList,
+          sourceNamesByList: status.sourceNamesByList,
+          activeSourceNames: status.activeSourceNames,
           sourceName: status.sourceName,
+          multiSourceName: status.multiSourceName,
           resolution: status.resolution,
           width: status.width,
           height: status.height,
@@ -265,24 +444,22 @@ class NdiStreamService {
       clearInterval(this.renderTimer);
       this.renderTimer = null;
     }
-    if (!this.active || typeof window === 'undefined') return;
+    if (!this.isAnyStreamActive() || typeof window === 'undefined') return;
 
-    // Render immediately
     this.renderAndTransmitFrame();
 
-    // Stream frames over network at a responsive cadence derived from configured FPS
     const status = this.getStatus();
     const targetFps = Math.min(30, Math.max(1, Number(status.frameRate) || 30));
     const intervalMs = Math.max(120, Math.round(1000 / Math.min(targetFps, 8)));
 
     this.renderTimer = setInterval(() => {
-      if (!this.active) return;
+      if (!this.isAnyStreamActive()) return;
       this.renderAndTransmitFrame();
     }, intervalMs);
   }
 
   private getImageElement(dataUrl: string): HTMLImageElement | null {
-    if (!dataUrl) return null;
+    if (!dataUrl || dataUrl === '__CACHED__') return null;
     const existing = this.cachedImages.get(dataUrl);
     if (existing) {
       return existing.complete && existing.naturalWidth > 0 ? existing : null;
@@ -297,13 +474,13 @@ class NdiStreamService {
   }
 
   private renderAndTransmitFrame(): void {
-    if (!this.active || typeof document === 'undefined' || !this.latestPayload) return;
+    if (!this.isAnyStreamActive() || typeof document === 'undefined' || !this.latestPayload) return;
+    if (this.isSendingFrame) return;
 
     const status = this.getStatus();
     const prefs = storageService.getPreferences();
     const payload = this.latestPayload;
 
-    // Offscreen canvas sized to NDI resolution aspect ratio (capped at 1920x1080 for fast network transmission)
     const scale = status.width > 1920 ? 1920 / status.width : 1;
     const cw = Math.round(status.width * scale);
     const ch = Math.round(status.height * scale);
@@ -319,37 +496,133 @@ class NdiStreamService {
     const ctx = this.canvas.getContext('2d');
     if (!ctx) return;
 
-    ctx.clearRect(0, 0, cw, ch);
+    const lists = this.getCurrentLists();
+    const listCueMap = new Map<string, ListActiveCueSummary>(
+      (payload.listActiveCues || []).map((c) => [c.listId, c])
+    );
 
-    if (payload.isBlackout) {
-      if (!status.alphaChannel) {
-        ctx.fillStyle = '#000000';
-        ctx.fillRect(0, 0, cw, ch);
+    // Determine which list streams to render:
+    // - In NDI Multi mode, render every list tab's NDI stream + the combined Multi grid stream
+    // - In Per-List NDI mode, render each list tab that has its NDI button active
+    const targetListIds = this.multiActive
+      ? lists.map((l) => l.id)
+      : lists.filter((l) => this.activeByList[l.id]).map((l) => l.id);
+
+    const perListFrames: Record<
+      string,
+      { sourceName: string; frameDataUrl: string; rawRgbaBase64?: string }
+    > = {};
+
+    for (const lid of targetListIds) {
+      ctx.clearRect(0, 0, cw, ch);
+      const cueSummary = listCueMap.get(lid);
+      const listName =
+        cueSummary?.listName || lists.find((l) => l.id === lid)?.name || 'List 1';
+      const sourceName =
+        status.sourceNamesByList[lid] || formatListNdiSourceName(listName, prefs.ndiSourceName);
+
+      if (payload.isBlackout) {
+        if (!status.alphaChannel) {
+          ctx.fillStyle = '#000000';
+          ctx.fillRect(0, 0, cw, ch);
+        }
+      } else {
+        this.drawSingleListFrame(ctx, cw, ch, lid, cueSummary, payload, prefs, status.alphaChannel);
       }
-      this.transmitCanvas(status.alphaChannel);
-      return;
+
+      const encoded = this.extractCanvasFrame(status.alphaChannel);
+      if (encoded) {
+        perListFrames[lid] = {
+          sourceName,
+          frameDataUrl: encoded.frameDataUrl,
+          rawRgbaBase64: encoded.rawRgbaBase64,
+        };
+      }
     }
 
-    if (this.mode === 'multi') {
-      this.drawMultiFrame(ctx, cw, ch, payload, prefs, status.alphaChannel);
+    // Also render the primary / Multi frame
+    let primaryFrame: { frameDataUrl: string; rawRgbaBase64?: string } | null = null;
+    if (this.multiActive) {
+      ctx.clearRect(0, 0, cw, ch);
+      if (payload.isBlackout) {
+        if (!status.alphaChannel) {
+          ctx.fillStyle = '#000000';
+          ctx.fillRect(0, 0, cw, ch);
+        }
+      } else {
+        this.drawMultiFrame(ctx, cw, ch, payload, prefs, status.alphaChannel);
+      }
+      primaryFrame = this.extractCanvasFrame(status.alphaChannel);
     } else {
-      this.drawSingleFrame(ctx, cw, ch, payload, prefs, status.alphaChannel);
+      const activeLid = payload.activeListId || targetListIds[0];
+      const chosen =
+        (activeLid && perListFrames[activeLid]) ||
+        (targetListIds[0] ? perListFrames[targetListIds[0]] : null);
+      if (chosen) {
+        primaryFrame = {
+          frameDataUrl: chosen.frameDataUrl,
+          rawRgbaBase64: chosen.rawRgbaBase64,
+        };
+      }
     }
 
-    this.transmitCanvas(status.alphaChannel);
+    if (primaryFrame || Object.keys(perListFrames).length > 0) {
+      this.transmitEncodedFrames(cw, ch, status, primaryFrame, perListFrames);
+    }
   }
 
-  private drawSingleFrame(
+  private extractCanvasFrame(
+    alphaChannel: boolean
+  ): { frameDataUrl: string; rawRgbaBase64?: string } | null {
+    if (!this.canvas) return null;
+    const mime = alphaChannel ? 'image/png' : 'image/jpeg';
+    const frameDataUrl = this.canvas.toDataURL(mime, alphaChannel ? undefined : 0.85);
+    let rawRgbaBase64: string | undefined;
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+
+    if (this.nativeNdi?.nativeNdiAvailable && w > 0 && h > 0) {
+      try {
+        const ctx = this.canvas.getContext('2d');
+        if (ctx) {
+          const imgData = ctx.getImageData(0, 0, w, h);
+          const bytes = imgData.data;
+          let binary = '';
+          const chunkSize = 0x8000;
+          for (let i = 0; i < bytes.length; i += chunkSize) {
+            const sub = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
+            binary += String.fromCharCode.apply(null, sub as unknown as number[]);
+          }
+          rawRgbaBase64 = btoa(binary);
+        }
+      } catch {
+        // Ignore raw extraction error
+      }
+    }
+
+    return { frameDataUrl, rawRgbaBase64 };
+  }
+
+  private drawSingleListFrame(
     ctx: CanvasRenderingContext2D,
     cw: number,
     ch: number,
+    listId: string,
+    cueSummary: ListActiveCueSummary | undefined,
     payload: DisplaySyncPayload,
     prefs: AppPreferences,
     alphaChannel: boolean
   ): void {
     const fsElements = getTargetElements(prefs, 'fullscreen_ndi_preview');
     const fsExtras = getTargetExtras(prefs, 'fullscreen_ndi_preview');
-    const activeListId = payload.activeListId || 'list_1';
+
+    const activeTimer = cueSummary ? cueSummary.activeTimer : payload.activeTimer;
+    const secondsRemaining = cueSummary ? cueSummary.secondsRemaining : payload.secondsRemaining;
+    const isOvertime = cueSummary ? cueSummary.isOvertime : payload.isOvertime;
+    const status = cueSummary ? cueSummary.status : payload.status;
+    const activeAlertLevel = cueSummary ? cueSummary.activeAlertLevel : payload.activeAlertLevel;
+    const alertColor = cueSummary ? cueSummary.alertColor : payload.alertColor;
+    const progressPercent = cueSummary ? cueSummary.progressPercent : payload.progressPercent;
 
     // 1. Background (transparent when alphaChannel is true)
     if (!alphaChannel) {
@@ -357,7 +630,10 @@ class NdiStreamService {
       ctx.fillRect(0, 0, cw, ch);
 
       const bgUrl =
-        resolveBackgroundImageForList(prefs, activeListId) || payload.backgroundImageUrl || '';
+        resolveBackgroundImageForList(prefs, listId) ||
+        cueSummary?.backgroundImageUrl ||
+        (listId === payload.activeListId ? payload.backgroundImageUrl : '') ||
+        '';
       const bgImg = this.getImageElement(bgUrl);
       if (bgImg) {
         ctx.save();
@@ -371,7 +647,11 @@ class NdiStreamService {
     }
 
     // 2. Per-List Logo
-    const logoUrl = resolveLogoImageForList(prefs, activeListId) || payload.logoImageUrl || '';
+    const logoUrl =
+      resolveLogoImageForList(prefs, listId) ||
+      cueSummary?.logoImageUrl ||
+      (listId === payload.activeListId ? payload.logoImageUrl : '') ||
+      '';
     const logoImg = this.getImageElement(logoUrl);
     if (logoImg && fsElements.logo?.visible !== false) {
       const logoScale = Math.max(0.2, (fsElements.logo?.sizePercent ?? 20) / 20);
@@ -407,7 +687,7 @@ class NdiStreamService {
       ctx.fillStyle = '#ffffff';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      const cueTitle = payload.activeTimer?.name || 'STANDBY';
+      const cueTitle = activeTimer?.name || 'STANDBY';
       const nameY =
         (nameCfg?.location || 'Bottom').toLowerCase() === 'top'
           ? Math.round(ch * 0.14)
@@ -425,9 +705,8 @@ class NdiStreamService {
       const isItalic = (countdownCfg?.fontStyle || '').toLowerCase().includes('italic');
       ctx.font = `${isItalic ? 'italic ' : ''}${isBold ? 'bold ' : ''}${digitFontPx}px ${digitFont}`;
 
-      const isOvertime = payload.isOvertime;
       const formattedCountdown = formatSeconds(
-        payload.secondsRemaining,
+        secondsRemaining,
         true,
         isOvertime,
         prefs
@@ -443,9 +722,9 @@ class NdiStreamService {
         ? '#ffffff'
         : resolveDisplayDigitColor({
             isOvertime,
-            isPaused: payload.status === 'paused',
-            activeAlertLevel: payload.activeAlertLevel,
-            alertColor: payload.alertColor,
+            isPaused: status === 'paused',
+            activeAlertLevel,
+            alertColor,
             prefs,
           });
 
@@ -490,13 +769,13 @@ class NdiStreamService {
       ctx.fillStyle = 'rgba(255,255,255,0.14)';
       ctx.fillRect(0, barY, cw, barH);
 
-      const pct = payload.isOvertime
+      const pct = isOvertime
         ? 100
-        : Math.min(100, Math.max(0, 100 - payload.progressPercent));
+        : Math.min(100, Math.max(0, 100 - progressPercent));
       ctx.fillStyle =
-        payload.isOvertime || payload.activeAlertLevel === 'danger'
+        isOvertime || activeAlertLevel === 'danger'
           ? prefs.dangerDigitsColor || '#ef4444'
-          : payload.activeAlertLevel === 'warning'
+          : activeAlertLevel === 'warning'
           ? prefs.warningDigitsColor || '#eab308'
           : '#10b981';
       ctx.fillRect(0, barY, Math.round((cw * pct) / 100), barH);
@@ -535,7 +814,7 @@ class NdiStreamService {
         : [
             {
               listId: payload.activeListId || 'list_1',
-              listName: 'Active List',
+              listName: payload.activeListName || 'List 1',
               isCurrentOperatorList: true,
               activeTimer: payload.activeTimer,
               nextTimer: payload.nextTimer,
@@ -589,22 +868,23 @@ class NdiStreamService {
       ctx.lineWidth = 3;
       ctx.strokeRect(x, y, cellW, cellH);
 
-      // List Name
-      ctx.fillStyle = '#94a3b8';
-      ctx.font = `bold ${Math.round(cellH * 0.075)}px sans-serif`;
+      // List NDI Source Name Header (`ProTimer (<List Name>)`)
+      const listNdiName = formatListNdiSourceName(item.listName, prefs.ndiSourceName);
+      ctx.fillStyle = '#22d3ee';
+      ctx.font = `bold ${Math.round(cellH * 0.068)}px sans-serif`;
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
-      ctx.fillText(item.listName.toUpperCase(), x + 16, y + 14);
+      ctx.fillText(listNdiName, x + 16, y + 14);
 
       // Cue Name
       ctx.fillStyle = '#ffffff';
-      ctx.font = `600 ${Math.round(cellH * 0.09)}px sans-serif`;
+      ctx.font = `600 ${Math.round(cellH * 0.088)}px sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(
         item.activeTimer?.name || 'STANDBY',
         x + cellW / 2,
-        y + cellH * 0.3
+        y + cellH * 0.32
       );
 
       // Time Digits
@@ -620,47 +900,42 @@ class NdiStreamService {
         prefs,
       });
       ctx.font = `bold ${Math.round(cellH * 0.28)}px monospace`;
-      ctx.fillText(displayTime, x + cellW / 2, y + cellH * 0.62);
+      ctx.fillText(displayTime, x + cellW / 2, y + cellH * 0.64);
     });
+
+    if (payload.activeMessage && payload.activeMessage.visible && payload.activeMessage.text) {
+      const msgH = Math.round(ch * 0.12);
+      ctx.fillStyle = 'rgba(10, 14, 22, 0.92)';
+      ctx.fillRect(0, 0, cw, msgH);
+      ctx.fillStyle = payload.activeMessage.color || '#f97316';
+      const msgPx = Math.round(ch * 0.05);
+      ctx.font = `bold ${msgPx}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(payload.activeMessage.text, cw / 2, msgH / 2);
+    }
   }
 
-  private async transmitCanvas(alphaChannel: boolean): Promise<void> {
-    if (!this.canvas || this.isSendingFrame) return;
+  private async transmitEncodedFrames(
+    w: number,
+    h: number,
+    status: NdiStreamStatus,
+    primaryFrame: { frameDataUrl: string; rawRgbaBase64?: string } | null,
+    perListFrames: Record<
+      string,
+      { sourceName: string; frameDataUrl: string; rawRgbaBase64?: string }
+    >
+  ): Promise<void> {
     this.isSendingFrame = true;
     try {
-      // Use PNG when alphaChannel is enabled to preserve full RGBA transparency;
-      // use high-speed JPEG/WebP when opaque for ultra-low network latency
-      const mime = alphaChannel ? 'image/png' : 'image/jpeg';
-      const frameDataUrl = this.canvas.toDataURL(mime, alphaChannel ? undefined : 0.85);
-      let rawRgbaBase64: string | undefined;
-      const w = this.canvas.width;
-      const h = this.canvas.height;
-
-      if (this.nativeNdi?.nativeNdiAvailable && w > 0 && h > 0) {
-        try {
-          const ctx = this.canvas.getContext('2d');
-          if (ctx) {
-            const imgData = ctx.getImageData(0, 0, w, h);
-            const bytes = imgData.data;
-            let binary = '';
-            const chunkSize = 0x8000;
-            for (let i = 0; i < bytes.length; i += chunkSize) {
-              const sub = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
-              binary += String.fromCharCode.apply(null, sub as unknown as number[]);
-            }
-            rawRgbaBase64 = btoa(binary);
-          }
-        } catch {
-          // Ignore raw extraction error
-        }
-      }
-
       const res = await fetch('/api/lan/ndi/frame', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          frameDataUrl,
-          rawRgbaBase64,
+          frameDataUrl: primaryFrame?.frameDataUrl,
+          rawRgbaBase64: primaryFrame?.rawRgbaBase64,
+          sourceName: status.multiActive ? status.multiSourceName : status.sourceName,
+          perListFrames,
           width: w,
           height: h,
         }),

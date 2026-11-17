@@ -23,7 +23,7 @@ import {
   History,
   Radio,
 } from 'lucide-react';
-import { TimerList, DisplayTarget, DetectedMonitor } from '../types';
+import { TimerList, DisplayTarget, DetectedMonitor, formatListNdiSourceName } from '../types';
 import { NdiStreamStatus } from '../services/ndiStreamService';
 import { useTheme } from '../hooks';
 
@@ -55,8 +55,9 @@ interface BottomBarProps {
   isPresenterActive?: boolean;
   isLanControlActive?: boolean;
   isLanDisplayActive?: boolean;
+  activeNdiByList?: Record<string, boolean>;
   ndiStreamStatus?: NdiStreamStatus;
-  onToggleNdiStream?: (mode: 'single' | 'multi') => void;
+  onToggleNdiStream?: (mode: 'single' | 'multi', listId?: string) => void;
   isHistoryTabActive?: boolean;
   onSelectHistoryTab?: () => void;
   historyCount?: number;
@@ -90,6 +91,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
   isPresenterActive = false,
   isLanControlActive = false,
   isLanDisplayActive = false,
+  activeNdiByList = {},
   ndiStreamStatus,
   onToggleNdiStream,
   isHistoryTabActive = false,
@@ -98,7 +100,14 @@ export const BottomBar: React.FC<BottomBarProps> = ({
 }) => {
   const { isDark } = useTheme();
   const activeListObj = lists.find((l) => l.id === activeListId) || lists[0];
-  const activeListName = activeListObj?.name || 'List';
+  const activeListName = activeListObj?.name || 'List 1';
+  const effectiveActiveNdiByList: Record<string, boolean> = {
+    ...(ndiStreamStatus?.activeByList || {}),
+    ...activeNdiByList,
+  };
+  const activeListNdiSourceName =
+    ndiStreamStatus?.sourceNamesByList?.[activeListId] ||
+    formatListNdiSourceName(activeListName, ndiStreamStatus?.sourceName);
 
   // Context Menu state
   const [contextMenu, setContextMenu] = useState<{
@@ -166,6 +175,12 @@ export const BottomBar: React.FC<BottomBarProps> = ({
             const isActive = !isHistoryTabActive && list.id === activeListId;
             const runningCount = getRunningTimerCount ? getRunningTimerCount(list.id) : 0;
             const isListFsActive = Boolean(activeFullscreenByList[list.id]);
+            const isListNdiActive = Boolean(
+              effectiveActiveNdiByList[list.id] || ndiStreamStatus?.multiActive
+            );
+            const listNdiSourceName =
+              ndiStreamStatus?.sourceNamesByList?.[list.id] ||
+              formatListNdiSourceName(list.name, ndiStreamStatus?.sourceName);
             const isEditing = inlineEditingId === list.id;
 
             if (isEditing) {
@@ -209,7 +224,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
                 onClick={() => onSelectList(list.id)}
                 onContextMenu={(e) => handleContextMenu(e, list)}
                 onDoubleClick={() => handleStartInlineRename(list)}
-                title={`${list.name} (Right-click for options, Double-click to rename)`}
+                title={`${list.name} — NDI Source: ${listNdiSourceName} (Right-click for options, Double-click to rename)`}
                 className={`group px-3 py-1 rounded-t text-xs font-semibold tracking-wide transition-all flex items-center gap-2 relative cursor-pointer ${
                   isActive
                     ? isDark 
@@ -241,6 +256,17 @@ export const BottomBar: React.FC<BottomBarProps> = ({
                   >
                     <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
                     <span>FS</span>
+                  </span>
+                )}
+
+                {/* Independent Per-List NDI Active Badge on Tab */}
+                {isListNdiActive && (
+                  <span
+                    title={`NDI output is active for ${list.name}: ${listNdiSourceName}`}
+                    className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded-full text-[9px] font-mono bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    <span>NDI</span>
                   </span>
                 )}
               </button>
@@ -335,13 +361,13 @@ export const BottomBar: React.FC<BottomBarProps> = ({
               label: 'NDI',
               target: 'ndi' as DisplayTarget,
               ndiMode: 'single' as const,
-              tooltip: 'Activate NDI Network Broadcast Stream (uses Preferences → NDI settings)',
+              tooltip: `Activate Independent NDI Broadcast Stream for ${activeListName}: ${activeListNdiSourceName}`,
             },
             {
               label: 'NDI Multi',
               target: 'ndi' as DisplayTarget,
               ndiMode: 'multi' as const,
-              tooltip: 'Activate Multi-List NDI Network Broadcast Stream (uses Preferences → NDI settings)',
+              tooltip: `Activate Multi-List NDI Broadcast Stream (Broadcasts all ${lists.length} list NDI feeds simultaneously)`,
             },
             {
               label: 'Multi Preview',
@@ -361,11 +387,14 @@ export const BottomBar: React.FC<BottomBarProps> = ({
             },
           ].map((item) => {
             const isNdiSingleActive =
-              item.label === 'NDI' &&
-              Boolean(ndiStreamStatus?.active && ndiStreamStatus.mode === 'single');
+              item.label === 'NDI' && Boolean(effectiveActiveNdiByList[activeListId]);
             const isNdiMultiActive =
               item.label === 'NDI Multi' &&
-              Boolean(ndiStreamStatus?.active && ndiStreamStatus.mode === 'multi');
+              Boolean(
+                ndiStreamStatus?.multiActive !== undefined
+                  ? ndiStreamStatus.multiActive
+                  : ndiStreamStatus?.active && ndiStreamStatus.mode === 'multi'
+              );
             const isNdiButton = item.label === 'NDI' || item.label === 'NDI Multi';
             const isActive =
               (item.label === 'Presenter' && isPresenterActive) ||
@@ -384,16 +413,24 @@ export const BottomBar: React.FC<BottomBarProps> = ({
                 type="button"
                 onClick={() => {
                   if (item.ndiMode && onToggleNdiStream) {
-                    onToggleNdiStream(item.ndiMode);
+                    onToggleNdiStream(
+                      item.ndiMode,
+                      item.ndiMode === 'single' ? activeListId : undefined
+                    );
                   } else {
                     onOpenDisplay(item.target);
                   }
                 }}
                 title={
-                  isNdiButton && isActive && ndiStreamStatus
-                    ? `NDI Stream Active on Network: ${ndiStreamStatus.sourceName} (${ndiStreamStatus.width}x${ndiStreamStatus.height} @ ${ndiStreamStatus.frameRate} FPS${
+                  item.label === 'NDI' && isActive && ndiStreamStatus
+                    ? `NDI Stream Active for ${activeListName}: ${activeListNdiSourceName} (${ndiStreamStatus.width}x${ndiStreamStatus.height} @ ${ndiStreamStatus.frameRate} FPS${
                         ndiStreamStatus.alphaChannel ? ', Alpha ON' : ''
-                      }) — Click to Stop`
+                      }) — Click to Stop ${activeListName} NDI`
+                    : item.label === 'NDI Multi' && isActive && ndiStreamStatus
+                    ? `NDI Multi Active — Broadcasting All Lists: ${
+                        (ndiStreamStatus.activeSourceNames || []).join(' • ') ||
+                        lists.map((l) => formatListNdiSourceName(l.name)).join(' • ')
+                      } — Click to Stop NDI Multi`
                     : item.label === 'Fullscreen' && isActive
                     ? `Fullscreen Active for ${activeListName} (Click to Close ${activeListName} Fullscreen)`
                     : isActive
@@ -429,7 +466,11 @@ export const BottomBar: React.FC<BottomBarProps> = ({
           {/* Active NDI Network Stream Indicator Pill */}
           {ndiStreamStatus?.active && (
             <div
-              title={`Broadcasting NDI Stream on Network:\nSource: ${ndiStreamStatus.sourceName}\nFormat: ${ndiStreamStatus.width}×${ndiStreamStatus.height} @ ${ndiStreamStatus.frameRate} FPS\nGroups: ${
+              title={`Broadcasting NDI Streams on Network:\nActive Sources: ${
+                ndiStreamStatus.activeSourceNames && ndiStreamStatus.activeSourceNames.length > 0
+                  ? ndiStreamStatus.activeSourceNames.join(', ')
+                  : activeListNdiSourceName
+              }\nCurrent Tab Source: ${activeListNdiSourceName}\nFormat: ${ndiStreamStatus.width}×${ndiStreamStatus.height} @ ${ndiStreamStatus.frameRate} FPS\nGroups: ${
                 ndiStreamStatus.useCustomGroups ? ndiStreamStatus.customGroups : 'Public'
               }\nNetwork Capture URL: http://${ndiStreamStatus.ips[0] || 'localhost'}:${ndiStreamStatus.port}/api/lan/ndi/mjpeg`}
               className={`px-2.5 py-0.5 rounded border text-[10.5px] font-mono flex items-center gap-1.5 ${
@@ -440,7 +481,17 @@ export const BottomBar: React.FC<BottomBarProps> = ({
             >
               <Radio className="w-3 h-3 text-emerald-400 animate-pulse shrink-0" />
               <span className="font-semibold">
-                NDI LIVE: {ndiStreamStatus.sourceName}
+                NDI LIVE:{' '}
+                {ndiStreamStatus.multiActive &&
+                ndiStreamStatus.activeSourceNames &&
+                ndiStreamStatus.activeSourceNames.length > 1
+                  ? ndiStreamStatus.activeSourceNames.join(' • ')
+                  : effectiveActiveNdiByList[activeListId]
+                  ? activeListNdiSourceName
+                  : ndiStreamStatus.activeSourceNames &&
+                    ndiStreamStatus.activeSourceNames.length > 0
+                  ? ndiStreamStatus.activeSourceNames.join(' • ')
+                  : activeListNdiSourceName}
               </span>
               <span className="opacity-80 hidden xl:inline">
                 ({ndiStreamStatus.width}×{ndiStreamStatus.height} @ {ndiStreamStatus.frameRate}fps

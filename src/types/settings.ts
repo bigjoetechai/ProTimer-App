@@ -119,6 +119,25 @@ export function resolveLogoImageForList(
   return '';
 }
 
+/**
+ * Formats the NDI source name for a specific Cue List tab so the list tab name
+ * always appears inside the brackets, e.g. `ProTimer (List 1)` or `ProTimer (Session A)`.
+ * If the operator customized the prefix in Preferences -> NDI (e.g. `StudioTimer (List 1)`),
+ * that custom prefix is preserved while placing the list tab name in brackets.
+ */
+export function formatListNdiSourceName(
+  listName?: string | null,
+  baseTemplate?: string | null
+): string {
+  const cleanList = (listName || '').trim() || 'List 1';
+  const raw = (baseTemplate || '').trim();
+  if (!raw || /^ProTimer\s*(\(.*\))?$/i.test(raw)) {
+    return `ProTimer (${cleanList})`;
+  }
+  const prefix = raw.replace(/\s*\([^)]*\)\s*$/, '').trim() || 'ProTimer';
+  return `${prefix} (${cleanList})`;
+}
+
 export type SizesPositionTargetTab =
   | 'fullscreen_ndi_preview'
   | 'presenter_window'
@@ -386,7 +405,7 @@ export const DEFAULT_PREFERENCES: AppPreferences = {
 
   // NDI & Updates (matching NDI reference screenshot defaults)
   ndiResolution: 'HD - 1920 x 1080',
-  ndiSourceName: 'ProTimer (Main Output)',
+  ndiSourceName: 'ProTimer (List 1)',
   ndiAlphaChannel: false,
   ndiFrameRate: 30,
   ndiUseCustomGroups: false,

@@ -15,7 +15,12 @@ const { ndiNativeBridge } = requireCjs('./ndiNativeBridge.cjs');
 export interface NdiNetworkStreamConfig {
   active: boolean;
   mode: 'single' | 'multi';
+  multiActive: boolean;
+  activeByList: Record<string, boolean>;
+  sourceNamesByList: Record<string, string>;
+  activeSourceNames: string[];
   sourceName: string;
+  multiSourceName: string;
   resolution: string;
   width: number;
   height: number;
@@ -50,6 +55,7 @@ export interface LanState {
   }>;
   ndiStream: NdiNetworkStreamConfig;
   latestNdiFrameDataUrl: string | null;
+  latestNdiFramesByList: Record<string, { sourceName: string; frameDataUrl: string }>;
 }
 
 const state: LanState = {
@@ -62,7 +68,12 @@ const state: LanState = {
   ndiStream: {
     active: false,
     mode: 'single',
-    sourceName: 'ProTimer (Main Output)',
+    multiActive: false,
+    activeByList: {},
+    sourceNamesByList: {},
+    activeSourceNames: [],
+    sourceName: 'ProTimer (List 1)',
+    multiSourceName: 'ProTimer (Multi Output)',
     resolution: 'HD - 1920 x 1080',
     width: 1920,
     height: 1080,
@@ -75,6 +86,7 @@ const state: LanState = {
     frameCount: 0,
   },
   latestNdiFrameDataUrl: null,
+  latestNdiFramesByList: {},
 };
 
 function getOrCreateListLanConfig(listId: string): ListLanSecurityConfig {
@@ -550,10 +562,27 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
       ...state.ndiStream,
       active: nextActive,
       mode: body.mode === 'multi' ? 'multi' : body.mode === 'single' ? 'single' : state.ndiStream.mode,
+      multiActive:
+        typeof body.multiActive === 'boolean' ? body.multiActive : state.ndiStream.multiActive,
+      activeByList:
+        body.activeByList && typeof body.activeByList === 'object'
+          ? body.activeByList
+          : state.ndiStream.activeByList,
+      sourceNamesByList:
+        body.sourceNamesByList && typeof body.sourceNamesByList === 'object'
+          ? body.sourceNamesByList
+          : state.ndiStream.sourceNamesByList,
+      activeSourceNames: Array.isArray(body.activeSourceNames)
+        ? body.activeSourceNames
+        : state.ndiStream.activeSourceNames,
       sourceName:
         typeof body.sourceName === 'string' && body.sourceName.trim()
           ? body.sourceName.trim()
           : state.ndiStream.sourceName,
+      multiSourceName:
+        typeof body.multiSourceName === 'string' && body.multiSourceName.trim()
+          ? body.multiSourceName.trim()
+          : state.ndiStream.multiSourceName,
       resolution:
         typeof body.resolution === 'string' ? body.resolution : state.ndiStream.resolution,
       width: typeof body.width === 'number' ? body.width : state.ndiStream.width,
@@ -576,6 +605,7 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
     if (nextActive) {
       nativeDiagnostics = ndiNativeBridge.startSender({
         sourceName: state.ndiStream.sourceName,
+        activeSourceNames: state.ndiStream.activeSourceNames,
         groups: state.ndiStream.customGroups,
         useCustomGroups: state.ndiStream.useCustomGroups,
         width: state.ndiStream.width,
@@ -587,6 +617,7 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
       });
     } else {
       state.latestNdiFrameDataUrl = null;
+      state.latestNdiFramesByList = {};
       nativeDiagnostics = ndiNativeBridge.stopSender();
     }
 
@@ -614,6 +645,40 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
       state.ndiStream.frameCount += 1;
       pushFrameToNdiClients(body.frameDataUrl);
     }
+    if (body.perListFrames && typeof body.perListFrames === 'object') {
+      for (const [lid, entry] of Object.entries(body.perListFrames as Record<string, any>)) {
+        if (entry && typeof entry.frameDataUrl === 'string') {
+          state.latestNdiFramesByList[lid] = {
+            sourceName: entry.sourceName || `ProTimer (${lid})`,
+            frameDataUrl: entry.frameDataUrl,
+          };
+          if (!state.latestNdiFrameDataUrl) {
+            state.latestNdiFrameDataUrl = entry.frameDataUrl;
+          }
+        }
+        if (
+          entry &&
+          typeof entry.rawRgbaBase64 === 'string' &&
+          typeof body.width === 'number' &&
+          typeof body.height === 'number'
+        ) {
+          try {
+            const rawBuf = Buffer.from(entry.rawRgbaBase64, 'base64');
+            ndiNativeBridge.sendRawFrame(
+              rawBuf,
+              body.width,
+              body.height,
+              'RGBA',
+              state.ndiStream.frameRate,
+              state.ndiStream.alphaChannel,
+              entry.sourceName || null
+            );
+          } catch {
+            // Ignore raw buffer decode error
+          }
+        }
+      }
+    }
     if (
       typeof body.rawRgbaBase64 === 'string' &&
       typeof body.width === 'number' &&
@@ -627,7 +692,8 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
           body.height,
           'RGBA',
           state.ndiStream.frameRate,
-          state.ndiStream.alphaChannel
+          state.ndiStream.alphaChannel,
+          typeof body.sourceName === 'string' ? body.sourceName : null
         );
       } catch {
         // Ignore raw buffer decode error
@@ -644,7 +710,14 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
 
   // 12. GET /api/lan/ndi/frame or /api/lan/ndi/frame.png (Remote computer captures live NDI RGBA/PNG frame)
   if ((pathname === '/api/lan/ndi/frame' || pathname === '/api/lan/ndi/frame.png') && method === 'GET') {
-    if (!state.ndiStream.active || !state.latestNdiFrameDataUrl) {
+    const queryStr = url.includes('?') ? url.split('?')[1] : '';
+    const params = new URLSearchParams(queryStr);
+    const reqListId = params.get('listId') || '';
+    const listFrameEntry = reqListId ? state.latestNdiFramesByList[reqListId] : null;
+    const chosenDataUrl = listFrameEntry?.frameDataUrl || state.latestNdiFrameDataUrl;
+    const chosenSourceName = listFrameEntry?.sourceName || state.ndiStream.sourceName;
+
+    if (!state.ndiStream.active || !chosenDataUrl) {
       res.writeHead(404, {
         'Content-Type': 'application/json',
         'Access-Control-Allow-Origin': '*',
@@ -652,9 +725,9 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
       res.end(JSON.stringify({ error: 'NDI stream is currently inactive or no frame available' }));
       return true;
     }
-    const commaIdx = state.latestNdiFrameDataUrl.indexOf(',');
-    const headerPart = state.latestNdiFrameDataUrl.slice(0, commaIdx);
-    const base64Part = state.latestNdiFrameDataUrl.slice(commaIdx + 1);
+    const commaIdx = chosenDataUrl.indexOf(',');
+    const headerPart = chosenDataUrl.slice(0, commaIdx);
+    const base64Part = chosenDataUrl.slice(commaIdx + 1);
     const mimeMatch = headerPart.match(/^data:([^;]+);base64$/);
     const contentType = mimeMatch ? mimeMatch[1] : 'image/png';
     const buffer = Buffer.from(base64Part, 'base64');
@@ -664,7 +737,7 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
       'Content-Length': buffer.length,
       'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
       'Access-Control-Allow-Origin': '*',
-      'X-NDI-Source-Name': state.ndiStream.sourceName,
+      'X-NDI-Source-Name': chosenSourceName,
       'X-NDI-Resolution': `${state.ndiStream.width}x${state.ndiStream.height}`,
       'X-NDI-Framerate': String(state.ndiStream.frameRate),
       'X-NDI-Groups': state.ndiStream.useCustomGroups ? state.ndiStream.customGroups : 'Public',

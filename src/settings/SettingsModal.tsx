@@ -25,6 +25,7 @@ import {
   createDefaultSizesAndPositions,
   createDefaultSizesAndPositionsExtras,
   TimerList,
+  formatListNdiSourceName,
 } from '../types';
 import { useTheme } from '../hooks';
 import { timerManagerService } from '../services/timerManager';
@@ -541,6 +542,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     lists && lists.length > 0 ? lists : timerManagerService.getAllLists();
   const currentActiveListId =
     activeListId || timerManagerService.getSnapshot().activeListId || availableLists[0]?.id || 'list_1';
+  const currentActiveListObj =
+    availableLists.find((l) => l.id === currentActiveListId) || availableLists[0];
 
   if (!isOpen) return null;
 
@@ -2497,15 +2500,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   {/* 3. NDI BROADCAST OUTPUT (Source Name & Alpha Channel) */}
                   <div className="space-y-3">
                     <h3 className={sectionHeadingCls}>NDI BROADCAST OUTPUT</h3>
-                    <div className="max-w-[390px] space-y-4">
+                    <div className="max-w-[460px] space-y-4">
                       <div>
-                        <label className="block text-[13px] mb-1.5">NDI Source Name</label>
+                        <label className="block text-[13px] mb-1.5">
+                          NDI Source Name ({currentActiveListObj?.name || 'Active List'})
+                        </label>
                         <input
                           type="text"
-                          value={prefs.ndiSourceName || 'ProTimer (Main Output)'}
+                          value={formatListNdiSourceName(
+                            currentActiveListObj?.name || 'List 1',
+                            prefs.ndiSourceName
+                          )}
                           onChange={(e) => updatePref('ndiSourceName', e.target.value)}
                           className={inputCls}
                         />
+                        <p className="text-[11px] text-neutral-400 mt-1">
+                          Each list tab automatically displays its tab name in brackets:{' '}
+                          <span className="font-mono text-cyan-400">
+                            {availableLists.map((l) => formatListNdiSourceName(l.name, prefs.ndiSourceName)).join(', ')}
+                          </span>
+                        </p>
                       </div>
 
                       <PrefCheckbox
@@ -2542,7 +2556,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             }`}
                           />
                           {ndiStatus.active
-                            ? `ACTIVE (${ndiStatus.mode === 'multi' ? 'NDI MULTI' : 'NDI SINGLE'})`
+                            ? `ACTIVE (${ndiStatus.multiActive ? 'NDI MULTI' : 'PER-LIST NDI'})`
                             : 'STANDBY'}
                         </span>
                         <button
@@ -2551,15 +2565,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             if (hasUnappliedChanges) {
                               handleApply();
                             }
-                            ndiStreamService.toggleStream(ndiStatus.mode || 'single');
+                            ndiStreamService.toggleStream('single', currentActiveListId);
                           }}
                           className={`px-3 py-1 rounded text-[11px] font-bold tracking-wide transition-colors cursor-pointer ${
-                            ndiStatus.active
+                            ndiStatus.activeByList?.[currentActiveListId]
                               ? 'bg-red-600 hover:bg-red-500 text-white'
                               : 'bg-emerald-600 hover:bg-emerald-500 text-white'
                           }`}
                         >
-                          {ndiStatus.active ? 'Stop NDI Stream' : 'Start NDI Stream'}
+                          {ndiStatus.activeByList?.[currentActiveListId]
+                            ? `Stop ${currentActiveListObj?.name || 'List 1'} NDI`
+                            : `Start ${currentActiveListObj?.name || 'List 1'} NDI`}
                         </button>
                       </div>
                     </div>
@@ -2575,15 +2591,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         <div>
                           <span className="text-neutral-500 block">Network NDI Name</span>
                           <span className="font-mono font-semibold text-cyan-400">
-                            {ndiStatus.nativeNdi?.hostname
-                              ? `${ndiStatus.nativeNdi.hostname} (${
-                                  ndiStatus.active
-                                    ? ndiStatus.sourceName
-                                    : prefs.ndiSourceName || 'ProTimer (Main Output)'
-                                })`
-                              : ndiStatus.active
-                              ? ndiStatus.sourceName
-                              : prefs.ndiSourceName || 'ProTimer (Main Output)'}
+                            {(() => {
+                              const currentTabSourceName = formatListNdiSourceName(
+                                currentActiveListObj?.name || 'List 1',
+                                prefs.ndiSourceName
+                              );
+                              return ndiStatus.nativeNdi?.hostname
+                                ? `${ndiStatus.nativeNdi.hostname} (${currentTabSourceName})`
+                                : currentTabSourceName;
+                            })()}
                           </span>
                         </div>
                         <div>
@@ -2609,6 +2625,69 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                               ? (ndiStatus.active ? ndiStatus.customGroups : prefs.ndiCustomGroups) || 'Public'
                               : 'Public (Default)'}
                           </span>
+                        </div>
+                      </div>
+
+                      {/* Per-List Independent NDI Sources Overview */}
+                      <div
+                        className={`p-2.5 rounded border text-[11px] space-y-1.5 ${
+                          isDark ? 'bg-[#101622] border-[#1e283a]' : 'bg-white border-slate-200'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-semibold text-neutral-400 uppercase tracking-wider text-[10px]">
+                            Per-List Independent NDI Outputs ({availableLists.length})
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => ndiStreamService.toggleStream('multi')}
+                            className={`px-2 py-0.5 rounded text-[10px] font-semibold border cursor-pointer ${
+                              ndiStatus.multiActive
+                                ? 'bg-emerald-600 text-white border-emerald-500'
+                                : isDark
+                                ? 'bg-[#161f30] text-neutral-300 border-[#28354d] hover:text-white'
+                                : 'bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200'
+                            }`}
+                          >
+                            {ndiStatus.multiActive ? 'NDI Multi: ON (All Lists Live)' : 'Enable NDI Multi'}
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                          {availableLists.map((list) => {
+                            const listSource = formatListNdiSourceName(list.name, prefs.ndiSourceName);
+                            const isListLive = Boolean(
+                              ndiStatus.activeByList?.[list.id] || ndiStatus.multiActive
+                            );
+                            return (
+                              <div
+                                key={list.id}
+                                className={`flex items-center justify-between px-2.5 py-1.5 rounded border ${
+                                  isListLive
+                                    ? isDark
+                                      ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-200'
+                                      : 'bg-emerald-50 border-emerald-300 text-emerald-900'
+                                    : isDark
+                                    ? 'bg-[#0b0f17] border-[#1b2333] text-neutral-400'
+                                    : 'bg-slate-50 border-slate-200 text-slate-600'
+                                }`}
+                              >
+                                <span className="font-mono truncate">{listSource}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => ndiStreamService.toggleStream('single', list.id)}
+                                  className={`px-2 py-0.5 rounded text-[10px] font-semibold cursor-pointer ${
+                                    ndiStatus.activeByList?.[list.id]
+                                      ? 'bg-emerald-600 text-white'
+                                      : isDark
+                                      ? 'bg-[#1a2334] text-neutral-300 hover:text-white'
+                                      : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
+                                  }`}
+                                >
+                                  {ndiStatus.activeByList?.[list.id] ? 'ON' : 'OFF'}
+                                </button>
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
 
@@ -2660,7 +2739,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         ) : (
                           <div className="text-[11px] leading-relaxed space-y-1">
                             <p>
-                              To make <strong>{prefs.ndiSourceName || 'ProTimer (Main Output)'}</strong>{' '}
+                              To make{' '}
+                              <strong>
+                                {formatListNdiSourceName(
+                                  currentActiveListObj?.name || 'List 1',
+                                  prefs.ndiSourceName
+                                )}
+                              </strong>{' '}
                               automatically appear in the NDI source dropdown of{' '}
                               <strong>OBS Studio, vMix, ProPresenter, NDI Studio Monitor, and Resolume</strong>{' '}
                               on your network:

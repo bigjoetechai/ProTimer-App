@@ -97,7 +97,12 @@ const lanState = {
     active: false,
     mode: 'single',
     multiMode: false,
-    sourceName: 'ProTimer (Main Output)',
+    multiActive: false,
+    activeByList: {},
+    sourceNamesByList: {},
+    activeSourceNames: [],
+    sourceName: 'ProTimer (List 1)',
+    multiSourceName: 'ProTimer (Multi Output)',
     resolution: 'HD - 1920 x 1080',
     width: 1920,
     height: 1080,
@@ -612,8 +617,24 @@ function handleEmbeddedLanApi(req, res) {
         lanState.ndiStream.mode = 'single';
         lanState.ndiStream.multiMode = false;
       }
+      if (typeof body.multiActive === 'boolean') {
+        lanState.ndiStream.multiActive = body.multiActive;
+        lanState.ndiStream.multiMode = body.multiActive;
+      }
+      if (body.activeByList && typeof body.activeByList === 'object') {
+        lanState.ndiStream.activeByList = body.activeByList;
+      }
+      if (body.sourceNamesByList && typeof body.sourceNamesByList === 'object') {
+        lanState.ndiStream.sourceNamesByList = body.sourceNamesByList;
+      }
+      if (Array.isArray(body.activeSourceNames)) {
+        lanState.ndiStream.activeSourceNames = body.activeSourceNames;
+      }
       if (typeof body.sourceName === 'string' && body.sourceName.trim()) {
         lanState.ndiStream.sourceName = body.sourceName.trim();
+      }
+      if (typeof body.multiSourceName === 'string' && body.multiSourceName.trim()) {
+        lanState.ndiStream.multiSourceName = body.multiSourceName.trim();
       }
       if (typeof body.resolution === 'string') {
         lanState.ndiStream.resolution = body.resolution;
@@ -651,6 +672,7 @@ function handleEmbeddedLanApi(req, res) {
       if (nextActive) {
         nativeDiagnostics = ndiNativeBridge.startSender({
           sourceName: lanState.ndiStream.sourceName,
+          activeSourceNames: lanState.ndiStream.activeSourceNames,
           groups: lanState.ndiStream.customGroups,
           useCustomGroups: lanState.ndiStream.useCustomGroups,
           width: lanState.ndiStream.width,

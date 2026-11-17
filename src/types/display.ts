@@ -114,6 +114,8 @@ export interface DisplaySyncPayload {
   isMultiFullscreenActive?: boolean;
   isNdiActive?: boolean;
   isNdiMultiActive?: boolean;
+  activeNdiByList?: Record<string, boolean>;
+  ndiSourceNamesByList?: Record<string, string>;
   ndiSourceName?: string;
 }
 

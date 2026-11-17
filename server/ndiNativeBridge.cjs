@@ -230,9 +230,17 @@ class NdiMdnsAdvertiser {
     ]);
   }
 
-  start(sourceName, ipAddresses, port = 5961) {
+  start(sourceName, ipAddresses, port = 5961, additionalSources = []) {
     this.stop();
-    this.sourceName = sourceName || 'ProTimer (Main Output)';
+    this.sourceName = sourceName || 'ProTimer (List 1)';
+    const allSources = Array.from(
+      new Set(
+        [this.sourceName, ...(Array.isArray(additionalSources) ? additionalSources : [])].filter(
+          (s) => typeof s === 'string' && s.trim().length > 0
+        )
+      )
+    );
+    this.sourceNames = allSources.length > 0 ? allSources : [this.sourceName];
     this.port = port;
     this.active = true;
 
@@ -248,11 +256,14 @@ class NdiMdnsAdvertiser {
         if (!this.active || !this.socket) return;
         const ips = Array.isArray(ipAddresses) && ipAddresses.length > 0 ? ipAddresses : ['127.0.0.1'];
         for (const ip of ips) {
-          try {
-            const pkt = this.buildAnnouncementPacket(this.sourceName, ip, this.port);
-            this.socket.send(pkt, 0, pkt.length, 5353, '224.0.0.251');
-          } catch {
-            // Ignore send error
+          for (let idx = 0; idx < this.sourceNames.length; idx++) {
+            const sName = this.sourceNames[idx];
+            try {
+              const pkt = this.buildAnnouncementPacket(sName, ip, this.port + idx);
+              this.socket.send(pkt, 0, pkt.length, 5353, '224.0.0.251');
+            } catch {
+              // Ignore send error
+            }
           }
         }
       };
@@ -318,9 +329,11 @@ class NdiNativeBridge {
     this.fnSendVideoV2 = null;
     this.fnGetConnections = null;
 
-    // Active sender state
+    // Active sender state (supports both primary sender and concurrent per-list senders)
     this.senderInstance = null;
+    this.extraSenders = new Map(); // sourceName -> { instance, groups, lastBuffer }
     this.activeSourceName = null;
+    this.activeSourceNames = [];
     this.activeGroups = null;
     this.lastRawBuffer = null;
     this.lastWidth = 1920;
@@ -442,16 +455,17 @@ class NdiNativeBridge {
       this.tryLoadLibrary();
     }
     const hostname = os.hostname() || 'PC';
-    const sourceName = this.activeSourceName || 'ProTimer (Main Output)';
+    const sourceName = this.activeSourceName || 'ProTimer (List 1)';
     return {
       nativeNdiAvailable: Boolean(this.ndiLib),
-      nativeNdiSending: Boolean(this.senderInstance),
+      nativeNdiSending: Boolean(this.senderInstance || this.extraSenders.size > 0),
       dllPath: this.dllPath,
       ndiVersion: this.ndiVersion,
       networkSourceFullName: `${hostname} (${sourceName})`,
       hostname,
       connectedReceivers: this.getConnectedReceiversCount(),
       mdnsActive: Boolean(this.mdns && this.mdns.active),
+      activeSources: this.activeSourceNames,
       error: this.loadError,
       downloadUrl: NDI_RUNTIME_DOWNLOAD_URL,
       toolsUrl: NDI_TOOLS_DOWNLOAD_URL,
@@ -460,17 +474,53 @@ class NdiNativeBridge {
   }
 
   getConnectedReceiversCount() {
-    if (!this.senderInstance || !this.fnGetConnections) return 0;
-    try {
-      const count = this.fnGetConnections(this.senderInstance, 0);
-      return Math.max(0, Number(count) || 0);
-    } catch {
-      return 0;
+    if (!this.fnGetConnections) return 0;
+    let total = 0;
+    if (this.senderInstance) {
+      try {
+        total += Math.max(0, Number(this.fnGetConnections(this.senderInstance, 0)) || 0);
+      } catch {
+        // Ignore
+      }
     }
+    for (const entry of this.extraSenders.values()) {
+      if (entry && entry.instance) {
+        try {
+          total += Math.max(0, Number(this.fnGetConnections(entry.instance, 0)) || 0);
+        } catch {
+          // Ignore
+        }
+      }
+    }
+    return total;
   }
 
-  startSender({ sourceName, groups, useCustomGroups, width, height, frameRate, alphaChannel, ips, port }) {
-    const cleanName = (sourceName && String(sourceName).trim()) || 'ProTimer (Main Output)';
+  startSender({
+    sourceName,
+    activeSourceNames,
+    groups,
+    useCustomGroups,
+    width,
+    height,
+    frameRate,
+    alphaChannel,
+    ips,
+    port,
+  }) {
+    const cleanName = (sourceName && String(sourceName).trim()) || 'ProTimer (List 1)';
+    const allNames = Array.from(
+      new Set(
+        (Array.isArray(activeSourceNames) && activeSourceNames.length > 0
+          ? activeSourceNames
+          : [cleanName]
+        )
+          .map((s) => (s ? String(s).trim() : ''))
+          .filter(Boolean)
+      )
+    );
+    const primaryName = allNames[0] || cleanName;
+    this.activeSourceNames = allNames;
+
     const cleanGroups =
       useCustomGroups && groups && String(groups).trim() && String(groups).trim().toLowerCase() !== 'public'
         ? String(groups).trim()
@@ -481,8 +531,8 @@ class NdiNativeBridge {
     this.lastFps = Number(frameRate) || 30;
     this.lastAlpha = Boolean(alphaChannel);
 
-    // Start mDNS _ndi._tcp.local discovery responder
-    this.mdns.start(cleanName, ips, port || 5961);
+    // Start mDNS _ndi._tcp.local discovery responder for all active NDI source names
+    this.mdns.start(primaryName, ips, port || 5961, allNames);
 
     // Ensure native NDI DLL is loaded
     if (!this.ndiLib) {
@@ -490,27 +540,25 @@ class NdiNativeBridge {
     }
 
     if (this.ndiLib && this.fnSendCreate) {
-      // Recreate sender if sourceName or groups changed
+      // Recreate primary sender if sourceName or groups changed
       if (
         this.senderInstance &&
-        (this.activeSourceName !== cleanName || this.activeGroups !== cleanGroups)
+        (this.activeSourceName !== primaryName || this.activeGroups !== cleanGroups)
       ) {
-        this.destroySenderOnly();
+        this.destroyPrimarySenderOnly();
       }
 
       if (!this.senderInstance) {
         try {
-          // clock_video: false so we can push frames at either UI cadence or keepalive cadence without blocking the main thread
           this.senderInstance = this.fnSendCreate({
-            p_ndi_name: cleanName,
+            p_ndi_name: primaryName,
             p_groups: cleanGroups,
             clock_video: false,
             clock_audio: false,
           });
-          this.activeSourceName = cleanName;
+          this.activeSourceName = primaryName;
           this.activeGroups = cleanGroups;
 
-          // Send an initial frame immediately so the NDI source appears in OBS / vMix / Studio Monitor right away
           if (!this.lastRawBuffer || this.lastRawBuffer.length !== this.lastWidth * this.lastHeight * 4) {
             this.lastRawBuffer = Buffer.alloc(this.lastWidth * this.lastHeight * 4, 0);
             this.lastFourCC = this.lastAlpha ? FOURCC_RGBA : FOURCC_RGBX;
@@ -518,6 +566,45 @@ class NdiNativeBridge {
           this.pushCurrentBufferToNdi();
         } catch (err) {
           this.loadError = `NDIlib_send_create failed: ${err && err.message ? err.message : String(err)}`;
+        }
+      }
+
+      // Sync extra senders for any additional active list tabs / NDI Multi sources
+      const extraDesired = new Set(allNames.filter((n) => n !== primaryName));
+      for (const [existingName, entry] of this.extraSenders.entries()) {
+        if (!extraDesired.has(existingName) || entry.groups !== cleanGroups) {
+          if (entry.instance && this.fnSendDestroy) {
+            try {
+              this.fnSendDestroy(entry.instance);
+            } catch {
+              // Ignore
+            }
+          }
+          this.extraSenders.delete(existingName);
+        }
+      }
+
+      for (const extraName of extraDesired) {
+        if (!this.extraSenders.has(extraName)) {
+          try {
+            const inst = this.fnSendCreate({
+              p_ndi_name: extraName,
+              p_groups: cleanGroups,
+              clock_video: false,
+              clock_audio: false,
+            });
+            if (inst) {
+              const initBuf = Buffer.alloc(this.lastWidth * this.lastHeight * 4, 0);
+              this.extraSenders.set(extraName, {
+                instance: inst,
+                groups: cleanGroups,
+                lastBuffer: initBuf,
+              });
+              this.pushBufferToSenderInstance(inst, initBuf);
+            }
+          } catch {
+            // Ignore extra sender error
+          }
         }
       }
     }
@@ -530,12 +617,17 @@ class NdiNativeBridge {
       if (this.senderInstance && this.lastRawBuffer) {
         this.pushCurrentBufferToNdi();
       }
+      for (const entry of this.extraSenders.values()) {
+        if (entry && entry.instance && entry.lastBuffer) {
+          this.pushBufferToSenderInstance(entry.instance, entry.lastBuffer);
+        }
+      }
     }, 250);
 
     return this.getRuntimeDiagnostics();
   }
 
-  destroySenderOnly() {
+  destroyPrimarySenderOnly() {
     if (this.senderInstance && this.fnSendDestroy) {
       try {
         this.fnSendDestroy(this.senderInstance);
@@ -546,27 +638,44 @@ class NdiNativeBridge {
     this.senderInstance = null;
   }
 
+  destroyAllSenders() {
+    this.destroyPrimarySenderOnly();
+    for (const entry of this.extraSenders.values()) {
+      if (entry && entry.instance && this.fnSendDestroy) {
+        try {
+          this.fnSendDestroy(entry.instance);
+        } catch {
+          // Ignore
+        }
+      }
+    }
+    this.extraSenders.clear();
+  }
+
   stopSender() {
     if (this.keepAliveTimer) {
       clearInterval(this.keepAliveTimer);
       this.keepAliveTimer = null;
     }
     this.mdns.stop();
-    this.destroySenderOnly();
+    this.destroyAllSenders();
+    this.activeSourceNames = [];
     this.lastRawBuffer = null;
     return this.getRuntimeDiagnostics();
   }
 
   /**
-   * Send raw RGBA or BGRA pixel buffer to the active NDI® sender.
-   * @param {Buffer|Uint8Array} rawBuffer - Raw 4-bytes-per-pixel buffer (width * height * 4)
-   * @param {number} width
-   * @param {number} height
-   * @param {'RGBA'|'BGRA'} pixelFormat
-   * @param {number} frameRate
-   * @param {boolean} alphaChannel
+   * Send raw RGBA or BGRA pixel buffer to the active NDI® sender (or a specific named sender).
    */
-  sendRawFrame(rawBuffer, width, height, pixelFormat = 'RGBA', frameRate = 30, alphaChannel = true) {
+  sendRawFrame(
+    rawBuffer,
+    width,
+    height,
+    pixelFormat = 'RGBA',
+    frameRate = 30,
+    alphaChannel = true,
+    targetSourceName = null
+  ) {
     if (!rawBuffer || !width || !height) return false;
     const expectedLen = width * height * 4;
     if (rawBuffer.byteLength < expectedLen) return false;
@@ -575,7 +684,6 @@ class NdiNativeBridge {
       ? rawBuffer
       : Buffer.from(rawBuffer.buffer, rawBuffer.byteOffset, expectedLen);
 
-    this.lastRawBuffer = buf;
     this.lastWidth = width;
     this.lastHeight = height;
     this.lastFps = frameRate || this.lastFps || 30;
@@ -587,11 +695,20 @@ class NdiNativeBridge {
       this.lastFourCC = this.lastAlpha ? FOURCC_RGBA : FOURCC_RGBX;
     }
 
+    if (targetSourceName && this.extraSenders.has(targetSourceName)) {
+      const entry = this.extraSenders.get(targetSourceName);
+      if (entry && entry.instance) {
+        entry.lastBuffer = buf;
+        return this.pushBufferToSenderInstance(entry.instance, buf);
+      }
+    }
+
+    this.lastRawBuffer = buf;
     return this.pushCurrentBufferToNdi();
   }
 
-  pushCurrentBufferToNdi() {
-    if (!this.senderInstance || !this.fnSendVideoV2 || !this.lastRawBuffer) {
+  pushBufferToSenderInstance(instance, buffer) {
+    if (!instance || !this.fnSendVideoV2 || !buffer) {
       return false;
     }
     try {
@@ -599,7 +716,7 @@ class NdiNativeBridge {
       const w = this.lastWidth;
       const h = this.lastHeight;
 
-      this.fnSendVideoV2(this.senderInstance, {
+      this.fnSendVideoV2(instance, {
         xres: w,
         yres: h,
         FourCC: this.lastFourCC,
@@ -608,7 +725,7 @@ class NdiNativeBridge {
         picture_aspect_ratio: w / Math.max(1, h),
         frame_format_type: FRAME_FORMAT_PROGRESSIVE,
         timecode: NDI_SEND_TIMECODE_SYNTHESIZE,
-        p_data: this.lastRawBuffer,
+        p_data: buffer,
         line_stride_in_bytes: w * 4,
         p_metadata: null,
         timestamp: 0n,
@@ -618,6 +735,10 @@ class NdiNativeBridge {
       this.loadError = `NDI frame send error: ${err && err.message ? err.message : String(err)}`;
       return false;
     }
+  }
+
+  pushCurrentBufferToNdi() {
+    return this.pushBufferToSenderInstance(this.senderInstance, this.lastRawBuffer);
   }
 }
 

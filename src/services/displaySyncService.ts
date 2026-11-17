@@ -13,6 +13,7 @@ import {
   StageMessage,
   TimerItem,
   TimerStatus,
+  formatListNdiSourceName,
   resolveBackgroundImageForList,
   resolveLogoImageForList,
 } from '../types';
@@ -29,6 +30,8 @@ export interface OutputDisplayStatus {
   isMultiFullscreenActive: boolean;
   isNdiActive: boolean;
   isNdiMultiActive: boolean;
+  activeNdiByList: Record<string, boolean>;
+  ndiSourceNamesByList: Record<string, string>;
   ndiSourceName: string;
 }
 
@@ -51,7 +54,9 @@ class DisplaySyncService {
     isMultiFullscreenActive: false,
     isNdiActive: false,
     isNdiMultiActive: false,
-    ndiSourceName: 'ProTimer (Main Output)',
+    activeNdiByList: {},
+    ndiSourceNamesByList: {},
+    ndiSourceName: 'ProTimer (List 1)',
   };
   private lastPushedBgUrl: string | undefined = undefined;
   private lastPushedLogoUrl: string | undefined = undefined;
@@ -284,13 +289,22 @@ class DisplaySyncService {
     const next: OutputDisplayStatus = {
       ...this.outputStatus,
       ...partial,
+      activeNdiByList: partial.activeNdiByList
+        ? { ...partial.activeNdiByList }
+        : this.outputStatus.activeNdiByList,
+      ndiSourceNamesByList: partial.ndiSourceNamesByList
+        ? { ...partial.ndiSourceNamesByList }
+        : this.outputStatus.ndiSourceNamesByList,
     };
     const changed =
       next.isFullscreenActive !== this.outputStatus.isFullscreenActive ||
       next.isMultiFullscreenActive !== this.outputStatus.isMultiFullscreenActive ||
       next.isNdiActive !== this.outputStatus.isNdiActive ||
       next.isNdiMultiActive !== this.outputStatus.isNdiMultiActive ||
-      next.ndiSourceName !== this.outputStatus.ndiSourceName;
+      next.ndiSourceName !== this.outputStatus.ndiSourceName ||
+      JSON.stringify(next.activeNdiByList) !== JSON.stringify(this.outputStatus.activeNdiByList) ||
+      JSON.stringify(next.ndiSourceNamesByList) !==
+        JSON.stringify(this.outputStatus.ndiSourceNamesByList);
     this.outputStatus = next;
     if (changed && this.isMaster) {
       const snap = timerManagerService.getSnapshot();
@@ -735,6 +749,15 @@ class DisplaySyncService {
     const backgroundImageUrl = resolveBackgroundImageForList(prefs, activeListId);
     const logoImageUrl = resolveLogoImageForList(prefs, activeListId);
 
+    const ndiSourceNamesByList: Record<string, string> = {};
+    for (const l of allLists) {
+      ndiSourceNamesByList[l.id] = formatListNdiSourceName(l.name, prefs.ndiSourceName);
+    }
+    const resolvedNdiSourceName =
+      ndiSourceNamesByList[activeListId] ||
+      formatListNdiSourceName(activeListName, prefs.ndiSourceName);
+    const isListNdiActive = Boolean(this.outputStatus.activeNdiByList[activeListId]);
+
     return {
       activeListId,
       activeListName,
@@ -773,9 +796,11 @@ class DisplaySyncService {
       runLogs: timerManagerService.getRunLogs(),
       isFullscreenActive: this.outputStatus.isFullscreenActive,
       isMultiFullscreenActive: this.outputStatus.isMultiFullscreenActive,
-      isNdiActive: this.outputStatus.isNdiActive,
+      isNdiActive: isListNdiActive || this.outputStatus.isNdiMultiActive,
       isNdiMultiActive: this.outputStatus.isNdiMultiActive,
-      ndiSourceName: this.outputStatus.ndiSourceName,
+      activeNdiByList: { ...this.outputStatus.activeNdiByList },
+      ndiSourceNamesByList,
+      ndiSourceName: resolvedNdiSourceName,
     };
   }
 
@@ -1160,22 +1185,23 @@ class DisplaySyncService {
       case 'TOGGLE_MULTI_FULLSCREEN':
         next.isMultiFullscreenActive = !next.isMultiFullscreenActive;
         break;
-      case 'TOGGLE_NDI':
-        if (next.isNdiActive && !next.isNdiMultiActive) {
-          next.isNdiActive = false;
+      case 'TOGGLE_NDI': {
+        const lid = (typeof p?.listId === 'string' && p.listId) || next.activeListId || 'list_1';
+        const nextMap = { ...(next.activeNdiByList || {}) };
+        if (nextMap[lid]) {
+          delete nextMap[lid];
         } else {
-          next.isNdiActive = true;
-          next.isNdiMultiActive = false;
+          nextMap[lid] = true;
         }
+        next.activeNdiByList = nextMap;
+        next.isNdiActive = Boolean(nextMap[lid]) || Boolean(next.isNdiMultiActive);
         break;
+      }
       case 'TOGGLE_NDI_MULTI':
-        if (next.isNdiActive && next.isNdiMultiActive) {
-          next.isNdiActive = false;
-          next.isNdiMultiActive = false;
-        } else {
-          next.isNdiActive = true;
-          next.isNdiMultiActive = true;
-        }
+        next.isNdiMultiActive = !next.isNdiMultiActive;
+        next.isNdiActive =
+          Boolean(next.activeNdiByList?.[next.activeListId || 'list_1']) ||
+          Boolean(next.isNdiMultiActive);
         break;
       case 'SET_MESSAGE':
         if (p) {

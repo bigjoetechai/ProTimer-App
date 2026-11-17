@@ -24,7 +24,7 @@ import { SettingsModal } from '../settings';
 import { FullscreenDisplay, MultiFullscreenDisplay } from '../displays';
 import { useTimerManager, useDisplaySync, useHotkeys, useMonitorDetection, useWindowManager, useTheme } from '../hooks';
 import { formatSeconds } from '../utilities/timeFormatters';
-import { TimerItem, DisplayTarget, AppPreferences } from '../types';
+import { TimerItem, DisplayTarget, AppPreferences, formatListNdiSourceName } from '../types';
 import { storageService } from '../services/storageService';
 import { displaySyncService } from '../services/displaySyncService';
 import { timerManagerService } from '../services/timerManager';
@@ -172,35 +172,64 @@ export const MainConsolePage: React.FC = () => {
   } = useMonitorDetection(snapshot.activeListId);
   const { toggleAppFullscreen } = useWindowManager();
 
-  // Sync live Fullscreen, Multi Fullscreen, and NDI states to LAN / Remote controllers
+  // Active list name
+  const currentList = useMemo(() => {
+    return lists.find((l) => l.id === snapshot.activeListId) || lists[0] || { id: 'list_1', name: 'List 1', timerIds: [] };
+  }, [lists, snapshot.activeListId]);
+
+  // Keep NDI source names reconciled whenever lists are added, renamed, or switched
   useEffect(() => {
+    ndiStreamService.notifySubscribers();
+    if (ndiStreamStatus.active) {
+      ndiStreamService.syncConfigToServer();
+    }
+  }, [lists, snapshot.activeListId, currentList.name]);
+
+  // Sync live Fullscreen, Multi Fullscreen, and per-list NDI states to LAN / Remote controllers
+  useEffect(() => {
+    const activeListNdiSourceName =
+      ndiStreamStatus.sourceNamesByList?.[snapshot.activeListId] ||
+      formatListNdiSourceName(currentList.name, preferences.ndiSourceName);
     displaySyncService.updateOutputStatus({
       isFullscreenActive,
       isMultiFullscreenActive,
-      isNdiActive: ndiStreamStatus.active,
-      isNdiMultiActive: ndiStreamStatus.active && ndiStreamStatus.mode === 'multi',
-      ndiSourceName: ndiStreamStatus.sourceName,
+      isNdiActive:
+        Boolean(ndiStreamStatus.activeByList?.[snapshot.activeListId]) ||
+        Boolean(ndiStreamStatus.multiActive),
+      isNdiMultiActive: Boolean(ndiStreamStatus.multiActive),
+      activeNdiByList: ndiStreamStatus.activeByList || {},
+      ndiSourceNamesByList: ndiStreamStatus.sourceNamesByList || {},
+      ndiSourceName: activeListNdiSourceName,
     });
-  }, [isFullscreenActive, isMultiFullscreenActive, ndiStreamStatus]);
+  }, [
+    isFullscreenActive,
+    isMultiFullscreenActive,
+    ndiStreamStatus,
+    snapshot.activeListId,
+    currentList.name,
+    preferences.ndiSourceName,
+  ]);
 
-  // Register handler so LAN / QR Remote Control can remotely activate Fullscreen and NDI
+  // Register handler so LAN / QR Remote Control can remotely activate Fullscreen and NDI per list tab
   useEffect(() => {
-    return displaySyncService.registerOutputController((command) => {
+    return displaySyncService.registerOutputController((command, cmdPayload) => {
+      const targetListId =
+        (cmdPayload as { listId?: string } | undefined)?.listId || snapshot.activeListId;
       switch (command) {
         case 'TOGGLE_FULLSCREEN':
-          toggleFullscreen(selectedMonitorId, snapshot.activeListId);
+          toggleFullscreen(selectedMonitorId, targetListId);
           break;
         case 'OPEN_FULLSCREEN':
-          openFullscreen(selectedMonitorId, 'fullscreen', snapshot.activeListId);
+          openFullscreen(selectedMonitorId, 'fullscreen', targetListId);
           break;
         case 'CLOSE_FULLSCREEN':
-          closeFullscreen(snapshot.activeListId);
+          closeFullscreen(targetListId);
           break;
         case 'TOGGLE_MULTI_FULLSCREEN':
           toggleMultiFullscreen(selectedMonitorId);
           break;
         case 'TOGGLE_NDI':
-          ndiStreamService.toggleStream('single');
+          ndiStreamService.toggleStream('single', targetListId);
           break;
         case 'TOGGLE_NDI_MULTI':
           ndiStreamService.toggleStream('multi');
@@ -215,11 +244,6 @@ export const MainConsolePage: React.FC = () => {
     closeFullscreen,
     toggleMultiFullscreen,
   ]);
-
-  // Active list name
-  const currentList = useMemo(() => {
-    return lists.find((l) => l.id === snapshot.activeListId) || lists[0] || { id: 'list_1', name: 'List 1', timerIds: [] };
-  }, [lists, snapshot.activeListId]);
 
   // Keyboard Hotkeys
   useHotkeys(
@@ -632,7 +656,7 @@ export const MainConsolePage: React.FC = () => {
                 listId: snapshot.activeListId,
               });
             } else {
-              ndiStreamService.toggleStream('single');
+              ndiStreamService.toggleStream('single', snapshot.activeListId);
             }
           } else if (target === 'presenter') {
             if (typeof window !== 'undefined' && window.electronAPI?.isElectron && window.electronAPI.togglePresenterWindow) {
@@ -699,28 +723,45 @@ export const MainConsolePage: React.FC = () => {
         isPreviewActive={isPreviewPopoutOpen}
         isMultiPreviewActive={isMultiPreviewPopoutOpen}
         isPresenterActive={isPresenterPopoutOpen}
+        activeNdiByList={
+          typeof window !== 'undefined' &&
+          new URLSearchParams(window.location.search).get('display') === 'lan_desktop'
+            ? payload?.activeNdiByList || ndiStreamStatus.activeByList
+            : ndiStreamStatus.activeByList
+        }
         ndiStreamStatus={
           typeof window !== 'undefined' &&
           new URLSearchParams(window.location.search).get('display') === 'lan_desktop'
             ? {
                 ...ndiStreamStatus,
-                active: Boolean(payload?.isNdiActive),
+                active:
+                  Boolean(payload?.isNdiActive) ||
+                  Boolean(payload?.isNdiMultiActive) ||
+                  Object.values(payload?.activeNdiByList || {}).some(Boolean),
+                multiActive: Boolean(payload?.isNdiMultiActive),
+                activeByList: payload?.activeNdiByList || ndiStreamStatus.activeByList,
+                sourceNamesByList:
+                  payload?.ndiSourceNamesByList || ndiStreamStatus.sourceNamesByList,
                 mode: payload?.isNdiMultiActive ? 'multi' : 'single',
-                sourceName: payload?.ndiSourceName || ndiStreamStatus.sourceName,
+                sourceName:
+                  payload?.ndiSourceNamesByList?.[snapshot.activeListId] ||
+                  payload?.ndiSourceName ||
+                  formatListNdiSourceName(currentList.name, preferences.ndiSourceName),
               }
             : ndiStreamStatus
         }
-        onToggleNdiStream={(mode) => {
+        onToggleNdiStream={(mode, listId) => {
+          const targetListId = listId || snapshot.activeListId;
           const isRemoteDesktop =
             typeof window !== 'undefined' &&
             new URLSearchParams(window.location.search).get('display') === 'lan_desktop';
           if (isRemoteDesktop) {
             displaySyncService.sendRemoteCommand(
               mode === 'multi' ? 'TOGGLE_NDI_MULTI' : 'TOGGLE_NDI',
-              { listId: snapshot.activeListId }
+              { listId: targetListId }
             );
           } else {
-            ndiStreamService.toggleStream(mode);
+            ndiStreamService.toggleStream(mode, targetListId);
           }
         }}
       />
