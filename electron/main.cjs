@@ -682,13 +682,18 @@ function handleEmbeddedLanApi(req, res) {
         (typeof body.sourceName === 'string' && body.sourceName.trim()) ||
         lanState.ndiStream.sourceName;
 
+      const sentSourcesInBatch = new Set();
+
       if (typeof dataUrl === 'string' && dataUrl.startsWith('data:image/')) {
         lanState.ndiStream.lastFrameDataUrl = dataUrl;
         lanState.ndiStream.lastFrameTimestamp = Date.now();
         lanState.ndiStream.lastFrameAt = Date.now();
         lanState.ndiStream.frameCount += 1;
         pushFrameToEmbeddedNdiClients(dataUrl);
-        decodeDataUrlAndSendToNdi(dataUrl, primarySourceName);
+        if (primarySourceName) {
+          decodeDataUrlAndSendToNdi(dataUrl, primarySourceName);
+          sentSourcesInBatch.add(primarySourceName);
+        }
       }
 
       if (body.perListFrames && typeof body.perListFrames === 'object') {
@@ -699,8 +704,9 @@ function handleEmbeddedLanApi(req, res) {
               (typeof entry.sourceName === 'string' && entry.sourceName.trim()) ||
               lanState.ndiStream.sourceNamesByList?.[lid] ||
               null;
-            if (listSource && listSource !== primarySourceName) {
+            if (listSource && !sentSourcesInBatch.has(listSource)) {
               decodeDataUrlAndSendToNdi(entry.frameDataUrl, listSource);
+              sentSourcesInBatch.add(listSource);
             }
           }
         }

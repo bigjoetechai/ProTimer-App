@@ -1,26 +1,29 @@
 /**
- * Native NDI® SDK Bridge & mDNS (_ndi._tcp.local) Network Discovery Engine for ProTimer.
+ * Native NDI® SDK Bridge & Discovery Engine for ProTimer.
  *
  * Works in both Electron Main Process (Windows Desktop App) and Node.js Express Server:
  * 1. Automatically locates and loads the official NewTek/Vizrt NDI Runtime library:
  *    - Windows x64: `Processing.NDI.Lib.x64.dll` (via NDI_RUNTIME_DIR_V6 / V5 / V4,
- *      `C:\Program Files\NDI\...`, or local `ndi/` folder)
+ *      `C:\Program Files\NDI\...`, Windows Registry, or local `ndi/` folder)
  *    - Linux x64: `libndi.so` / `libndi.so.6` / `libndi.so.5`
  *    - macOS: `libndi.dylib`
  * 2. Binds the official NDI C ABI using `koffi` (zero C++ compiler required):
  *    - `NDIlib_initialize()`
  *    - `NDIlib_send_create()` -> registers `<HOSTNAME> (<NDI Source Name>)` on the network
+ *      using the official NDI internal mDNS + TCP video server (ports 5960+).
  *    - `NDIlib_send_send_video_v2.async()` -> streams raw BGRA / RGBA video frames on a worker thread
- *      so the Electron Main Process UI thread never blocks or freezes!
- *    - `NDIlib_send_get_no_connections.async()` -> polls connected NDI receivers asynchronously
- * 3. Broadcasts mDNS (`_ndi._tcp.local`) multicast DNS announcements on 224.0.0.251:5353
- *    with multicast loopback disabled and strict query-only filtering to prevent packet storms.
+ *      at continuous broadcast cadence (~15 FPS) so OBS Studio, vMix, ProPresenter, Wirecast,
+ *      and NDI Studio Monitor discover and lock onto every active list stream and NDI Multi stream!
+ * 3. Maintains a dedicated sender map (`this.sendersByName = new Map()`) so every active list tab
+ *    (`ProTimer (List 1)`, `ProTimer (List 2)`, ...) and `ProTimer (Multi Output)` has its own
+ *    independent NDI sender instance, frame buffer, and continuous broadcast heartbeat.
  */
 
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const dgram = require('dgram');
+const { execSync } = require('child_process');
 
 // FourCC constants from Processing.NDI.structs.h (little-endian 32-bit integers)
 // NDI_LIB_FOURCC('B', 'G', 'R', 'A') = 0x41524742
@@ -37,6 +40,46 @@ const NDI_SEND_TIMECODE_SYNTHESIZE = BigInt('9223372036854775807'); // INT64_MAX
 
 const NDI_RUNTIME_DOWNLOAD_URL = 'http://ndi.link/NDIRedistV6';
 const NDI_TOOLS_DOWNLOAD_URL = 'https://ndi.video/tools/';
+
+let cachedRegistryDirs = null;
+
+function getWindowsRegistryNdiDirs() {
+  if (process.platform !== 'win32') return [];
+  if (cachedRegistryDirs !== null) return cachedRegistryDirs;
+  cachedRegistryDirs = [];
+
+  const envVars = [
+    'NDI_RUNTIME_DIR_V6',
+    'NDI_RUNTIME_DIR_V5',
+    'NDI_RUNTIME_DIR_V4',
+    'NDI_RUNTIME_DIR_V3',
+  ];
+  const regKeys = [
+    'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment',
+    'HKCU\\Environment',
+  ];
+
+  for (const key of regKeys) {
+    for (const vName of envVars) {
+      try {
+        const out = execSync(`reg query "${key}" /v "${vName}"`, {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+          timeout: 1200,
+          windowsHide: true,
+        });
+        const match = out.match(/REG_(?:EXPAND_)?SZ\s+(.+)/i);
+        if (match && match[1]) {
+          const dir = match[1].trim();
+          if (dir) cachedRegistryDirs.push(dir);
+        }
+      } catch {
+        // Key not present
+      }
+    }
+  }
+  return cachedRegistryDirs;
+}
 
 function getCandidateDllPaths() {
   const candidates = [];
@@ -62,7 +105,12 @@ function getCandidateDllPaths() {
       }
     }
 
-    // 2. Local bundled `ndi/` directory next to executable or project root
+    // 2. Windows Registry environment variables (works even if Windows wasn't rebooted after installing NDI)
+    for (const regDir of getWindowsRegistryNdiDirs()) {
+      candidates.push(path.join(regDir, dllName));
+    }
+
+    // 3. Local bundled `ndi/` directory next to executable or project root
     const appDirs = [
       process.cwd(),
       path.resolve(__dirname, '..'),
@@ -75,7 +123,7 @@ function getCandidateDllPaths() {
       candidates.push(path.join(base, dllName));
     }
 
-    // 3. Standard Windows Program Files installation paths for NDI 6, NDI 5, and NDI 4
+    // 4. Standard Windows Program Files installation paths for NDI 6, NDI 5, NDI 4, OBS-NDI, and vMix
     const progFiles = [
       process.env['ProgramFiles'] || 'C:\\Program Files',
       process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)',
@@ -83,15 +131,21 @@ function getCandidateDllPaths() {
     for (const pf of progFiles) {
       candidates.push(
         path.join(pf, 'NDI', 'NDI 6 Runtime', 'v6', dllName),
+        path.join(pf, 'NDI', 'NDI 6 Runtime', dllName),
         path.join(pf, 'NDI', 'NDI 6 Tools', 'Runtime', dllName),
         path.join(pf, 'NDI', 'NDI 6 Tools', 'Studio Monitor', dllName),
         path.join(pf, 'NDI', 'NDI 6 Tools', 'Screen Capture', dllName),
+        path.join(pf, 'NDI', 'NDI 6 Tools', 'Router', dllName),
         path.join(pf, 'NDI', 'NDI 5 Runtime', 'v5', dllName),
+        path.join(pf, 'NDI', 'NDI 5 Runtime', dllName),
         path.join(pf, 'NDI', 'NDI 5 Tools', 'Runtime', dllName),
         path.join(pf, 'NDI', 'NDI 5 Tools', 'Studio Monitor', dllName),
         path.join(pf, 'NewTek', 'NDI 5 Runtime', 'v5', dllName),
         path.join(pf, 'NewTek', 'NDI 4 Runtime', 'v4', dllName),
-        path.join(pf, 'NewTek', 'NDI 4 Tools', 'Runtime', dllName)
+        path.join(pf, 'NewTek', 'NDI 4 Tools', 'Runtime', dllName),
+        path.join(pf, 'vMix', 'ndi', 'x64', dllName),
+        path.join(pf, 'vMix', dllName),
+        path.join(pf, 'obs-studio', 'obs-plugins', '64bit', dllName)
       );
     }
   } else if (platform === 'linux') {
@@ -147,9 +201,11 @@ function convertFrameRateToRational(fps) {
 }
 
 /**
- * Lightweight mDNS Responder for `_ndi._tcp.local` on 224.0.0.251:5353.
- * Disables multicast loopback and ignores DNS response packets (QR=1) so it
- * can never trigger a self-amplifying UDP broadcast storm.
+ * Fallback mDNS Responder for `_ndi._tcp.local` on 224.0.0.251:5353.
+ * IMPORTANT: Only used when the native NDI Runtime DLL is NOT installed.
+ * When `Processing.NDI.Lib.x64.dll` IS loaded, the official NDI DLL runs its own
+ * mDNS advertiser and TCP server on dynamic ports; running a fake mDNS advertiser
+ * at the same time would overwrite the DLL's real TCP ports and prevent OBS/vMix from connecting!
  */
 class NdiMdnsAdvertiser {
   constructor() {
@@ -181,46 +237,42 @@ class NdiMdnsAdvertiser {
     const serviceType = '_ndi._tcp.local';
     const targetHost = `${hostLabel}.local`;
 
-    // DNS Header: Flags=0x8400 (Standard query response, Authoritative), ANCOUNT=3
     const header = Buffer.alloc(12);
-    header.writeUInt16BE(0x0000, 0); // ID
-    header.writeUInt16BE(0x8400, 2); // Flags: QR=1 (Response) + Authoritative
-    header.writeUInt16BE(0, 4); // QDCOUNT
-    header.writeUInt16BE(3, 6); // ANCOUNT
-    header.writeUInt16BE(0, 8); // NSCOUNT
-    header.writeUInt16BE(0, 10); // ARCOUNT
+    header.writeUInt16BE(0x0000, 0);
+    header.writeUInt16BE(0x8400, 2); // QR=1 (Response) + Authoritative
+    header.writeUInt16BE(0, 4);
+    header.writeUInt16BE(3, 6);
+    header.writeUInt16BE(0, 8);
+    header.writeUInt16BE(0, 10);
 
-    // 1. PTR Record: _ndi._tcp.local -> <Host> (<Source>)._ndi._tcp.local
     const ptrName = this.encodeDnsName(serviceType);
     const ptrData = this.encodeDnsName(fullInstanceName);
     const ptrMeta = Buffer.alloc(10);
-    ptrMeta.writeUInt16BE(12, 0); // TYPE PTR
-    ptrMeta.writeUInt16BE(0x0001, 2); // CLASS IN
-    ptrMeta.writeUInt32BE(120, 4); // TTL 120s
+    ptrMeta.writeUInt16BE(12, 0);
+    ptrMeta.writeUInt16BE(0x0001, 2);
+    ptrMeta.writeUInt32BE(120, 4);
     ptrMeta.writeUInt16BE(ptrData.length, 8);
 
-    // 2. SRV Record: <Host> (<Source>)._ndi._tcp.local -> port, targetHost
     const srvName = this.encodeDnsName(fullInstanceName);
     const targetHostEncoded = this.encodeDnsName(targetHost);
     const srvData = Buffer.alloc(6 + targetHostEncoded.length);
-    srvData.writeUInt16BE(0, 0); // Priority
-    srvData.writeUInt16BE(0, 2); // Weight
-    srvData.writeUInt16BE(port || 5961, 4); // Port
+    srvData.writeUInt16BE(0, 0);
+    srvData.writeUInt16BE(0, 2);
+    srvData.writeUInt16BE(port || 5961, 4);
     targetHostEncoded.copy(srvData, 6);
     const srvMeta = Buffer.alloc(10);
-    srvMeta.writeUInt16BE(33, 0); // TYPE SRV
-    srvMeta.writeUInt16BE(0x8001, 2); // CLASS IN + Cache Flush
-    srvMeta.writeUInt32BE(120, 4); // TTL 120s
+    srvMeta.writeUInt16BE(33, 0);
+    srvMeta.writeUInt16BE(0x8001, 2);
+    srvMeta.writeUInt32BE(120, 4);
     srvMeta.writeUInt16BE(srvData.length, 8);
 
-    // 3. A Record: targetHost -> IPv4
     const aName = this.encodeDnsName(targetHost);
     const ipParts = (ipAddress || '127.0.0.1').split('.').map((n) => parseInt(n, 10) || 0);
     const aData = Buffer.from([ipParts[0], ipParts[1], ipParts[2], ipParts[3]]);
     const aMeta = Buffer.alloc(10);
-    aMeta.writeUInt16BE(1, 0); // TYPE A
-    aMeta.writeUInt16BE(0x8001, 2); // CLASS IN + Cache Flush
-    aMeta.writeUInt32BE(120, 4); // TTL 120s
+    aMeta.writeUInt16BE(1, 0);
+    aMeta.writeUInt16BE(0x8001, 2);
+    aMeta.writeUInt32BE(120, 4);
     aMeta.writeUInt16BE(4, 8);
 
     return Buffer.concat([
@@ -274,7 +326,6 @@ class NdiMdnsAdvertiser {
       Array.isArray(ipAddresses) && ipAddresses.length > 0 ? ipAddresses : ['127.0.0.1'];
     const nextSig = `${nextSourceNames.join('|')}@${nextIps.join(',')}#${port}`;
 
-    // Update live fields without recreating socket if already running
     this.sourceName = cleanPrimary;
     this.sourceNames = nextSourceNames;
     this.ipAddresses = nextIps;
@@ -297,15 +348,12 @@ class NdiMdnsAdvertiser {
       const sock = dgram.createSocket({ type: 'udp4', reuseAddr: true });
       this.socket = sock;
 
-      sock.on('error', () => {
-        // Ignore if UDP 5353 is restricted
-      });
+      sock.on('error', () => {});
 
       sock.bind(5353, '0.0.0.0', () => {
         try {
           sock.setBroadcast(true);
           sock.setMulticastTTL(255);
-          // CRITICAL: Disable multicast loopback so our own announcement packets never trigger sock.on('message')!
           sock.setMulticastLoopback(false);
           sock.addMembership('224.0.0.251');
         } catch {
@@ -317,17 +365,13 @@ class NdiMdnsAdvertiser {
       sock.on('message', (msg) => {
         try {
           if (!msg || msg.length < 12) return;
-          // CRITICAL: Check DNS QR bit (bit 15 of flags at byte offset 2).
-          // QR = 0 is a Query; QR = 1 (0x8000) is a Response.
-          // NEVER reply to DNS Response packets to prevent infinite multicast loops!
           const flags = msg.readUInt16BE(2);
           if ((flags & 0x8000) !== 0) return;
-
           if (msg.includes(Buffer.from('_ndi', 'utf8'))) {
             this.broadcastNow();
           }
         } catch {
-          // Ignore malformed packet
+          // Ignore
         }
       });
 
@@ -374,23 +418,21 @@ class NdiNativeBridge {
     this.fnSendVideoV2 = null;
     this.fnGetConnections = null;
 
-    // Active sender state (supports both primary sender and concurrent per-list senders)
-    this.senderInstance = null;
-    this.extraSenders = new Map(); // sourceName -> { instance, groups, lastBuffer }
-    this.inFlightInstances = new Set(); // instances currently executing async fnSendVideoV2
-    this.inFlightBuffers = new Map(); // instance -> Buffer (kept alive for GC safety during async FFI)
+    // Unified map of ALL active NDI senders keyed by exact sourceName
+    // e.g. 'ProTimer (List 1)' -> { instance, groups, lastBuffer, width, height, fourCC }
+    this.sendersByName = new Map();
+    this.inFlightInstances = new Set();
+    this.inFlightBuffers = new Map();
     this.pendingDestroyInstances = new Set();
 
     this.activeSourceName = null;
     this.activeSourceNames = [];
     this.activeGroups = null;
-    this.lastRawBuffer = null;
     this.lastWidth = 1280;
     this.lastHeight = 720;
-    this.lastFourCC = FOURCC_RGBA;
+    this.lastFourCC = FOURCC_BGRA;
     this.lastFps = 30;
     this.lastAlpha = false;
-    this.lastFrameSentAt = 0;
     this.cachedConnectedReceivers = 0;
     this.isPollingConnections = false;
     this.keepAliveTimer = null;
@@ -434,7 +476,6 @@ class NdiNativeBridge {
     }
 
     try {
-      // Add the DLL directory to PATH on Windows so any dependent DLLs load cleanly
       if (process.platform === 'win32') {
         const dllDir = path.dirname(foundPath);
         if (process.env.PATH && !process.env.PATH.includes(dllDir)) {
@@ -508,21 +549,22 @@ class NdiNativeBridge {
       this.tryLoadLibrary();
     }
     const hostname = os.hostname() || 'PC';
-    const sourceName = this.activeSourceName || 'ProTimer (List 1)';
+    const sourceName =
+      this.activeSourceName || this.activeSourceNames[0] || 'ProTimer (List 1)';
     return {
       nativeNdiAvailable: Boolean(this.ndiLib),
-      nativeNdiSending: Boolean(this.senderInstance || this.extraSenders.size > 0),
+      nativeNdiSending: this.sendersByName.size > 0,
       dllPath: this.dllPath,
       ndiVersion: this.ndiVersion,
       networkSourceFullName: `${hostname} (${sourceName})`,
       hostname,
       connectedReceivers: this.cachedConnectedReceivers,
-      mdnsActive: Boolean(this.mdns && this.mdns.active),
-      activeSources: this.activeSourceNames,
+      mdnsActive: Boolean(this.ndiLib ? this.sendersByName.size > 0 : this.mdns && this.mdns.active),
+      activeSources: Array.from(this.sendersByName.keys()),
       error: this.loadError,
       downloadUrl: NDI_RUNTIME_DOWNLOAD_URL,
       toolsUrl: NDI_TOOLS_DOWNLOAD_URL,
-      searchedPaths: getCandidateDllPaths().slice(0, 8),
+      searchedPaths: getCandidateDllPaths().slice(0, 10),
     };
   }
 
@@ -533,8 +575,7 @@ class NdiNativeBridge {
   pollConnectionsAsync() {
     if (!this.fnGetConnections || this.isPollingConnections) return;
     const instances = [];
-    if (this.senderInstance) instances.push(this.senderInstance);
-    for (const entry of this.extraSenders.values()) {
+    for (const entry of this.sendersByName.values()) {
       if (entry && entry.instance) instances.push(entry.instance);
     }
     if (instances.length === 0) {
@@ -583,7 +624,7 @@ class NdiNativeBridge {
 
     const attemptDestroy = () => {
       if (this.inFlightInstances.has(instance)) {
-        setTimeout(attemptDestroy, 30);
+        setTimeout(attemptDestroy, 25);
         return;
       }
       this.pendingDestroyInstances.delete(instance);
@@ -600,6 +641,54 @@ class NdiNativeBridge {
     };
 
     attemptDestroy();
+  }
+
+  ensureNamedSender(sourceName, cleanGroups) {
+    if (!this.ndiLib || !this.fnSendCreate || !sourceName) return null;
+    const clean = String(sourceName).trim();
+    if (!clean) return null;
+
+    const existing = this.sendersByName.get(clean);
+    if (existing && existing.instance) {
+      if (existing.groups === cleanGroups) {
+        return existing;
+      }
+      // Groups changed -> destroy old and recreate
+      this.safeDestroyInstance(existing.instance);
+      this.sendersByName.delete(clean);
+    }
+
+    try {
+      const inst = this.fnSendCreate({
+        p_ndi_name: clean,
+        p_groups: cleanGroups,
+        clock_video: false,
+        clock_audio: false,
+      });
+      if (inst) {
+        const initW = this.lastWidth || 1280;
+        const initH = this.lastHeight || 720;
+        const initBuf = Buffer.alloc(initW * initH * 4, 0);
+        const entry = {
+          sourceName: clean,
+          instance: inst,
+          groups: cleanGroups,
+          lastBuffer: initBuf,
+          width: initW,
+          height: initH,
+          fourCC: this.lastAlpha ? FOURCC_BGRA : FOURCC_BGRX,
+        };
+        this.sendersByName.set(clean, entry);
+        // Immediately push an initial video frame so NDI SDK announces this source via mDNS right away!
+        this.pushBufferToSenderEntry(entry);
+        return entry;
+      }
+    } catch (err) {
+      this.loadError = `NDIlib_send_create(${clean}) failed: ${
+        err && err.message ? err.message : String(err)
+      }`;
+    }
+    return null;
   }
 
   startSender({
@@ -625,13 +714,18 @@ class NdiNativeBridge {
           .filter(Boolean)
       )
     );
-    const primaryName = allNames[0] || cleanName;
+    if (!allNames.includes(cleanName) && cleanName) {
+      allNames.unshift(cleanName);
+    }
+
+    this.activeSourceName = cleanName;
     this.activeSourceNames = allNames;
 
     const cleanGroups =
       useCustomGroups && groups && String(groups).trim() && String(groups).trim().toLowerCase() !== 'public'
         ? String(groups).trim()
         : null;
+    this.activeGroups = cleanGroups;
 
     this.lastWidth = Math.min(1920, Math.max(320, Number(width) || 1280));
     this.lastHeight = Math.min(1080, Math.max(240, Number(height) || 720));
@@ -643,122 +737,61 @@ class NdiNativeBridge {
       this.tryLoadLibrary();
     }
 
-    // Start mDNS _ndi._tcp.local discovery responder
-    this.mdns.start(primaryName, ips, port || 5961, allNames);
-
     if (this.ndiLib && this.fnSendCreate) {
-      // Recreate primary sender ONLY if sourceName or groups actually changed
-      if (
-        this.senderInstance &&
-        (this.activeSourceName !== primaryName || this.activeGroups !== cleanGroups)
-      ) {
-        this.destroyPrimarySenderOnly();
-      }
+      // CRITICAL: Stop our custom fallback mDNS when the real NDI DLL is active!
+      // The official NDI Runtime DLL binds its own dynamic TCP ports and broadcasts
+      // its own mDNS records. Our custom mDNS would advertise port 5961 with no NDI server listening!
+      this.mdns.stop();
 
-      if (!this.senderInstance) {
-        try {
-          this.senderInstance = this.fnSendCreate({
-            p_ndi_name: primaryName,
-            p_groups: cleanGroups,
-            clock_video: false,
-            clock_audio: false,
-          });
-          this.activeSourceName = primaryName;
-          this.activeGroups = cleanGroups;
-
-          if (!this.lastRawBuffer || this.lastRawBuffer.length !== this.lastWidth * this.lastHeight * 4) {
-            this.lastRawBuffer = Buffer.alloc(this.lastWidth * this.lastHeight * 4, 0);
-            this.lastFourCC = this.lastAlpha ? FOURCC_RGBA : FOURCC_RGBX;
-          }
-          this.pushCurrentBufferToNdi();
-        } catch (err) {
-          this.loadError = `NDIlib_send_create failed: ${err && err.message ? err.message : String(err)}`;
-        }
-      }
-
-      // Sync extra senders for any additional active list tabs / NDI Multi sources
-      const extraDesired = new Set(allNames.filter((n) => n !== primaryName));
-      for (const [existingName, entry] of this.extraSenders.entries()) {
-        if (!extraDesired.has(existingName) || entry.groups !== cleanGroups) {
-          if (entry.instance) {
+      // Destroy any senders that are no longer in activeSourceNames
+      const desiredSet = new Set(allNames);
+      for (const [existingName, entry] of this.sendersByName.entries()) {
+        if (!desiredSet.has(existingName) || entry.groups !== cleanGroups) {
+          if (entry && entry.instance) {
             this.safeDestroyInstance(entry.instance);
           }
-          this.extraSenders.delete(existingName);
+          this.sendersByName.delete(existingName);
         }
       }
 
-      for (const extraName of extraDesired) {
-        if (!this.extraSenders.has(extraName)) {
-          try {
-            const inst = this.fnSendCreate({
-              p_ndi_name: extraName,
-              p_groups: cleanGroups,
-              clock_video: false,
-              clock_audio: false,
-            });
-            if (inst) {
-              const initBuf = Buffer.alloc(this.lastWidth * this.lastHeight * 4, 0);
-              this.extraSenders.set(extraName, {
-                instance: inst,
-                groups: cleanGroups,
-                lastBuffer: initBuf,
-                width: this.lastWidth,
-                height: this.lastHeight,
-              });
-              this.pushBufferToSenderInstance(inst, initBuf, this.lastWidth, this.lastHeight);
-            }
-          } catch {
-            // Ignore extra sender error
-          }
-        }
+      // Create / verify every active NDI sender (e.g. ProTimer (List 1), ProTimer (List 2), ProTimer (Multi Output))
+      for (const name of allNames) {
+        this.ensureNamedSender(name, cleanGroups);
       }
+    } else {
+      // Fallback mDNS only when native NDI DLL is not installed
+      this.mdns.start(cleanName, ips, port || 5961, allNames);
     }
 
-    // Start a gentle keepalive loop (every 1000ms) that ONLY fires when idle (> 900ms since last live frame)
+    // Continuous 15 FPS (66ms) non-blocking worker-thread heartbeat across ALL active senders.
+    // OBS Studio, vMix, and NDI Studio Monitor require a steady stream of video frames from
+    // each NDI sender to keep the source visible in their NDI discovery list and render video smoothly.
     if (!this.keepAliveTimer) {
       this.keepAliveTimer = setInterval(() => {
-        if (Date.now() - this.lastFrameSentAt < 900) return;
-        if (this.senderInstance && this.lastRawBuffer) {
-          this.pushCurrentBufferToNdi();
-        }
-        for (const entry of this.extraSenders.values()) {
+        for (const entry of this.sendersByName.values()) {
           if (entry && entry.instance && entry.lastBuffer) {
-            this.pushBufferToSenderInstance(
-              entry.instance,
-              entry.lastBuffer,
-              entry.width || this.lastWidth,
-              entry.height || this.lastHeight
-            );
+            this.pushBufferToSenderEntry(entry);
           }
         }
-      }, 1000);
+      }, 66);
     }
 
     if (!this.connectionsPollTimer) {
       this.connectionsPollTimer = setInterval(() => {
         this.pollConnectionsAsync();
-      }, 3000);
+      }, 2500);
     }
 
     return this.getRuntimeDiagnostics();
   }
 
-  destroyPrimarySenderOnly() {
-    if (this.senderInstance) {
-      const old = this.senderInstance;
-      this.senderInstance = null;
-      this.safeDestroyInstance(old);
-    }
-  }
-
   destroyAllSenders() {
-    this.destroyPrimarySenderOnly();
-    for (const entry of this.extraSenders.values()) {
+    for (const entry of this.sendersByName.values()) {
       if (entry && entry.instance) {
         this.safeDestroyInstance(entry.instance);
       }
     }
-    this.extraSenders.clear();
+    this.sendersByName.clear();
   }
 
   stopSender() {
@@ -773,20 +806,19 @@ class NdiNativeBridge {
     this.mdns.stop();
     this.destroyAllSenders();
     this.activeSourceNames = [];
-    this.lastRawBuffer = null;
     this.cachedConnectedReceivers = 0;
     return this.getRuntimeDiagnostics();
   }
 
   /**
-   * Send raw RGBA or BGRA pixel buffer to the active NDI® sender (or a specific named sender).
-   * Executes asynchronously on a worker thread so the main process never freezes.
+   * Send raw RGBA or BGRA pixel buffer to a specific named NDI® sender (or the primary sender).
+   * Automatically creates the named sender if it was not yet registered.
    */
   sendRawFrame(
     rawBuffer,
     width,
     height,
-    pixelFormat = 'RGBA',
+    pixelFormat = 'BGRA',
     frameRate = 30,
     alphaChannel = true,
     targetSourceName = null
@@ -794,6 +826,11 @@ class NdiNativeBridge {
     if (!rawBuffer || !width || !height) return false;
     const expectedLen = width * height * 4;
     if (rawBuffer.byteLength < expectedLen) return false;
+
+    if (!this.ndiLib) {
+      this.tryLoadLibrary();
+    }
+    if (!this.ndiLib) return false;
 
     const buf = Buffer.isBuffer(rawBuffer)
       ? rawBuffer
@@ -803,41 +840,49 @@ class NdiNativeBridge {
     this.lastHeight = height;
     this.lastFps = frameRate || this.lastFps || 30;
     this.lastAlpha = Boolean(alphaChannel);
-    this.lastFrameSentAt = Date.now();
 
-    if (pixelFormat === 'BGRA') {
-      this.lastFourCC = this.lastAlpha ? FOURCC_BGRA : FOURCC_BGRX;
-    } else {
-      this.lastFourCC = this.lastAlpha ? FOURCC_RGBA : FOURCC_RGBX;
-    }
+    const fourCC =
+      pixelFormat === 'BGRA'
+        ? this.lastAlpha
+          ? FOURCC_BGRA
+          : FOURCC_BGRX
+        : this.lastAlpha
+        ? FOURCC_RGBA
+        : FOURCC_RGBX;
+    this.lastFourCC = fourCC;
 
-    if (targetSourceName && this.extraSenders.has(targetSourceName)) {
-      const entry = this.extraSenders.get(targetSourceName);
-      if (entry && entry.instance) {
-        entry.lastBuffer = buf;
-        entry.width = width;
-        entry.height = height;
-        return this.pushBufferToSenderInstance(entry.instance, buf, width, height);
-      }
-    }
+    const resolvedName =
+      (targetSourceName && String(targetSourceName).trim()) ||
+      this.activeSourceName ||
+      this.activeSourceNames[0] ||
+      'ProTimer (List 1)';
 
-    this.lastRawBuffer = buf;
-    return this.pushCurrentBufferToNdi();
+    const entry = this.ensureNamedSender(resolvedName, this.activeGroups);
+    if (!entry) return false;
+
+    entry.lastBuffer = buf;
+    entry.width = width;
+    entry.height = height;
+    entry.fourCC = fourCC;
+
+    return this.pushBufferToSenderEntry(entry);
   }
 
-  pushBufferToSenderInstance(instance, buffer, width, height) {
+  pushBufferToSenderEntry(entry) {
+    if (!entry || !entry.instance || !entry.lastBuffer || !this.fnSendVideoV2) {
+      return false;
+    }
+    const instance = entry.instance;
+    const buffer = entry.lastBuffer;
     if (
-      !instance ||
-      !this.fnSendVideoV2 ||
-      !buffer ||
       this.pendingDestroyInstances.has(instance) ||
       this.inFlightInstances.has(instance)
     ) {
       return false;
     }
 
-    const w = Number(width) || this.lastWidth;
-    const h = Number(height) || this.lastHeight;
+    const w = Number(entry.width) || this.lastWidth || 1280;
+    const h = Number(entry.height) || this.lastHeight || 720;
     if (buffer.byteLength < w * h * 4) {
       return false;
     }
@@ -847,7 +892,7 @@ class NdiNativeBridge {
       const frameStruct = {
         xres: w,
         yres: h,
-        FourCC: this.lastFourCC,
+        FourCC: entry.fourCC || this.lastFourCC || FOURCC_BGRA,
         frame_rate_N: N,
         frame_rate_D: D,
         picture_aspect_ratio: w / Math.max(1, h),
@@ -859,8 +904,6 @@ class NdiNativeBridge {
         timestamp: 0n,
       };
 
-      // Execute NDIlib_send_send_video_v2 on a worker thread via koffi .async()
-      // so the Electron Main Process UI thread never blocks!
       if (typeof this.fnSendVideoV2.async === 'function') {
         this.inFlightInstances.add(instance);
         this.inFlightBuffers.set(instance, buffer);
@@ -881,15 +924,6 @@ class NdiNativeBridge {
       this.loadError = `NDI frame send error: ${err && err.message ? err.message : String(err)}`;
       return false;
     }
-  }
-
-  pushCurrentBufferToNdi() {
-    return this.pushBufferToSenderInstance(
-      this.senderInstance,
-      this.lastRawBuffer,
-      this.lastWidth,
-      this.lastHeight
-    );
   }
 }
 

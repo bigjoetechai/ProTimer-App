@@ -238,20 +238,24 @@ class NdiStreamService {
     const currentListSourceName = sourceNamesByList[activeListId];
 
     const activeSourceNames: string[] = [];
+    // 1. Add every individually activated list tab's NDI source name
+    for (const l of lists) {
+      if (this.activeByList[l.id] && sourceNamesByList[l.id]) {
+        const sName = sourceNamesByList[l.id];
+        if (!activeSourceNames.includes(sName)) {
+          activeSourceNames.push(sName);
+        }
+      }
+    }
+    // 2. If NDI Multi is active, ensure every list tab's NDI source AND ProTimer (Multi Output) are included
     if (this.multiActive) {
+      if (!activeSourceNames.includes(multiSourceName)) {
+        activeSourceNames.unshift(multiSourceName);
+      }
       for (const l of lists) {
         const sName = sourceNamesByList[l.id];
         if (sName && !activeSourceNames.includes(sName)) {
           activeSourceNames.push(sName);
-        }
-      }
-      if (!activeSourceNames.includes(multiSourceName)) {
-        activeSourceNames.push(multiSourceName);
-      }
-    } else {
-      for (const l of lists) {
-        if (this.activeByList[l.id] && sourceNamesByList[l.id]) {
-          activeSourceNames.push(sourceNamesByList[l.id]);
         }
       }
     }
@@ -260,6 +264,13 @@ class NdiStreamService {
     const overallActive = anySingleActive || this.multiActive;
     const mode: 'single' | 'multi' = this.multiActive ? 'multi' : 'single';
 
+    // Ensure primary sourceName is always the active tab's source (if active), or Multi Output (if multiActive), or the first active list source
+    const effectivePrimarySourceName = this.activeByList[activeListId]
+      ? currentListSourceName
+      : this.multiActive
+      ? multiSourceName
+      : activeSourceNames[0] || currentListSourceName;
+
     return {
       active: overallActive,
       mode,
@@ -267,7 +278,7 @@ class NdiStreamService {
       activeByList: { ...this.activeByList },
       sourceNamesByList,
       activeSourceNames,
-      sourceName: currentListSourceName,
+      sourceName: effectivePrimarySourceName,
       multiSourceName,
       resolution,
       width,

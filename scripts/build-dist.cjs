@@ -17,14 +17,110 @@
 const { execSync, spawnSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const https = require('https');
+const zlib = require('zlib');
 
 const rootDir = path.resolve(__dirname, '..');
+const ndiDir = path.join(rootDir, 'ndi');
 const rawTarget = (process.argv[2] || 'win').toLowerCase();
 
 function logStep(msg) {
   console.log(`\n==================================================================`);
   console.log(`  [ProTimer v2.0.0 Builder] ${msg}`);
   console.log(`==================================================================\n`);
+}
+
+function downloadBuffer(url) {
+  return new Promise((resolve, reject) => {
+    https
+      .get(url, (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          return resolve(downloadBuffer(res.headers.location));
+        }
+        if (res.statusCode !== 200) {
+          return reject(new Error(`HTTP ${res.statusCode} fetching ${url}`));
+        }
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => resolve(Buffer.concat(chunks)));
+        res.on('error', reject);
+      })
+      .on('error', reject);
+  });
+}
+
+/**
+ * Extracts specific files from a .tgz buffer into `ndiDir` using pure Node.js (zero external dependencies).
+ */
+function extractFromTgzBuffer(tgzBuf, fileMap) {
+  const tarBuf = zlib.gunzipSync(tgzBuf);
+  let offset = 0;
+  while (offset + 512 <= tarBuf.length) {
+    const header = tarBuf.subarray(offset, offset + 512);
+    if (header[0] === 0) break;
+    const nameRaw = header.subarray(0, 100).toString('utf8').replace(/\0.*$/, '');
+    const sizeOctal = header.subarray(124, 136).toString('utf8').replace(/\0.*$/, '').trim();
+    const size = parseInt(sizeOctal || '0', 8) || 0;
+    const dataStart = offset + 512;
+    const dataEnd = dataStart + size;
+
+    if (fileMap[nameRaw] && size > 0 && dataEnd <= tarBuf.length) {
+      const destPath = fileMap[nameRaw];
+      fs.mkdirSync(path.dirname(destPath), { recursive: true });
+      fs.writeFileSync(destPath, tarBuf.subarray(dataStart, dataEnd));
+      console.log(`  -> Bundled ${path.basename(destPath)} (${(size / (1024 * 1024)).toFixed(1)} MB) into ndi/`);
+    }
+
+    const blocks = Math.ceil(size / 512);
+    offset = dataStart + blocks * 512;
+  }
+}
+
+async function ensureNdiRuntimeDlls() {
+  fs.mkdirSync(ndiDir, { recursive: true });
+  const winDllPath = path.join(ndiDir, 'Processing.NDI.Lib.x64.dll');
+  const licensePath = path.join(ndiDir, 'libndi_licenses.txt');
+
+  const hasWinDll = fs.existsSync(winDllPath) && fs.statSync(winDllPath).size > 1024 * 1024;
+  if (hasWinDll) {
+    console.log(
+      `Verified ndi/Processing.NDI.Lib.x64.dll (${(fs.statSync(winDllPath).size / (1024 * 1024)).toFixed(1)} MB) ready for bundling.`
+    );
+    return;
+  }
+
+  // First check if Processing.NDI.Lib.x64.dll is installed locally on Windows
+  if (process.platform === 'win32') {
+    const localCandidates = [
+      process.env.NDI_RUNTIME_DIR_V6 && path.join(process.env.NDI_RUNTIME_DIR_V6, 'Processing.NDI.Lib.x64.dll'),
+      process.env.NDI_RUNTIME_DIR_V5 && path.join(process.env.NDI_RUNTIME_DIR_V5, 'Processing.NDI.Lib.x64.dll'),
+      'C:\\Program Files\\NDI\\NDI 6 Runtime\\v6\\Processing.NDI.Lib.x64.dll',
+      'C:\\Program Files\\NDI\\NDI 6 Tools\\Runtime\\Processing.NDI.Lib.x64.dll',
+      'C:\\Program Files\\NDI\\NDI 5 Runtime\\v5\\Processing.NDI.Lib.x64.dll',
+      'C:\\Program Files\\vMix\\ndi\\x64\\Processing.NDI.Lib.x64.dll',
+    ].filter(Boolean);
+
+    for (const candidate of localCandidates) {
+      if (fs.existsSync(candidate)) {
+        fs.copyFileSync(candidate, winDllPath);
+        console.log(`Copied local NDI Runtime DLL from ${candidate} -> ndi/Processing.NDI.Lib.x64.dll`);
+        return;
+      }
+    }
+  }
+
+  // Fallback: Fetch official redistributable Processing.NDI.Lib.x64.dll from npm package archive
+  try {
+    console.log('Fetching Processing.NDI.Lib.x64.dll into ndi/ folder...');
+    const tgzUrl = 'https://registry.npmjs.org/jp.keijiro.klak.ndi/-/jp.keijiro.klak.ndi-2.1.6.tgz';
+    const tgzBuf = await downloadBuffer(tgzUrl);
+    extractFromTgzBuffer(tgzBuf, {
+      'package/Plugin/Windows/Processing.NDI.Lib.x64.dll': winDllPath,
+      'package/libndi_licenses.txt': licensePath,
+    });
+  } catch (err) {
+    console.warn(`Warning: Could not auto-download Processing.NDI.Lib.x64.dll: ${err.message}`);
+  }
 }
 
 function stopRunningProTimerOnWindows() {
@@ -68,19 +164,23 @@ function runCommand(cmd, args, extraEnv = {}) {
   return result.status === 0;
 }
 
-function main() {
+async function main() {
   stopRunningProTimerOnWindows();
   cleanLockedUnpackedDirs();
 
+  // Step 0: Verify / Bundle Processing.NDI.Lib.x64.dll in ndi/
+  logStep('Step 1/4: Verifying Bundled NDI Runtime (ndi/Processing.NDI.Lib.x64.dll)');
+  await ensureNdiRuntimeDlls();
+
   // Step 1: Generate Icons
-  logStep('Step 1/3: Generating Windows (.ico) & macOS (.png) Icons');
+  logStep('Step 2/4: Generating Windows (.ico) & macOS (.png) Icons');
   if (!runCommand('node', ['scripts/generate-icons.cjs'])) {
     console.error('Failed to generate application icons.');
     process.exit(1);
   }
 
   // Step 2: Build Vite Frontend Bundle
-  logStep('Step 2/3: Building ProTimer v2.0.0 Frontend Bundle (vite build)');
+  logStep('Step 3/4: Building ProTimer v2.0.0 Frontend Bundle (vite build)');
   if (!runCommand('npx', ['vite', 'build'])) {
     console.error('Frontend build (vite build) failed.');
     process.exit(1);
