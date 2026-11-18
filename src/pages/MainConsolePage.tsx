@@ -177,13 +177,28 @@ export const MainConsolePage: React.FC = () => {
     return lists.find((l) => l.id === snapshot.activeListId) || lists[0] || { id: 'list_1', name: 'List 1', timerIds: [] };
   }, [lists, snapshot.activeListId]);
 
-  // Keep NDI source names reconciled whenever lists are added, renamed, or switched
+  const listsSignature = useMemo(
+    () => lists.map((l) => `${l.id}:${l.name}`).join('|'),
+    [lists]
+  );
+
+  const activeByListSignature = useMemo(
+    () =>
+      Object.entries(ndiStreamStatus.activeByList || {})
+        .filter(([, v]) => Boolean(v))
+        .map(([k]) => k)
+        .sort()
+        .join(','),
+    [ndiStreamStatus.activeByList]
+  );
+
+  // Keep NDI source names reconciled ONLY when lists are added, deleted, renamed, or switched
   useEffect(() => {
     ndiStreamService.notifySubscribers();
-    if (ndiStreamStatus.active) {
+    if (ndiStreamService.getStatus().active) {
       ndiStreamService.syncConfigToServer();
     }
-  }, [lists, snapshot.activeListId, currentList.name]);
+  }, [listsSignature, snapshot.activeListId]);
 
   // Sync live Fullscreen, Multi Fullscreen, and per-list NDI states to LAN / Remote controllers
   useEffect(() => {
@@ -204,7 +219,10 @@ export const MainConsolePage: React.FC = () => {
   }, [
     isFullscreenActive,
     isMultiFullscreenActive,
-    ndiStreamStatus,
+    ndiStreamStatus.active,
+    ndiStreamStatus.multiActive,
+    activeByListSignature,
+    listsSignature,
     snapshot.activeListId,
     currentList.name,
     preferences.ndiSourceName,

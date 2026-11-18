@@ -1,87 +1,56 @@
-# ProTimer — Windows Desktop Build & Packaging Instructions
+# ProTimer v2.0.0 — Windows 11 & macOS Build & Packaging Guide
 
 ## 1. Application Overview
 
 | Property | Value |
 | :--- | :--- |
 | **Application Name** | ProTimer |
-| **Product Name** | ProTimer |
+| **Owner / Company** | Bigjoe Technology |
 | **Application ID** | `com.protimer.desktop` |
-| **Version** | `1.0.0` |
-| **Target OS** | Windows 10 (64-bit) & Windows 11 (64-bit) |
-| **Architecture** | `x64` |
-| **Executable Name** | `ProTimer.exe` |
-| **Installer Output** | `release/ProTimer-Setup.exe` |
-| **Portable Output** | `release/ProTimer-Portable.exe` |
+| **Version** | `2.0.0` |
+| **Windows Deliverables** | `release/ProTimer-Setup.exe` & `release/ProTimer-Portable.exe` |
+| **macOS Deliverables** | `release/ProTimer-Mac-x64.zip` & `release/ProTimer-Mac-arm64.zip` (`ProTimer.app`) |
 | **User Data Location** | `%APPDATA%\ProTimer` (`C:\Users\<Username>\AppData\Roaming\ProTimer`) |
 
 ---
 
-## 2. Prerequisites for Building from Source
-
-To compile and package ProTimer from source on a development workstation:
-
-- **Operating System**: Windows 10/11 (64-bit) recommended for native NSIS packaging (or Linux/macOS with Wine 64-bit if cross-compiling).
-- **Node.js**: v18.18+ or v20 LTS / v22 LTS.
-- **npm**: v9+ (included with Node.js).
-
-> **Note for End Users**: End users running `ProTimer-Setup.exe` or `ProTimer-Portable.exe` on Windows 10 or Windows 11 do **not** need Node.js, npm, React, TypeScript, or Python installed. All runtime dependencies are bundled inside the packaged application.
-
----
-
-## 3. Step-by-Step Build Commands
+## 2. Step-by-Step Build Commands on Windows 10 / 11
 
 ### Step 1: Install Dependencies
 ```bash
 npm install
 ```
+> If upgrading from an older folder with a stale `package-lock.json`, delete `package-lock.json` first and then run `npm install`.
 
-### Step 2: Generate Application Icons (if updating branding)
-```bash
-node scripts/generate-icons.cjs
-```
-This generates 256×256 `build/icon.ico`, `build/icon.png`, and `public/icon.ico`. You may also replace `build/icon.ico` with any custom multi-resolution Windows `.ico` file.
-
-### Step 3: Compile Frontend Production Bundle
-```bash
-npm run build
-```
-Compiles the React + TypeScript application into `/dist` with relative asset paths (`base: './'`) for Electron desktop execution.
-
-### Step 4: Package Windows 64-bit Installer & Portable Executable
+### Step 2: Build Windows 10/11 64-bit Installer & Portable App
 ```bash
 npm run dist:win
 ```
-Or to run the default distribution pipeline:
-```bash
-npm run dist
-```
+*(Note: Write `npm run dist:win` without a space after the colon, or simply run `npm run dist`).*
+
+This automatically:
+1. Closes any running `ProTimer.exe` instance so `release/win-unpacked` is not locked.
+2. Generates Windows `.ico` and macOS `.png` icons.
+3. Compiles the production bundle (`vite build`).
+4. Packages `release/ProTimer-Setup.exe` and `release/ProTimer-Portable.exe`.
 
 ---
 
-## 4. Generated Deliverables (`/release`)
+## 3. Building for macOS from a Windows 11 Terminal (`npm run dist:mac`)
 
-After running `npm run dist:win`, Electron Builder outputs the following deliverables inside the `/release` directory:
+Why standard `electron-builder --mac` fails on Windows by default:
+1. **`.dmg` disk images** require Apple's macOS-only `hdiutil` tool, which does not exist on Windows. However, **macOS `.zip` app bundles (`ProTimer.app`) CAN be built on Windows**.
+2. macOS `.app` frameworks contain symbolic links. Windows 11 blocks creating symbolic links unless **Developer Mode** is enabled or the terminal is run as **Administrator**.
 
-1. **`release/ProTimer-Setup.exe`**
-   - Full NSIS Windows Installation Wizard (`oneClick: false`).
-   - Includes Welcome screen, End-User Licence Agreement (`build/license.txt`), custom installation directory picker, progress bar, Desktop & Start Menu shortcut creation, and "Launch ProTimer" upon completion.
-   - Supports per-user installation without requiring administrator elevation by default, or system-wide installation (`C:\Program Files\ProTimer`) when elevated.
-2. **`release/ProTimer-Portable.exe`**
-   - Standalone zero-install portable executable that runs directly on Windows 10 and Windows 11 (64-bit).
-3. **`release/win-unpacked/`**
-   - Unpacked Windows 64-bit application directory containing `ProTimer.exe` and bundled runtime binaries.
-
----
-
-## 5. Architecture & Native Windows Features
-
-- **Electron Main Process (`electron/main.cjs`)**:
-  - Enforces a single application instance via `app.requestSingleInstanceLock()`.
-  - Sets Windows Application User Model ID (`com.protimer.desktop`).
-  - Runs an embedded local HTTP + LAN synchronization server (`127.0.0.1:3000` / `0.0.0.0:3000` with automatic fallback if port 3000 is occupied) so LAN Remote Control, LAN Display, SSE live updates, and `BroadcastChannel` synchronization work natively out-of-the-box.
-  - Uses `screen.getAllDisplays()` and listens to `display-added`, `display-removed`, and `display-metrics-changed` for real-time Windows multi-monitor management.
-  - Intercepts secondary display windows (`Presenter`, `Preview`, `Stage`, `NDI`) via `setWindowOpenHandler` so they open as native Electron windows instead of external browser tabs.
-- **Data Persistence (`%APPDATA%\ProTimer`)**:
-  - User data is stored in `%APPDATA%\ProTimer\protimer-user-data.json` with automatic backup rotation (`protimer-user-data.backup.json`) and window geometry in `%APPDATA%\ProTimer\window-state.json`.
-  - Uninstalling ProTimer preserves `%APPDATA%\ProTimer` by default (`deleteAppDataOnUninstall: false`) so timer lists, cues, projects, and settings survive upgrades and reinstallations.
+### How to Package for macOS on Windows 11:
+1. **Enable Windows 11 Developer Mode** (one-time setup):
+   - Open **Windows Settings** → **System** → **For developers** → Turn ON **Developer Mode** *(or open PowerShell / CMD as **Run as Administrator**)*.
+2. Run:
+   ```bash
+   npm run dist:mac
+   ```
+3. Output files in `./release`:
+   - `release/ProTimer-Mac-x64.zip` (for Intel Macs)
+   - `release/ProTimer-Mac-arm64.zip` (for Apple Silicon M1 / M2 / M3 / M4 Macs)
+   - Mac users simply double-click the `.zip` to extract **`ProTimer.app`** and drag it to `/Applications`.
+   *(If you run `npm run dist:mac` on a Mac, you can also build `.dmg` installers natively).*

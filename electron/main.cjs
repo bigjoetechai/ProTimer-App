@@ -27,7 +27,7 @@
  *    `protimer-user-data.backup.json`) preserved across restarts, updates, and uninstalls.
  */
 
-const { app, BrowserWindow, screen, ipcMain, session } = require('electron');
+const { app, BrowserWindow, screen, ipcMain, session, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -190,64 +190,33 @@ function stopElectronNdiOffscreenCapture() {
 }
 
 function startElectronNdiOffscreenCapture() {
+  // No-op: Frames are rendered by NdiStreamService in the main console and decoded natively
+  // via Electron's C++ nativeImage.createFromDataURL().toBitmap() + async Koffi worker threads.
+  // Spawning a hidden offscreen BrowserWindow is unnecessary and caused Windows 11 GPU/UI locks.
   stopElectronNdiOffscreenCapture();
-  if (!lanState.ndiStream.active || !app.isReady()) return;
+}
 
-  const w = Math.max(320, Number(lanState.ndiStream.width) || 1920);
-  const h = Math.max(240, Number(lanState.ndiStream.height) || 1080);
-  const fps = Math.min(60, Math.max(1, Math.round(Number(lanState.ndiStream.frameRate) || 30)));
-  const isMulti = lanState.ndiStream.mode === 'multi' || lanState.ndiStream.multiMode;
-
+function decodeDataUrlAndSendToNdi(dataUrl, targetSourceName = null) {
+  if (!dataUrl || typeof dataUrl !== 'string' || !nativeImage) return;
   try {
-    const win = new BrowserWindow({
-      width: w,
-      height: h,
-      show: false,
-      frame: false,
-      transparent: true,
-      backgroundColor: '#00000000',
-      enableLargerThanScreen: true,
-      webPreferences: {
-        offscreen: true,
-        preload: path.join(__dirname, 'preload.cjs'),
-        contextIsolation: true,
-        nodeIntegration: false,
-        backgroundThrottling: false,
-      },
-    });
-
-    ndiOffscreenWindow = win;
-    win.setContentSize(w, h);
-    win.webContents.setFrameRate(fps);
-
-    win.webContents.on('paint', (_event, _dirty, image) => {
-      if (!lanState.ndiStream.active) return;
-      try {
-        const size = image.getSize();
-        const bitmap = image.getBitmap();
-        if (bitmap && bitmap.length >= size.width * size.height * 4) {
-          ndiNativeBridge.sendRawFrame(
-            bitmap,
-            size.width,
-            size.height,
-            'BGRA',
-            lanState.ndiStream.frameRate,
-            lanState.ndiStream.alphaChannel
-          );
-          lanState.ndiStream.frameCount += 1;
-          lanState.ndiStream.lastFrameAt = Date.now();
-        }
-      } catch {
-        // Ignore transient paint errors
-      }
-    });
-
-    const baseUrl = getBaseUrl();
-    const separator = baseUrl.includes('?') ? '&' : '?';
-    const targetDisplay = isMulti ? 'multi_fullscreen' : 'ndi';
-    win.loadURL(`${baseUrl}${separator}display=${targetDisplay}`);
+    const img = nativeImage.createFromDataURL(dataUrl);
+    if (!img || img.isEmpty()) return;
+    const size = img.getSize();
+    if (!size || size.width <= 0 || size.height <= 0) return;
+    const bitmap = img.toBitmap();
+    if (bitmap && bitmap.byteLength >= size.width * size.height * 4) {
+      ndiNativeBridge.sendRawFrame(
+        bitmap,
+        size.width,
+        size.height,
+        'BGRA',
+        lanState.ndiStream.frameRate,
+        lanState.ndiStream.alphaChannel,
+        targetSourceName
+      );
+    }
   } catch {
-    // Fallback to canvas frame push if offscreen window fails
+    // Ignore transient decode error
   }
 }
 
@@ -709,33 +678,34 @@ function handleEmbeddedLanApi(req, res) {
   if (pathname === '/api/lan/ndi/frame' && method === 'POST') {
     readBody().then((body) => {
       const dataUrl = body.frameDataUrl || body.frame;
+      const primarySourceName =
+        (typeof body.sourceName === 'string' && body.sourceName.trim()) ||
+        lanState.ndiStream.sourceName;
+
       if (typeof dataUrl === 'string' && dataUrl.startsWith('data:image/')) {
         lanState.ndiStream.lastFrameDataUrl = dataUrl;
         lanState.ndiStream.lastFrameTimestamp = Date.now();
         lanState.ndiStream.lastFrameAt = Date.now();
         lanState.ndiStream.frameCount += 1;
         pushFrameToEmbeddedNdiClients(dataUrl);
+        decodeDataUrlAndSendToNdi(dataUrl, primarySourceName);
       }
-      if (
-        typeof body.rawRgbaBase64 === 'string' &&
-        typeof body.width === 'number' &&
-        typeof body.height === 'number' &&
-        !ndiOffscreenWindow
-      ) {
-        try {
-          const rawBuf = Buffer.from(body.rawRgbaBase64, 'base64');
-          ndiNativeBridge.sendRawFrame(
-            rawBuf,
-            body.width,
-            body.height,
-            'RGBA',
-            lanState.ndiStream.frameRate,
-            lanState.ndiStream.alphaChannel
-          );
-        } catch {
-          // Ignore decode error
+
+      if (body.perListFrames && typeof body.perListFrames === 'object') {
+        for (const [lid, entry] of Object.entries(body.perListFrames)) {
+          if (entry && typeof entry === 'object' && typeof entry.frameDataUrl === 'string') {
+            lanState.ndiStream.framesByList[lid] = entry.frameDataUrl;
+            const listSource =
+              (typeof entry.sourceName === 'string' && entry.sourceName.trim()) ||
+              lanState.ndiStream.sourceNamesByList?.[lid] ||
+              null;
+            if (listSource && listSource !== primarySourceName) {
+              decodeDataUrlAndSendToNdi(entry.frameDataUrl, listSource);
+            }
+          }
         }
       }
+
       const nativeReceivers = ndiNativeBridge.getConnectedReceiversCount();
       sendJson(200, {
         success: true,

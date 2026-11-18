@@ -98,19 +98,21 @@ class NdiStreamService {
   private port = 3000;
   private nativeNdi: NdiNativeDiagnostics | undefined = undefined;
 
+  private lastSyncedConfigSig = '';
+
   constructor() {
     if (typeof window !== 'undefined') {
       displaySyncService.subscribe((payload) => {
         this.latestPayload = payload;
         this.reconcileListsAndNames(payload);
-        if (this.isAnyStreamActive()) {
-          this.renderAndTransmitFrame();
-        }
+        // NOTE: Do NOT call renderAndTransmitFrame() here!
+        // displaySyncService fires at 20Hz while a cue is running; the dedicated
+        // renderTimer handles frame rendering at a controlled, non-blocking rate.
       });
 
       window.addEventListener('protimer-prefs-updated', () => {
         if (this.isAnyStreamActive()) {
-          this.syncConfigToServer();
+          this.syncConfigToServer(true);
           this.restartRenderLoop();
         }
         this.notifySubscribers();
@@ -372,7 +374,7 @@ class NdiStreamService {
   private applyStreamStateChange(): void {
     const anyActive = this.isAnyStreamActive();
     if (anyActive) {
-      this.syncConfigToServer();
+      this.syncConfigToServer(true);
       this.restartRenderLoop();
       this.startStatusPolling();
     } else {
@@ -384,7 +386,7 @@ class NdiStreamService {
         clearInterval(this.statusPollTimer);
         this.statusPollTimer = null;
       }
-      this.syncConfigToServer();
+      this.syncConfigToServer(true);
     }
     this.notifySubscribers();
   }
@@ -396,33 +398,41 @@ class NdiStreamService {
     this.statusPollTimer = setInterval(() => {
       if (!this.isAnyStreamActive()) return;
       this.fetchNetworkInfo();
-    }, 2500);
+    }, 3500);
   }
 
-  public async syncConfigToServer(): Promise<void> {
+  public async syncConfigToServer(force = false): Promise<void> {
     if (typeof window === 'undefined') return;
     const status = this.getStatus();
+    const configPayload = {
+      active: status.active,
+      mode: status.mode,
+      multiActive: status.multiActive,
+      activeByList: status.activeByList,
+      sourceNamesByList: status.sourceNamesByList,
+      activeSourceNames: status.activeSourceNames,
+      sourceName: status.sourceName,
+      multiSourceName: status.multiSourceName,
+      resolution: status.resolution,
+      width: status.width,
+      height: status.height,
+      frameRate: status.frameRate,
+      alphaChannel: status.alphaChannel,
+      useCustomGroups: status.useCustomGroups,
+      customGroups: status.customGroups,
+    };
+
+    const sig = JSON.stringify(configPayload);
+    if (!force && sig === this.lastSyncedConfigSig) {
+      return;
+    }
+    this.lastSyncedConfigSig = sig;
+
     try {
       const res = await fetch('/api/lan/ndi/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          active: status.active,
-          mode: status.mode,
-          multiActive: status.multiActive,
-          activeByList: status.activeByList,
-          sourceNamesByList: status.sourceNamesByList,
-          activeSourceNames: status.activeSourceNames,
-          sourceName: status.sourceName,
-          multiSourceName: status.multiSourceName,
-          resolution: status.resolution,
-          width: status.width,
-          height: status.height,
-          frameRate: status.frameRate,
-          alphaChannel: status.alphaChannel,
-          useCustomGroups: status.useCustomGroups,
-          customGroups: status.customGroups,
-        }),
+        body: sig,
       });
       if (res.ok) {
         const data = await res.json();
@@ -432,7 +442,6 @@ class NdiStreamService {
         if (data.nativeNdi && typeof data.nativeNdi === 'object') {
           this.nativeNdi = data.nativeNdi;
         }
-        this.notifySubscribers();
       }
     } catch {
       // Ignore network error
@@ -446,11 +455,15 @@ class NdiStreamService {
     }
     if (!this.isAnyStreamActive() || typeof window === 'undefined') return;
 
-    this.renderAndTransmitFrame();
+    // Schedule initial frame asynchronously so button click returns in 0ms
+    setTimeout(() => {
+      if (this.isAnyStreamActive()) {
+        this.renderAndTransmitFrame();
+      }
+    }, 16);
 
-    const status = this.getStatus();
-    const targetFps = Math.min(30, Math.max(1, Number(status.frameRate) || 30));
-    const intervalMs = Math.max(120, Math.round(1000 / Math.min(targetFps, 8)));
+    // 4 FPS (250ms) is crisp for digital countdown timers and keeps CPU usage minimal
+    const intervalMs = 250;
 
     this.renderTimer = setInterval(() => {
       if (!this.isAnyStreamActive()) return;
@@ -481,7 +494,14 @@ class NdiStreamService {
     const prefs = storageService.getPreferences();
     const payload = this.latestPayload;
 
-    const scale = status.width > 1920 ? 1920 / status.width : 1;
+    const lists = this.getCurrentLists();
+    const targetListIds = this.multiActive
+      ? lists.map((l) => l.id)
+      : lists.filter((l) => this.activeByList[l.id]).map((l) => l.id);
+
+    // Use a fast, crisp broadcast resolution (1280x720 for single stream, 960x540 when encoding multiple concurrent lists)
+    const maxW = targetListIds.length > 1 || this.multiActive ? 960 : 1280;
+    const scale = status.width > maxW ? maxW / status.width : 1;
     const cw = Math.round(status.width * scale);
     const ch = Math.round(status.height * scale);
 
@@ -496,21 +516,13 @@ class NdiStreamService {
     const ctx = this.canvas.getContext('2d');
     if (!ctx) return;
 
-    const lists = this.getCurrentLists();
     const listCueMap = new Map<string, ListActiveCueSummary>(
       (payload.listActiveCues || []).map((c) => [c.listId, c])
     );
 
-    // Determine which list streams to render:
-    // - In NDI Multi mode, render every list tab's NDI stream + the combined Multi grid stream
-    // - In Per-List NDI mode, render each list tab that has its NDI button active
-    const targetListIds = this.multiActive
-      ? lists.map((l) => l.id)
-      : lists.filter((l) => this.activeByList[l.id]).map((l) => l.id);
-
     const perListFrames: Record<
       string,
-      { sourceName: string; frameDataUrl: string; rawRgbaBase64?: string }
+      { sourceName: string; frameDataUrl: string }
     > = {};
 
     for (const lid of targetListIds) {
@@ -535,13 +547,12 @@ class NdiStreamService {
         perListFrames[lid] = {
           sourceName,
           frameDataUrl: encoded.frameDataUrl,
-          rawRgbaBase64: encoded.rawRgbaBase64,
         };
       }
     }
 
     // Also render the primary / Multi frame
-    let primaryFrame: { frameDataUrl: string; rawRgbaBase64?: string } | null = null;
+    let primaryFrame: { frameDataUrl: string } | null = null;
     if (this.multiActive) {
       ctx.clearRect(0, 0, cw, ch);
       if (payload.isBlackout) {
@@ -561,7 +572,6 @@ class NdiStreamService {
       if (chosen) {
         primaryFrame = {
           frameDataUrl: chosen.frameDataUrl,
-          rawRgbaBase64: chosen.rawRgbaBase64,
         };
       }
     }
@@ -573,34 +583,12 @@ class NdiStreamService {
 
   private extractCanvasFrame(
     alphaChannel: boolean
-  ): { frameDataUrl: string; rawRgbaBase64?: string } | null {
+  ): { frameDataUrl: string } | null {
     if (!this.canvas) return null;
+    // Fast hardware-accelerated JPEG when opaque (~2ms); PNG only when transparent alpha is explicitly enabled
     const mime = alphaChannel ? 'image/png' : 'image/jpeg';
-    const frameDataUrl = this.canvas.toDataURL(mime, alphaChannel ? undefined : 0.85);
-    let rawRgbaBase64: string | undefined;
-    const w = this.canvas.width;
-    const h = this.canvas.height;
-
-    if (this.nativeNdi?.nativeNdiAvailable && w > 0 && h > 0) {
-      try {
-        const ctx = this.canvas.getContext('2d');
-        if (ctx) {
-          const imgData = ctx.getImageData(0, 0, w, h);
-          const bytes = imgData.data;
-          let binary = '';
-          const chunkSize = 0x8000;
-          for (let i = 0; i < bytes.length; i += chunkSize) {
-            const sub = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
-            binary += String.fromCharCode.apply(null, sub as unknown as number[]);
-          }
-          rawRgbaBase64 = btoa(binary);
-        }
-      } catch {
-        // Ignore raw extraction error
-      }
-    }
-
-    return { frameDataUrl, rawRgbaBase64 };
+    const frameDataUrl = this.canvas.toDataURL(mime, alphaChannel ? undefined : 0.8);
+    return { frameDataUrl };
   }
 
   private drawSingleListFrame(

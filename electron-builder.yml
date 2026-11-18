@@ -3,6 +3,9 @@ productName: ProTimer
 executableName: ProTimer
 copyright: Copyright © 2026 Bigjoe Technology
 
+npmRebuild: false
+buildDependenciesFromSource: false
+
 directories:
   buildResources: build
   output: release
@@ -15,10 +18,7 @@ files:
   - build/icon.png
   - package.json
   - "!node_modules/**/*"
-  - node_modules/koffi/index.js
-  - node_modules/koffi/package.json
-  - node_modules/koffi/build/koffi/win32_x64/**/*
-  - node_modules/koffi/build/koffi/linux_x64/**/*
+  - node_modules/koffi/**/*
 
 asar: true
 asarUnpack:
@@ -31,11 +31,12 @@ extraResources:
     filter:
       - "**/*"
 
-compression: store
+compression: normal
 
 win:
   icon: build/icon.ico
   executableName: ProTimer
+  signAndEditExecutable: true
   target:
     - target: nsis
       arch:
@@ -62,3 +63,25 @@ nsis:
 
 portable:
   artifactName: ProTimer-Portable.exe
+
+mac:
+  icon: build/icon.png
+  category: public.app-category.video
+  identity: null
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  artifactName: ProTimer-Mac-${arch}.${ext}
+  target:
+    - target: zip
+      arch:
+        - x64
+        - arm64
+
+linux:
+  icon: build/icon.png
+  category: AudioVideo
+  artifactName: ProTimer-Linux-${arch}.${ext}
+  target:
+    - target: AppImage
+      arch:
+        - x64

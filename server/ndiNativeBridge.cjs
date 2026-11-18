@@ -10,10 +10,11 @@
  * 2. Binds the official NDI C ABI using `koffi` (zero C++ compiler required):
  *    - `NDIlib_initialize()`
  *    - `NDIlib_send_create()` -> registers `<HOSTNAME> (<NDI Source Name>)` on the network
- *    - `NDIlib_send_send_video_v2()` -> streams raw BGRA / RGBA video frames with Alpha support
- *    - `NDIlib_send_get_no_connections()` -> reports live connected NDI receivers (OBS, vMix, etc.)
+ *    - `NDIlib_send_send_video_v2.async()` -> streams raw BGRA / RGBA video frames on a worker thread
+ *      so the Electron Main Process UI thread never blocks or freezes!
+ *    - `NDIlib_send_get_no_connections.async()` -> polls connected NDI receivers asynchronously
  * 3. Broadcasts mDNS (`_ndi._tcp.local`) multicast DNS announcements on 224.0.0.251:5353
- *    across all active LAN interfaces.
+ *    with multicast loopback disabled and strict query-only filtering to prevent packet storms.
  */
 
 const fs = require('fs');
@@ -146,15 +147,21 @@ function convertFrameRateToRational(fps) {
 }
 
 /**
- * Lightweight mDNS Responder for `_ndi._tcp.local` on 224.0.0.251:5353
+ * Lightweight mDNS Responder for `_ndi._tcp.local` on 224.0.0.251:5353.
+ * Disables multicast loopback and ignores DNS response packets (QR=1) so it
+ * can never trigger a self-amplifying UDP broadcast storm.
  */
 class NdiMdnsAdvertiser {
   constructor() {
     this.socket = null;
     this.announceTimer = null;
     this.active = false;
-    this.sourceName = 'ProTimer (Main Output)';
+    this.sourceName = 'ProTimer (List 1)';
+    this.sourceNames = ['ProTimer (List 1)'];
+    this.ipAddresses = ['127.0.0.1'];
     this.port = 5961;
+    this.lastBroadcastAt = 0;
+    this.configSignature = '';
   }
 
   encodeDnsName(name) {
@@ -177,7 +184,7 @@ class NdiMdnsAdvertiser {
     // DNS Header: Flags=0x8400 (Standard query response, Authoritative), ANCOUNT=3
     const header = Buffer.alloc(12);
     header.writeUInt16BE(0x0000, 0); // ID
-    header.writeUInt16BE(0x8400, 2); // Flags: Response + Authoritative
+    header.writeUInt16BE(0x8400, 2); // Flags: QR=1 (Response) + Authoritative
     header.writeUInt16BE(0, 4); // QDCOUNT
     header.writeUInt16BE(3, 6); // ANCOUNT
     header.writeUInt16BE(0, 8); // NSCOUNT
@@ -230,18 +237,60 @@ class NdiMdnsAdvertiser {
     ]);
   }
 
+  broadcastNow() {
+    if (!this.active || !this.socket) return;
+    const now = Date.now();
+    if (now - this.lastBroadcastAt < 1000) return;
+    this.lastBroadcastAt = now;
+
+    const ips =
+      Array.isArray(this.ipAddresses) && this.ipAddresses.length > 0
+        ? this.ipAddresses
+        : ['127.0.0.1'];
+    for (const ip of ips) {
+      for (let idx = 0; idx < this.sourceNames.length; idx++) {
+        const sName = this.sourceNames[idx];
+        try {
+          const pkt = this.buildAnnouncementPacket(sName, ip, this.port + idx);
+          this.socket.send(pkt, 0, pkt.length, 5353, '224.0.0.251');
+        } catch {
+          // Ignore send error
+        }
+      }
+    }
+  }
+
   start(sourceName, ipAddresses, port = 5961, additionalSources = []) {
-    this.stop();
-    this.sourceName = sourceName || 'ProTimer (List 1)';
+    const cleanPrimary = sourceName || 'ProTimer (List 1)';
     const allSources = Array.from(
       new Set(
-        [this.sourceName, ...(Array.isArray(additionalSources) ? additionalSources : [])].filter(
+        [cleanPrimary, ...(Array.isArray(additionalSources) ? additionalSources : [])].filter(
           (s) => typeof s === 'string' && s.trim().length > 0
         )
       )
     );
-    this.sourceNames = allSources.length > 0 ? allSources : [this.sourceName];
+    const nextSourceNames = allSources.length > 0 ? allSources : [cleanPrimary];
+    const nextIps =
+      Array.isArray(ipAddresses) && ipAddresses.length > 0 ? ipAddresses : ['127.0.0.1'];
+    const nextSig = `${nextSourceNames.join('|')}@${nextIps.join(',')}#${port}`;
+
+    // Update live fields without recreating socket if already running
+    this.sourceName = cleanPrimary;
+    this.sourceNames = nextSourceNames;
+    this.ipAddresses = nextIps;
     this.port = port;
+
+    if (this.active && this.socket && this.configSignature === nextSig) {
+      return;
+    }
+
+    this.configSignature = nextSig;
+    if (this.active && this.socket) {
+      this.broadcastNow();
+      return;
+    }
+
+    this.stop();
     this.active = true;
 
     try {
@@ -252,44 +301,39 @@ class NdiMdnsAdvertiser {
         // Ignore if UDP 5353 is restricted
       });
 
-      const broadcastPacket = () => {
-        if (!this.active || !this.socket) return;
-        const ips = Array.isArray(ipAddresses) && ipAddresses.length > 0 ? ipAddresses : ['127.0.0.1'];
-        for (const ip of ips) {
-          for (let idx = 0; idx < this.sourceNames.length; idx++) {
-            const sName = this.sourceNames[idx];
-            try {
-              const pkt = this.buildAnnouncementPacket(sName, ip, this.port + idx);
-              this.socket.send(pkt, 0, pkt.length, 5353, '224.0.0.251');
-            } catch {
-              // Ignore send error
-            }
-          }
-        }
-      };
-
       sock.bind(5353, '0.0.0.0', () => {
         try {
           sock.setBroadcast(true);
           sock.setMulticastTTL(255);
+          // CRITICAL: Disable multicast loopback so our own announcement packets never trigger sock.on('message')!
+          sock.setMulticastLoopback(false);
           sock.addMembership('224.0.0.251');
         } catch {
           // Membership optional
         }
-        broadcastPacket();
+        this.broadcastNow();
       });
 
       sock.on('message', (msg) => {
         try {
-          if (msg && msg.includes(Buffer.from('_ndi', 'utf8'))) {
-            broadcastPacket();
+          if (!msg || msg.length < 12) return;
+          // CRITICAL: Check DNS QR bit (bit 15 of flags at byte offset 2).
+          // QR = 0 is a Query; QR = 1 (0x8000) is a Response.
+          // NEVER reply to DNS Response packets to prevent infinite multicast loops!
+          const flags = msg.readUInt16BE(2);
+          if ((flags & 0x8000) !== 0) return;
+
+          if (msg.includes(Buffer.from('_ndi', 'utf8'))) {
+            this.broadcastNow();
           }
         } catch {
           // Ignore malformed packet
         }
       });
 
-      this.announceTimer = setInterval(broadcastPacket, 3000);
+      this.announceTimer = setInterval(() => {
+        this.broadcastNow();
+      }, 5000);
     } catch {
       // Ignore if socket creation fails
     }
@@ -297,6 +341,7 @@ class NdiMdnsAdvertiser {
 
   stop() {
     this.active = false;
+    this.configSignature = '';
     if (this.announceTimer) {
       clearInterval(this.announceTimer);
       this.announceTimer = null;
@@ -332,16 +377,24 @@ class NdiNativeBridge {
     // Active sender state (supports both primary sender and concurrent per-list senders)
     this.senderInstance = null;
     this.extraSenders = new Map(); // sourceName -> { instance, groups, lastBuffer }
+    this.inFlightInstances = new Set(); // instances currently executing async fnSendVideoV2
+    this.inFlightBuffers = new Map(); // instance -> Buffer (kept alive for GC safety during async FFI)
+    this.pendingDestroyInstances = new Set();
+
     this.activeSourceName = null;
     this.activeSourceNames = [];
     this.activeGroups = null;
     this.lastRawBuffer = null;
-    this.lastWidth = 1920;
-    this.lastHeight = 1080;
+    this.lastWidth = 1280;
+    this.lastHeight = 720;
     this.lastFourCC = FOURCC_RGBA;
     this.lastFps = 30;
     this.lastAlpha = false;
+    this.lastFrameSentAt = 0;
+    this.cachedConnectedReceivers = 0;
+    this.isPollingConnections = false;
     this.keepAliveTimer = null;
+    this.connectionsPollTimer = null;
     this.mdns = new NdiMdnsAdvertiser();
 
     this.tryLoadLibrary();
@@ -463,7 +516,7 @@ class NdiNativeBridge {
       ndiVersion: this.ndiVersion,
       networkSourceFullName: `${hostname} (${sourceName})`,
       hostname,
-      connectedReceivers: this.getConnectedReceiversCount(),
+      connectedReceivers: this.cachedConnectedReceivers,
       mdnsActive: Boolean(this.mdns && this.mdns.active),
       activeSources: this.activeSourceNames,
       error: this.loadError,
@@ -474,25 +527,79 @@ class NdiNativeBridge {
   }
 
   getConnectedReceiversCount() {
-    if (!this.fnGetConnections) return 0;
-    let total = 0;
-    if (this.senderInstance) {
-      try {
-        total += Math.max(0, Number(this.fnGetConnections(this.senderInstance, 0)) || 0);
-      } catch {
-        // Ignore
-      }
-    }
+    return this.cachedConnectedReceivers;
+  }
+
+  pollConnectionsAsync() {
+    if (!this.fnGetConnections || this.isPollingConnections) return;
+    const instances = [];
+    if (this.senderInstance) instances.push(this.senderInstance);
     for (const entry of this.extraSenders.values()) {
-      if (entry && entry.instance) {
-        try {
-          total += Math.max(0, Number(this.fnGetConnections(entry.instance, 0)) || 0);
-        } catch {
-          // Ignore
-        }
-      }
+      if (entry && entry.instance) instances.push(entry.instance);
     }
-    return total;
+    if (instances.length === 0) {
+      this.cachedConnectedReceivers = 0;
+      return;
+    }
+
+    this.isPollingConnections = true;
+    let total = 0;
+    let idx = 0;
+
+    const next = () => {
+      if (idx >= instances.length) {
+        this.cachedConnectedReceivers = total;
+        this.isPollingConnections = false;
+        return;
+      }
+      const inst = instances[idx++];
+      if (this.pendingDestroyInstances.has(inst)) {
+        next();
+        return;
+      }
+      try {
+        if (typeof this.fnGetConnections.async === 'function') {
+          this.fnGetConnections.async(inst, 0, (err, res) => {
+            if (!err && typeof res === 'number' && res > 0) {
+              total += res;
+            }
+            next();
+          });
+        } else {
+          total += Math.max(0, Number(this.fnGetConnections(inst, 0)) || 0);
+          next();
+        }
+      } catch {
+        next();
+      }
+    };
+
+    next();
+  }
+
+  safeDestroyInstance(instance) {
+    if (!instance || !this.fnSendDestroy) return;
+    this.pendingDestroyInstances.add(instance);
+
+    const attemptDestroy = () => {
+      if (this.inFlightInstances.has(instance)) {
+        setTimeout(attemptDestroy, 30);
+        return;
+      }
+      this.pendingDestroyInstances.delete(instance);
+      this.inFlightBuffers.delete(instance);
+      try {
+        if (typeof this.fnSendDestroy.async === 'function') {
+          this.fnSendDestroy.async(instance, () => {});
+        } else {
+          this.fnSendDestroy(instance);
+        }
+      } catch {
+        // Ignore destroy errors
+      }
+    };
+
+    attemptDestroy();
   }
 
   startSender({
@@ -526,21 +633,21 @@ class NdiNativeBridge {
         ? String(groups).trim()
         : null;
 
-    this.lastWidth = Number(width) || 1920;
-    this.lastHeight = Number(height) || 1080;
+    this.lastWidth = Math.min(1920, Math.max(320, Number(width) || 1280));
+    this.lastHeight = Math.min(1080, Math.max(240, Number(height) || 720));
     this.lastFps = Number(frameRate) || 30;
     this.lastAlpha = Boolean(alphaChannel);
-
-    // Start mDNS _ndi._tcp.local discovery responder for all active NDI source names
-    this.mdns.start(primaryName, ips, port || 5961, allNames);
 
     // Ensure native NDI DLL is loaded
     if (!this.ndiLib) {
       this.tryLoadLibrary();
     }
 
+    // Start mDNS _ndi._tcp.local discovery responder
+    this.mdns.start(primaryName, ips, port || 5961, allNames);
+
     if (this.ndiLib && this.fnSendCreate) {
-      // Recreate primary sender if sourceName or groups changed
+      // Recreate primary sender ONLY if sourceName or groups actually changed
       if (
         this.senderInstance &&
         (this.activeSourceName !== primaryName || this.activeGroups !== cleanGroups)
@@ -573,12 +680,8 @@ class NdiNativeBridge {
       const extraDesired = new Set(allNames.filter((n) => n !== primaryName));
       for (const [existingName, entry] of this.extraSenders.entries()) {
         if (!extraDesired.has(existingName) || entry.groups !== cleanGroups) {
-          if (entry.instance && this.fnSendDestroy) {
-            try {
-              this.fnSendDestroy(entry.instance);
-            } catch {
-              // Ignore
-            }
+          if (entry.instance) {
+            this.safeDestroyInstance(entry.instance);
           }
           this.extraSenders.delete(existingName);
         }
@@ -599,8 +702,10 @@ class NdiNativeBridge {
                 instance: inst,
                 groups: cleanGroups,
                 lastBuffer: initBuf,
+                width: this.lastWidth,
+                height: this.lastHeight,
               });
-              this.pushBufferToSenderInstance(inst, initBuf);
+              this.pushBufferToSenderInstance(inst, initBuf, this.lastWidth, this.lastHeight);
             }
           } catch {
             // Ignore extra sender error
@@ -609,44 +714,48 @@ class NdiNativeBridge {
       }
     }
 
-    // Start a keepalive loop (every 250ms) so NDI receivers see continuous frames even when timer is paused
-    if (this.keepAliveTimer) {
-      clearInterval(this.keepAliveTimer);
-    }
-    this.keepAliveTimer = setInterval(() => {
-      if (this.senderInstance && this.lastRawBuffer) {
-        this.pushCurrentBufferToNdi();
-      }
-      for (const entry of this.extraSenders.values()) {
-        if (entry && entry.instance && entry.lastBuffer) {
-          this.pushBufferToSenderInstance(entry.instance, entry.lastBuffer);
+    // Start a gentle keepalive loop (every 1000ms) that ONLY fires when idle (> 900ms since last live frame)
+    if (!this.keepAliveTimer) {
+      this.keepAliveTimer = setInterval(() => {
+        if (Date.now() - this.lastFrameSentAt < 900) return;
+        if (this.senderInstance && this.lastRawBuffer) {
+          this.pushCurrentBufferToNdi();
         }
-      }
-    }, 250);
+        for (const entry of this.extraSenders.values()) {
+          if (entry && entry.instance && entry.lastBuffer) {
+            this.pushBufferToSenderInstance(
+              entry.instance,
+              entry.lastBuffer,
+              entry.width || this.lastWidth,
+              entry.height || this.lastHeight
+            );
+          }
+        }
+      }, 1000);
+    }
+
+    if (!this.connectionsPollTimer) {
+      this.connectionsPollTimer = setInterval(() => {
+        this.pollConnectionsAsync();
+      }, 3000);
+    }
 
     return this.getRuntimeDiagnostics();
   }
 
   destroyPrimarySenderOnly() {
-    if (this.senderInstance && this.fnSendDestroy) {
-      try {
-        this.fnSendDestroy(this.senderInstance);
-      } catch {
-        // Ignore destroy errors
-      }
+    if (this.senderInstance) {
+      const old = this.senderInstance;
+      this.senderInstance = null;
+      this.safeDestroyInstance(old);
     }
-    this.senderInstance = null;
   }
 
   destroyAllSenders() {
     this.destroyPrimarySenderOnly();
     for (const entry of this.extraSenders.values()) {
-      if (entry && entry.instance && this.fnSendDestroy) {
-        try {
-          this.fnSendDestroy(entry.instance);
-        } catch {
-          // Ignore
-        }
+      if (entry && entry.instance) {
+        this.safeDestroyInstance(entry.instance);
       }
     }
     this.extraSenders.clear();
@@ -657,15 +766,21 @@ class NdiNativeBridge {
       clearInterval(this.keepAliveTimer);
       this.keepAliveTimer = null;
     }
+    if (this.connectionsPollTimer) {
+      clearInterval(this.connectionsPollTimer);
+      this.connectionsPollTimer = null;
+    }
     this.mdns.stop();
     this.destroyAllSenders();
     this.activeSourceNames = [];
     this.lastRawBuffer = null;
+    this.cachedConnectedReceivers = 0;
     return this.getRuntimeDiagnostics();
   }
 
   /**
    * Send raw RGBA or BGRA pixel buffer to the active NDI® sender (or a specific named sender).
+   * Executes asynchronously on a worker thread so the main process never freezes.
    */
   sendRawFrame(
     rawBuffer,
@@ -688,6 +803,7 @@ class NdiNativeBridge {
     this.lastHeight = height;
     this.lastFps = frameRate || this.lastFps || 30;
     this.lastAlpha = Boolean(alphaChannel);
+    this.lastFrameSentAt = Date.now();
 
     if (pixelFormat === 'BGRA') {
       this.lastFourCC = this.lastAlpha ? FOURCC_BGRA : FOURCC_BGRX;
@@ -699,7 +815,9 @@ class NdiNativeBridge {
       const entry = this.extraSenders.get(targetSourceName);
       if (entry && entry.instance) {
         entry.lastBuffer = buf;
-        return this.pushBufferToSenderInstance(entry.instance, buf);
+        entry.width = width;
+        entry.height = height;
+        return this.pushBufferToSenderInstance(entry.instance, buf, width, height);
       }
     }
 
@@ -707,16 +825,26 @@ class NdiNativeBridge {
     return this.pushCurrentBufferToNdi();
   }
 
-  pushBufferToSenderInstance(instance, buffer) {
-    if (!instance || !this.fnSendVideoV2 || !buffer) {
+  pushBufferToSenderInstance(instance, buffer, width, height) {
+    if (
+      !instance ||
+      !this.fnSendVideoV2 ||
+      !buffer ||
+      this.pendingDestroyInstances.has(instance) ||
+      this.inFlightInstances.has(instance)
+    ) {
       return false;
     }
+
+    const w = Number(width) || this.lastWidth;
+    const h = Number(height) || this.lastHeight;
+    if (buffer.byteLength < w * h * 4) {
+      return false;
+    }
+
     try {
       const { N, D } = convertFrameRateToRational(this.lastFps);
-      const w = this.lastWidth;
-      const h = this.lastHeight;
-
-      this.fnSendVideoV2(instance, {
+      const frameStruct = {
         xres: w,
         yres: h,
         FourCC: this.lastFourCC,
@@ -729,16 +857,39 @@ class NdiNativeBridge {
         line_stride_in_bytes: w * 4,
         p_metadata: null,
         timestamp: 0n,
-      });
+      };
+
+      // Execute NDIlib_send_send_video_v2 on a worker thread via koffi .async()
+      // so the Electron Main Process UI thread never blocks!
+      if (typeof this.fnSendVideoV2.async === 'function') {
+        this.inFlightInstances.add(instance);
+        this.inFlightBuffers.set(instance, buffer);
+        this.fnSendVideoV2.async(instance, frameStruct, (err) => {
+          this.inFlightInstances.delete(instance);
+          this.inFlightBuffers.delete(instance);
+          if (err) {
+            this.loadError = `NDI async frame error: ${err.message || String(err)}`;
+          }
+        });
+      } else {
+        this.fnSendVideoV2(instance, frameStruct);
+      }
       return true;
     } catch (err) {
+      this.inFlightInstances.delete(instance);
+      this.inFlightBuffers.delete(instance);
       this.loadError = `NDI frame send error: ${err && err.message ? err.message : String(err)}`;
       return false;
     }
   }
 
   pushCurrentBufferToNdi() {
-    return this.pushBufferToSenderInstance(this.senderInstance, this.lastRawBuffer);
+    return this.pushBufferToSenderInstance(
+      this.senderInstance,
+      this.lastRawBuffer,
+      this.lastWidth,
+      this.lastHeight
+    );
   }
 }
 
