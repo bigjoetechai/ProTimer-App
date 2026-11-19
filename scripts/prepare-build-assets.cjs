@@ -104,11 +104,37 @@ async function ensureNdiDll() {
   }
 }
 
+function ensureDistAndServerBuilt() {
+  const distIndex = path.join(rootDir, 'dist', 'index.html');
+  if (!fs.existsSync(distIndex)) {
+    try {
+      const { execSync } = require('child_process');
+      console.log('[prepare-build-assets] Building production frontend bundle (vite build)...');
+      execSync('npx vite build', { cwd: rootDir, stdio: 'inherit' });
+    } catch (err) {
+      console.warn('[prepare-build-assets] Could not auto-build dist/:', err && err.message ? err.message : err);
+    }
+  }
+
+  try {
+    const { bundleExpressServer } = require('./bundle-server.cjs');
+    bundleExpressServer();
+  } catch (err) {
+    console.warn(
+      '[prepare-build-assets] Could not auto-bundle server.ts:',
+      err && err.message ? err.message : err
+    );
+  }
+}
+
 if (require.main === module) {
-  ensureNdiDll();
+  ensureNdiDll().then(() => {
+    ensureDistAndServerBuilt();
+  });
 }
 
 module.exports = async function beforePack() {
   require('./generate-icons.cjs');
   await ensureNdiDll();
+  ensureDistAndServerBuilt();
 };

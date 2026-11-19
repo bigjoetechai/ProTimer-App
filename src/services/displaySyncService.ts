@@ -22,6 +22,7 @@ import { formatSeconds, formatClock, formatDate } from '../utilities/timeFormatt
 import { timerManagerService, computeActiveAlert } from './timerManager';
 import { storageService } from './storageService';
 import { generateId } from '../utilities/idGenerator';
+import { resolveApiUrl } from '../utils/apiUrl';
 
 export type DisplaySyncListener = (payload: DisplaySyncPayload) => void;
 
@@ -427,7 +428,7 @@ class DisplaySyncService {
       if (this.masterEventSource) {
         this.masterEventSource.close();
       }
-      this.masterEventSource = new EventSource('/api/lan/stream');
+      this.masterEventSource = new EventSource(resolveApiUrl('/api/lan/stream'));
       this.masterEventSource.onmessage = (event) => {
         if (!this.isMaster) return;
         try {
@@ -450,7 +451,7 @@ class DisplaySyncService {
     this.masterPollInterval = setInterval(async () => {
       if (!this.isMaster) return;
       try {
-        const res = await fetch('/api/lan/commands');
+        const res = await fetch(resolveApiUrl('/api/lan/commands'));
         if (res.ok) {
           const data = await res.json();
           if (Array.isArray(data.commands) && data.commands.length > 0) {
@@ -488,7 +489,7 @@ class DisplaySyncService {
         if (pinnedListId) {
           streamQuery.set('listId', pinnedListId);
         }
-        this.clientEventSource = new EventSource(`/api/lan/stream?${streamQuery.toString()}`);
+        this.clientEventSource = new EventSource(resolveApiUrl(`/api/lan/stream?${streamQuery.toString()}`));
 
         this.clientEventSource.onmessage = (event) => {
           try {
@@ -514,7 +515,7 @@ class DisplaySyncService {
     // 2. Initial fetch + fallback polling (only used if SSE/BroadcastChannel isn't actively streaming)
     const fetchState = async (isInitial = false) => {
       try {
-        const res = await fetch('/api/lan/state');
+        const res = await fetch(resolveApiUrl('/api/lan/state'));
         if (res.ok) {
           const data = await res.json();
           if (data.state) {
@@ -816,7 +817,7 @@ class DisplaySyncService {
     this.isPushingLanState = true;
     this.lastLanPushAt = Date.now();
 
-    fetch('/api/lan/state', {
+    fetch(resolveApiUrl('/api/lan/state'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(nextToPush),
@@ -1282,7 +1283,7 @@ class DisplaySyncService {
           (listIdFromUrl ? sessionStorage.getItem(`protimer_lan_pin_${listIdFromUrl}`) : '') ||
           sessionStorage.getItem('protimer_lan_pin') ||
           '';
-        const res = await fetch('/api/lan/command', {
+        const res = await fetch(resolveApiUrl('/api/lan/command'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1332,7 +1333,8 @@ class DisplaySyncService {
     listId?: string
   ): Window | null {
     const listQuery = listId ? `&listId=${encodeURIComponent(listId)}` : '';
-    const url = `${window.location.origin}${window.location.pathname}?display=${target}${listQuery}`;
+    const baseHref = window.location.href.split('?')[0].split('#')[0];
+    const url = `${baseHref}?display=${target}${listQuery}`;
     const windowName = listId ? `ProTimer_${target}_${listId}_Window` : `ProTimer_${target}_Window`;
     const isCompactPopout = target === 'preview' || target === 'presenter';
     const width = bounds?.width || (isCompactPopout ? 360 : 1280);

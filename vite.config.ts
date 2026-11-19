@@ -19,10 +19,20 @@ function lanApiPlugin() {
   };
 }
 
+function electronFileProtocolPlugin() {
+  return {
+    name: 'electron-file-protocol-plugin',
+     enforce: 'post' as const,
+    transformIndexHtml(html: string) {
+      return html.replace(/\s+crossorigin(?:="[^"]*")?/g, '');
+    },
+  };
+}
+
 export default defineConfig(({ command }) => {
   return {
     base: command === 'build' ? './' : '/',
-    plugins: [react(), tailwindcss(), lanApiPlugin()],
+    plugins: [react(), tailwindcss(), lanApiPlugin(), ...(command === 'build' ? [electronFileProtocolPlugin()] : [])],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

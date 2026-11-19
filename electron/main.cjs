@@ -79,8 +79,8 @@ if (!gotTheLock) {
 // EMBEDDED PRODUCTION HTTP + LAN SERVER
 // =============================================================================
 
-const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
-const devServerUrl = process.env.APP_URL || 'http://localhost:3000';
+const isDev = process.env.ELECTRON_DEV === 'true' && !app.isPackaged;
+const devServerUrl = process.env.APP_URL || 'http://127.0.0.1:3000';
 let activeLanPort = 3000;
 let localServerUrl = devServerUrl;
 let embeddedServer = null;
@@ -797,47 +797,207 @@ const MIME_TYPES = {
   '.mp3': 'audio/mpeg',
 };
 
-function startEmbeddedProductionServer() {
-  if (isDev) {
-    localServerUrl = devServerUrl;
-    return Promise.resolve(localServerUrl);
+function resolveDistDir() {
+  const candidates = [
+    process.resourcesPath ? path.join(process.resourcesPath, 'app.asar.unpacked', 'dist') : null,
+    path.join(__dirname, '../dist'),
+    app && typeof app.getAppPath === 'function' ? path.join(app.getAppPath(), 'dist') : null,
+    process.resourcesPath ? path.join(process.resourcesPath, 'app.asar', 'dist') : null,
+    process.resourcesPath ? path.join(process.resourcesPath, 'dist') : null,
+  ].filter(Boolean);
+
+  for (const dir of candidates) {
+    try {
+      if (fs.existsSync(path.join(dir, 'index.html'))) {
+        return dir;
+      }
+    } catch {
+      // Ignore path check error
+    }
+  }
+  return path.join(__dirname, '../dist');
+}
+
+function resolveDistIndexHtml() {
+  return path.join(resolveDistDir(), 'index.html');
+}
+
+function getSharedWebPreferences() {
+  return {
+    preload: path.join(__dirname, 'preload.cjs'),
+    contextIsolation: true,
+    nodeIntegration: false,
+    webSecurity: false,
+    backgroundThrottling: false,
+    additionalArguments: [`--protimer-api-port=${activeLanPort}`],
+  };
+}
+
+/**
+ * Loads the application into a BrowserWindow.
+ * In production, `startEmbeddedProductionServer()` starts the bundled Express server (`server.ts` -> `server/bundledServer.cjs`)
+ * on a local port (`localServerUrl = http://127.0.0.1:${activeLanPort}`), and `loadAppWindow` loads that local port
+ * (with fallback to `win.loadFile(dist/index.html)` if `localServerUrl` is ever unreachable).
+ * Never uses localhost:5173 in production.
+ */
+function loadAppWindow(win, queryObj = {}) {
+  if (!win || win.isDestroyed()) return;
+  const cleanQuery = {};
+  if (queryObj && typeof queryObj === 'object') {
+    for (const [k, v] of Object.entries(queryObj)) {
+      if (v !== undefined && v !== null && String(v).length > 0) {
+        cleanQuery[k] = String(v);
+      }
+    }
   }
 
-  const distDir = path.join(__dirname, '../dist');
+  const qs = new URLSearchParams(cleanQuery).toString();
 
+  if (isDev) {
+    const sep = devServerUrl.includes('?') ? '&' : '?';
+    win.loadURL(qs ? `${devServerUrl}${sep}${qs}` : devServerUrl);
+    return;
+  }
+
+  const targetBaseUrl = localServerUrl || `http://127.0.0.1:${activeLanPort}`;
+  const sep = targetBaseUrl.includes('?') ? '&' : '?';
+  const fullUrl = qs ? `${targetBaseUrl}${sep}${qs}` : targetBaseUrl;
+
+  const loadPromise = win.loadURL(fullUrl);
+  if (loadPromise && typeof loadPromise.catch === 'function') {
+    loadPromise.catch(() => {
+      if (!win.isDestroyed()) {
+        const indexHtmlPath = resolveDistIndexHtml();
+        if (Object.keys(cleanQuery).length > 0) {
+          win.loadFile(indexHtmlPath, { query: cleanQuery }).catch(() => {});
+        } else {
+          win.loadFile(indexHtmlPath).catch(() => {});
+        }
+      }
+    });
+  }
+}
+
+async function startEmbeddedProductionServer() {
+  if (isDev) {
+    localServerUrl = devServerUrl;
+    return localServerUrl;
+  }
+
+  const distDir = resolveDistDir();
+
+  // Primary production server: Start the bundled Express server (`server.ts` -> `server/bundledServer.cjs`)
+  try {
+    const bundledServerCandidates = [
+      path.join(__dirname, '../server/bundledServer.cjs'),
+      process.resourcesPath
+        ? path.join(process.resourcesPath, 'app.asar.unpacked', 'server', 'bundledServer.cjs')
+        : null,
+      process.resourcesPath
+        ? path.join(process.resourcesPath, 'app.asar', 'server', 'bundledServer.cjs')
+        : null,
+    ].filter(Boolean);
+
+    let bundledServerMod = null;
+    for (const candidate of bundledServerCandidates) {
+      try {
+        if (fs.existsSync(candidate)) {
+          bundledServerMod = require(candidate);
+          break;
+        }
+      } catch {
+        // Try next candidate
+      }
+    }
+
+    if (!bundledServerMod) {
+      bundledServerMod = require('../server/bundledServer.cjs');
+    }
+
+    if (bundledServerMod && typeof bundledServerMod.startExpressServer === 'function') {
+      const started = await bundledServerMod.startExpressServer({
+        port: 3000,
+        host: '0.0.0.0',
+        isProduction: true,
+        distPath: distDir,
+        nativeDecoder: (dataUrl, targetSourceName) => {
+          decodeDataUrlAndSendToNdi(dataUrl, targetSourceName);
+        },
+      });
+      activeLanPort = started.port;
+      localServerUrl = started.url; // http://127.0.0.1:${activeLanPort}
+      embeddedServer = started.server;
+      console.log(
+        `[ProTimer Main] Started bundled Express server.ts on ${localServerUrl} (serving ${distDir})`
+      );
+      return localServerUrl;
+    }
+  } catch (err) {
+    console.warn(
+      '[ProTimer Main] Bundled Express server fallback triggered:',
+      err && err.message ? err.message : err
+    );
+  }
+
+  // Fallback embedded Node HTTP server if bundledServer.cjs could not be loaded
   return new Promise((resolve) => {
     const server = http.createServer((req, res) => {
       try {
+        if (req.method === 'OPTIONS') {
+          res.writeHead(204, {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+          });
+          res.end();
+          return;
+        }
+
         if (handleEmbeddedLanApi(req, res)) return;
 
         const parsedUrl = new URL(req.url || '/', 'http://127.0.0.1');
-        let safePath = path.normalize(decodeURIComponent(parsedUrl.pathname)).replace(/^(\.\.[/\\])+/, '');
-        if (safePath === '/' || safePath === '\\') {
-          safePath = '/index.html';
+        let rawPathname = '/';
+        try {
+          rawPathname = decodeURIComponent(parsedUrl.pathname || '/');
+        } catch {
+          rawPathname = parsedUrl.pathname || '/';
         }
 
-        let filePath = path.join(distDir, safePath);
-        if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+        const relPath = rawPathname
+          .replace(/\\/g, '/')
+          .split('/')
+          .filter((seg) => seg && seg !== '.' && seg !== '..')
+          .join(path.sep);
+
+        let filePath = relPath ? path.join(distDir, relPath) : path.join(distDir, 'index.html');
+        if (!relPath || !path.extname(filePath) || !fs.existsSync(filePath)) {
           filePath = path.join(distDir, 'index.html');
         }
 
         const ext = path.extname(filePath).toLowerCase();
         const contentType = MIME_TYPES[ext] || 'application/octet-stream';
         const content = fs.readFileSync(filePath);
-        res.writeHead(200, { 'Content-Type': contentType });
+        res.writeHead(200, {
+          'Content-Type': contentType,
+          'Access-Control-Allow-Origin': '*',
+        });
         res.end(content);
-      } catch {
-        res.writeHead(500, { 'Content-Type': 'text/plain' });
-        res.end('Internal Server Error');
+      } catch (err) {
+        console.warn('[EmbeddedServer] Request error:', err && err.message ? err.message : err);
+        res.writeHead(404, {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+        });
+        res.end(JSON.stringify({ error: 'Not found' }));
       }
     });
 
     const tryListen = (portToTry) => {
       server.once('error', () => {
         if (portToTry === 3000) {
-          tryListen(0); // Fallback to OS-assigned free port if 3000 is occupied
+          tryListen(0);
         } else {
-          localServerUrl = `file://${path.join(distDir, 'index.html')}`;
+          localServerUrl = `http://127.0.0.1:${activeLanPort}`;
           resolve(localServerUrl);
         }
       });
@@ -1182,11 +1342,7 @@ function createMainWindow() {
     backgroundColor: '#0c0f16',
     autoHideMenuBar: true,
     show: false,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.cjs'),
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
+    webPreferences: getSharedWebPreferences(),
   });
 
   // Intercept window.open calls (Stage, NDI, etc.)
@@ -1219,15 +1375,17 @@ function createMainWindow() {
       icon: iconPath,
       backgroundColor: '#000000',
       autoHideMenuBar: true,
-      webPreferences: {
-        preload: path.join(__dirname, 'preload.cjs'),
-        contextIsolation: true,
-        nodeIntegration: false,
-      },
+      webPreferences: getSharedWebPreferences(),
     });
 
     secondaryWindows.add(childWin);
-    childWin.loadURL(url);
+    try {
+      const parsed = new URL(url, 'http://127.0.0.1');
+      const queryObj = Object.fromEntries(parsed.searchParams.entries());
+      loadAppWindow(childWin, queryObj);
+    } catch {
+      loadAppWindow(childWin);
+    }
     childWin.on('closed', () => {
       secondaryWindows.delete(childWin);
     });
@@ -1235,10 +1393,10 @@ function createMainWindow() {
     return { action: 'deny' };
   });
 
-  const url = getBaseUrl();
-  mainWindow.loadURL(url);
+  loadAppWindow(mainWindow);
 
-  mainWindow.once('ready-to-show', () => {
+  const showMainWindowSafely = () => {
+    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isVisible()) return;
     if (bounds.isMaximized) {
       mainWindow.maximize();
     } else if (bounds.isFullScreen) {
@@ -1246,7 +1404,10 @@ function createMainWindow() {
     }
     mainWindow.show();
     notifyWindowStateChanged();
-  });
+  };
+
+  mainWindow.once('ready-to-show', showMainWindowSafely);
+  setTimeout(showMainWindowSafely, 1500);
 
   const captureAndSaveState = () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -1373,19 +1534,10 @@ function openPreviewWindow() {
     icon: getAppIconPath(),
     backgroundColor: '#000000',
     title: 'ProTimer - Preview',
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.cjs'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      backgroundThrottling: false,
-    },
+    webPreferences: getSharedWebPreferences(),
   });
 
   applyAlwaysOnTopOverlap(previewWindow);
-
-  const baseUrl = getBaseUrl();
-  const separator = baseUrl.includes('?') ? '&' : '?';
-  const previewUrl = `${baseUrl}${separator}display=preview`;
 
   previewWindow.once('ready-to-show', () => {
     if (previewWindow && !previewWindow.isDestroyed()) {
@@ -1398,7 +1550,7 @@ function openPreviewWindow() {
   previewWindow.on('blur', () => applyAlwaysOnTopOverlap(previewWindow));
   previewWindow.on('show', () => applyAlwaysOnTopOverlap(previewWindow));
 
-  previewWindow.loadURL(previewUrl);
+  loadAppWindow(previewWindow, { display: 'preview' });
 
   previewWindow.on('closed', () => {
     previewWindow = null;
@@ -1461,19 +1613,10 @@ function openMultiPreviewWindow() {
     icon: getAppIconPath(),
     backgroundColor: '#06080d',
     title: 'ProTimer - Multi Preview',
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.cjs'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      backgroundThrottling: false,
-    },
+    webPreferences: getSharedWebPreferences(),
   });
 
   applyAlwaysOnTopOverlap(multiPreviewWindow);
-
-  const baseUrl = getBaseUrl();
-  const separator = baseUrl.includes('?') ? '&' : '?';
-  const multiPreviewUrl = `${baseUrl}${separator}display=multi_preview`;
 
   multiPreviewWindow.once('ready-to-show', () => {
     if (multiPreviewWindow && !multiPreviewWindow.isDestroyed()) {
@@ -1486,7 +1629,7 @@ function openMultiPreviewWindow() {
   multiPreviewWindow.on('blur', () => applyAlwaysOnTopOverlap(multiPreviewWindow));
   multiPreviewWindow.on('show', () => applyAlwaysOnTopOverlap(multiPreviewWindow));
 
-  multiPreviewWindow.loadURL(multiPreviewUrl);
+  loadAppWindow(multiPreviewWindow, { display: 'multi_preview' });
 
   multiPreviewWindow.on('closed', () => {
     multiPreviewWindow = null;
@@ -1549,19 +1692,10 @@ function openPresenterWindow() {
     icon: getAppIconPath(),
     backgroundColor: '#000000',
     title: 'ProTimer - Presenter',
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.cjs'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      backgroundThrottling: false,
-    },
+    webPreferences: getSharedWebPreferences(),
   });
 
   applyAlwaysOnTopOverlap(presenterWindow);
-
-  const baseUrl = getBaseUrl();
-  const separator = baseUrl.includes('?') ? '&' : '?';
-  const presenterUrl = `${baseUrl}${separator}display=presenter`;
 
   presenterWindow.once('ready-to-show', () => {
     if (presenterWindow && !presenterWindow.isDestroyed()) {
@@ -1574,7 +1708,7 @@ function openPresenterWindow() {
   presenterWindow.on('blur', () => applyAlwaysOnTopOverlap(presenterWindow));
   presenterWindow.on('show', () => applyAlwaysOnTopOverlap(presenterWindow));
 
-  presenterWindow.loadURL(presenterUrl);
+  loadAppWindow(presenterWindow, { display: 'presenter' });
 
   presenterWindow.on('closed', () => {
     presenterWindow = null;
@@ -1650,12 +1784,7 @@ function openFullscreenOutput(monitorId, displayTarget = 'fullscreen', listId = 
     icon: getAppIconPath(),
     backgroundColor: '#000000',
     title: `ProTimer - Fullscreen Live Output (${key})`,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.cjs'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      backgroundThrottling: false,
-    },
+    webPreferences: getSharedWebPreferences(),
   });
 
   outputWindow = win;
@@ -1671,11 +1800,6 @@ function openFullscreenOutput(monitorId, displayTarget = 'fullscreen', listId = 
     }
   });
 
-  const baseUrl = getBaseUrl();
-  const separator = baseUrl.includes('?') ? '&' : '?';
-  const listParam = key !== 'default' ? `&listId=${encodeURIComponent(key)}` : '';
-  const outputUrl = `${baseUrl}${separator}display=${encodeURIComponent(displayTarget)}${listParam}`;
-
   win.once('ready-to-show', () => {
     if (win && !win.isDestroyed()) {
       win.setFullScreen(true);
@@ -1684,7 +1808,7 @@ function openFullscreenOutput(monitorId, displayTarget = 'fullscreen', listId = 
     }
   });
 
-  win.loadURL(outputUrl);
+  loadAppWindow(win, key !== 'default' ? { display: displayTarget, listId: key } : { display: displayTarget });
 
   win.on('closed', () => {
     outputWindowsByList.delete(key);
@@ -1762,12 +1886,7 @@ function openMultiFullscreenOutput(monitorId) {
     icon: getAppIconPath(),
     backgroundColor: '#000000',
     title: 'ProTimer - Multi Fullscreen Output (All Lists)',
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.cjs'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      backgroundThrottling: false,
-    },
+    webPreferences: getSharedWebPreferences(),
   });
 
   multiOutputWindow.webContents.on('before-input-event', (_event, input) => {
@@ -1775,10 +1894,6 @@ function openMultiFullscreenOutput(monitorId) {
       closeMultiFullscreenOutput();
     }
   });
-
-  const baseUrl = getBaseUrl();
-  const separator = baseUrl.includes('?') ? '&' : '?';
-  const outputUrl = `${baseUrl}${separator}display=multi_fullscreen`;
 
   multiOutputWindow.once('ready-to-show', () => {
     if (multiOutputWindow && !multiOutputWindow.isDestroyed()) {
@@ -1788,7 +1903,7 @@ function openMultiFullscreenOutput(monitorId) {
     }
   });
 
-  multiOutputWindow.loadURL(outputUrl);
+  loadAppWindow(multiOutputWindow, { display: 'multi_fullscreen' });
 
   multiOutputWindow.on('closed', () => {
     multiOutputWindow = null;
@@ -1877,6 +1992,19 @@ function handleDisplayRemoved(oldDisplay) {
 // =============================================================================
 // IPC HANDLERS (With input validation)
 // =============================================================================
+
+ipcMain.on('protimer-bus-post', (event, envelope) => {
+  if (!envelope || typeof envelope !== 'object') return;
+  for (const win of BrowserWindow.getAllWindows()) {
+    try {
+      if (!win.isDestroyed() && win.webContents && win.webContents.id !== event.sender.id) {
+        win.webContents.send('protimer-bus-message', envelope);
+      }
+    } catch {
+      // Ignore closed window error
+    }
+  }
+});
 
 ipcMain.handle('get-displays', async () => {
   return getDisplaysInfo();

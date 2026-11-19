@@ -7,6 +7,25 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
+let detectedLanPort = 3000;
+for (const arg of process.argv || []) {
+  if (typeof arg === 'string' && arg.startsWith('--protimer-api-port=')) {
+    const parsed = parseInt(arg.split('=')[1], 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      detectedLanPort = parsed;
+    }
+  }
+}
+
+ipcRenderer
+  .invoke('get-app-info')
+  .then((info) => {
+    if (info && typeof info.lanPort === 'number' && info.lanPort > 0) {
+      detectedLanPort = info.lanPort;
+    }
+  })
+  .catch(() => {});
+
 const VALID_DISPLAY_TARGETS = new Set([
   'presenter',
   'preview',
@@ -21,6 +40,23 @@ const VALID_DISPLAY_TARGETS = new Set([
 
 contextBridge.exposeInMainWorld('electronAPI', {
   isElectron: true,
+  lanPort: detectedLanPort,
+  apiBaseUrl: `http://127.0.0.1:${detectedLanPort}`,
+  getApiBaseUrl: () => `http://127.0.0.1:${detectedLanPort}`,
+  getLanPort: () => detectedLanPort,
+
+  postBusMessage: (envelope) => {
+    if (!envelope || typeof envelope !== 'object') return;
+    ipcRenderer.send('protimer-bus-post', envelope);
+  },
+  onBusMessage: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const handler = (_event, envelope) => callback(envelope);
+    ipcRenderer.on('protimer-bus-message', handler);
+    return () => {
+      ipcRenderer.removeListener('protimer-bus-message', handler);
+    };
+  },
 
   // ===========================================================================
   // 1. MONITOR DETECTION

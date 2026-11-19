@@ -7,6 +7,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
+import { resolveApiUrl } from '../utils/apiUrl';
 import {
   Check,
   Lock,
@@ -106,7 +107,7 @@ export const LanModal: React.FC<LanModalProps> = ({
     try {
       const localCfg = getLocalListLanCfg(targetListId);
       if (syncLocalToServer && localCfg) {
-        await fetch('/api/lan/pin', {
+        await fetch(resolveApiUrl('/api/lan/pin'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -117,7 +118,7 @@ export const LanModal: React.FC<LanModalProps> = ({
         }).catch(() => {});
       }
 
-      const res = await fetch(`/api/lan/info?listId=${encodeURIComponent(targetListId)}`);
+      const res = await fetch(resolveApiUrl(`/api/lan/info?listId=${encodeURIComponent(targetListId)}`));
       if (res.ok) {
         const data: LanInfoResponse = await res.json();
         setLanInfo(data);
@@ -165,18 +166,29 @@ export const LanModal: React.FC<LanModalProps> = ({
   if (!isOpen) return null;
 
   const getBaseOrigin = () => {
-    if (typeof window === 'undefined') return 'http://localhost:3000';
-    const currentOrigin = window.location.origin;
-    const isLocalhost =
-      currentOrigin.includes('localhost') || currentOrigin.includes('127.0.0.1');
+    const activePort =
+      lanInfo?.port ||
+      (typeof window !== 'undefined' && (window as any).electronAPI?.getLanPort?.()) ||
+      3000;
+    const targetIp = selectedIp || lanInfo?.ip || '127.0.0.1';
 
-    if (isLocalhost && selectedIp && selectedIp !== '127.0.0.1') {
-      const port = window.location.port || String(lanInfo?.port || 3000);
-      return `http://${selectedIp}:${port}`;
+    if (typeof window === 'undefined') {
+      return `http://${targetIp}:${activePort}`;
     }
-    if (selectedIp && lanInfo?.ips && lanInfo.ips.includes(selectedIp) && isLocalhost) {
-      return `http://${selectedIp}:${lanInfo.port || 3000}`;
+
+    const currentOrigin = window.location.origin || '';
+    const isFileOrLocal =
+      window.location.protocol === 'file:' ||
+      currentOrigin === 'null' ||
+      currentOrigin.startsWith('file:') ||
+      currentOrigin.includes('localhost') ||
+      currentOrigin.includes('127.0.0.1');
+
+    if (isFileOrLocal) {
+      const port = window.location.port || String(activePort);
+      return `http://${targetIp}:${port}`;
     }
+
     return currentOrigin;
   };
 
@@ -232,7 +244,7 @@ export const LanModal: React.FC<LanModalProps> = ({
     });
 
     try {
-      const res = await fetch('/api/lan/pin', {
+      const res = await fetch(resolveApiUrl('/api/lan/pin'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -14,7 +14,7 @@
     "dev": "tsx server.ts",
     "start": "node server.ts",
     "electron:dev": "electron .",
-    "build": "vite build",
+    "build": "vite build && node scripts/bundle-server.cjs",
     "dist": "node scripts/build-dist.cjs win",
     "dist:win": "node scripts/build-dist.cjs win",
     "dist:mac": "node scripts/build-dist.cjs mac",

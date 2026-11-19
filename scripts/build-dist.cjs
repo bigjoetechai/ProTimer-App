@@ -169,30 +169,37 @@ async function main() {
   cleanLockedUnpackedDirs();
 
   // Step 0: Verify / Bundle Processing.NDI.Lib.x64.dll in ndi/
-  logStep('Step 1/4: Verifying Bundled NDI Runtime (ndi/Processing.NDI.Lib.x64.dll)');
+  logStep('Step 1/5: Verifying Bundled NDI Runtime (ndi/Processing.NDI.Lib.x64.dll)');
   await ensureNdiRuntimeDlls();
 
   // Step 1: Generate Icons
-  logStep('Step 2/4: Generating Windows (.ico) & macOS (.png) Icons');
+  logStep('Step 2/5: Generating Windows (.ico) & macOS (.png) Icons');
   if (!runCommand('node', ['scripts/generate-icons.cjs'])) {
     console.error('Failed to generate application icons.');
     process.exit(1);
   }
 
-  // Step 2: Build Vite Frontend Bundle
-  logStep('Step 3/4: Building ProTimer v2.0.0 Frontend Bundle (vite build)');
+  // Step 2: Build Vite Frontend Bundle (dist/)
+  logStep('Step 3/5: Building ProTimer v2.0.0 Frontend Bundle (vite build)');
   if (!runCommand('npx', ['vite', 'build'])) {
     console.error('Frontend build (vite build) failed.');
     process.exit(1);
   }
 
-  // Step 3: Package with Electron Builder
+  // Step 3: Bundle Express server.ts (with express, dotenv, and server/lanHandler.ts) for Electron main.cjs
+  logStep('Step 4/5: Bundling Express server.ts + dependencies (express, dotenv) into server/bundledServer.cjs');
+  if (!runCommand('node', ['scripts/bundle-server.cjs'])) {
+    console.error('Express server bundling (scripts/bundle-server.cjs) failed.');
+    process.exit(1);
+  }
+
+  // Step 4: Package with Electron Builder
   let builderArgs = ['electron-builder'];
   if (rawTarget === 'win' || rawTarget === 'windows') {
-    logStep('Step 3/3: Packaging Windows 10/11 64-bit Installer & Portable Executable');
+    logStep('Step 5/5: Packaging Windows 10/11 64-bit Installer & Portable Executable');
     builderArgs.push('--win', '--x64');
   } else if (rawTarget === 'mac' || rawTarget === 'macos') {
-    logStep('Step 3/3: Packaging macOS Application Bundle (x64 & Apple Silicon arm64)');
+    logStep('Step 5/5: Packaging macOS Application Bundle (x64 & Apple Silicon arm64)');
     if (process.platform === 'darwin') {
       builderArgs.push('--mac', '--x64', '--arm64');
     } else {
@@ -204,7 +211,7 @@ async function main() {
       builderArgs.push('--mac', 'zip', '--x64', '--arm64');
     }
   } else if (rawTarget === 'all') {
-    logStep('Step 3/3: Packaging Windows & macOS Deliverables');
+    logStep('Step 5/5: Packaging Windows & macOS Deliverables');
     if (process.platform === 'darwin') {
       builderArgs.push('--win', '--mac', '--x64', '--arm64');
     } else {

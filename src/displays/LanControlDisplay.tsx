@@ -12,6 +12,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useDisplaySync } from '../hooks/useDisplaySync';
+import { resolveApiUrl } from '../utils/apiUrl';
 import {
   getTargetElements,
   renderTimeWithColonOffset,
@@ -72,7 +73,7 @@ export const LanControlDisplay: React.FC = () => {
     const checkInitialAccess = async () => {
       try {
         const infoRes = await fetch(
-          `/api/lan/info${pinnedListId ? `?listId=${encodeURIComponent(pinnedListId)}` : ''}`
+          resolveApiUrl(`/api/lan/info${pinnedListId ? `?listId=${encodeURIComponent(pinnedListId)}` : ''}`)
         );
         if (infoRes.ok) {
           const infoData = await infoRes.json();
@@ -101,7 +102,7 @@ export const LanControlDisplay: React.FC = () => {
     setIsVerifying(true);
     setPinError(null);
     try {
-      const res = await fetch('/api/lan/verify-pin', {
+      const res = await fetch(resolveApiUrl('/api/lan/verify-pin'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

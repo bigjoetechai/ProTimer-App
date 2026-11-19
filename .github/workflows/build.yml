@@ -11,26 +11,35 @@ permissions:
 jobs:
   build-windows:
     runs-on: windows-latest
-    env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-            - uses: actions/checkout@v4
-            - uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
-            - run: npm install --legacy-peer-deps
-            - run: npm run dist:win
+      - run: npm install --legacy-peer-deps
+      - run: npm run build
+      - run: npx electron-builder --win
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ProTimer-Windows
+          path: release/*.exe
 
   build-mac:
     runs-on: macos-latest
-    env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-            - uses: actions/checkout@v4
-            - uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
-            - run: npm install --legacy-peer-deps
-            - run: npm run dist:mac
+      - run: npm install --legacy-peer-deps
+      - run: npm run build
+      - run: npx electron-builder --mac
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ProTimer-Mac
+          path: release/*
+

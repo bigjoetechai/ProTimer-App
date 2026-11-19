@@ -5,12 +5,41 @@
  */
 
 import os from 'os';
+import path from 'path';
 import crypto from 'crypto';
 import { createRequire } from 'module';
 import type { IncomingMessage, ServerResponse } from 'http';
 
-const requireCjs = createRequire(import.meta.url);
+const requireCjs =
+  typeof require === 'function'
+    ? require
+    : createRequire(path.join(process.cwd(), 'server', 'lanHandler.ts'));
 const { ndiNativeBridge } = requireCjs('./ndiNativeBridge.cjs');
+
+let activeServerPort = 3000;
+
+export function setActiveLanPort(port: number): void {
+  if (typeof port === 'number' && port > 0) {
+    activeServerPort = port;
+  }
+}
+
+export function getActiveLanPort(): number {
+  return activeServerPort;
+}
+
+export type NativeDataUrlDecoder = (
+  dataUrl: string,
+  targetSourceName: string | null,
+  frameRate: number,
+  alphaChannel: boolean
+) => void;
+
+let electronNativeDecoder: NativeDataUrlDecoder | null = null;
+
+export function registerElectronNativeDecoder(fn: NativeDataUrlDecoder | null): void {
+  electronNativeDecoder = fn;
+}
 
 export interface NdiNetworkStreamConfig {
   active: boolean;
@@ -276,7 +305,7 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
     sendJson(200, {
       ip: primaryIp,
       ips,
-      port: 3000,
+      port: activeServerPort,
       listId: requestedListId,
       pin: listConfig.pin,
       pinRequired: listConfig.pinRequired,
@@ -540,13 +569,13 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
     sendJson(200, {
       ...state.ndiStream,
       ips,
-      port: 3000,
+      port: activeServerPort,
       receiversCount: ndiStreamClients.size + nativeReceivers,
       nativeNdi: nativeDiagnostics,
       captureUrls: {
-        browserSourceUrl: `http://${primaryIp}:3000/?display=ndi`,
-        mjpegStreamUrl: `http://${primaryIp}:3000/api/lan/ndi/mjpeg`,
-        liveFrameUrl: `http://${primaryIp}:3000/api/lan/ndi/frame.png`,
+        browserSourceUrl: `http://${primaryIp}:${activeServerPort}/?display=ndi`,
+        mjpegStreamUrl: `http://${primaryIp}:${activeServerPort}/api/lan/ndi/mjpeg`,
+        liveFrameUrl: `http://${primaryIp}:${activeServerPort}/api/lan/ndi/frame.png`,
       },
     });
     return true;
@@ -639,28 +668,56 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
   // 11. POST /api/lan/ndi/frame (Master pushes rendered NDI video frame for network capture)
   if (pathname === '/api/lan/ndi/frame' && method === 'POST') {
     const body = await readBody();
+    const primarySourceName =
+      (typeof body.sourceName === 'string' && body.sourceName.trim()) ||
+      state.ndiStream.sourceName;
+    const sentSourcesInBatch = new Set<string>();
+
     if (typeof body.frameDataUrl === 'string' && body.frameDataUrl.startsWith('data:image/')) {
       state.latestNdiFrameDataUrl = body.frameDataUrl;
       state.ndiStream.lastFrameAt = Date.now();
       state.ndiStream.frameCount += 1;
       pushFrameToNdiClients(body.frameDataUrl);
+      if (electronNativeDecoder && primarySourceName) {
+        electronNativeDecoder(
+          body.frameDataUrl,
+          primarySourceName,
+          state.ndiStream.frameRate,
+          state.ndiStream.alphaChannel
+        );
+        sentSourcesInBatch.add(primarySourceName);
+      }
     }
     if (body.perListFrames && typeof body.perListFrames === 'object') {
       for (const [lid, entry] of Object.entries(body.perListFrames as Record<string, any>)) {
+        const listSourceName =
+          (entry && typeof entry.sourceName === 'string' && entry.sourceName.trim()) ||
+          state.ndiStream.sourceNamesByList?.[lid] ||
+          `ProTimer (${lid})`;
         if (entry && typeof entry.frameDataUrl === 'string') {
           state.latestNdiFramesByList[lid] = {
-            sourceName: entry.sourceName || `ProTimer (${lid})`,
+            sourceName: listSourceName,
             frameDataUrl: entry.frameDataUrl,
           };
           if (!state.latestNdiFrameDataUrl) {
             state.latestNdiFrameDataUrl = entry.frameDataUrl;
+          }
+          if (electronNativeDecoder && listSourceName && !sentSourcesInBatch.has(listSourceName)) {
+            electronNativeDecoder(
+              entry.frameDataUrl,
+              listSourceName,
+              state.ndiStream.frameRate,
+              state.ndiStream.alphaChannel
+            );
+            sentSourcesInBatch.add(listSourceName);
           }
         }
         if (
           entry &&
           typeof entry.rawRgbaBase64 === 'string' &&
           typeof body.width === 'number' &&
-          typeof body.height === 'number'
+          typeof body.height === 'number' &&
+          !sentSourcesInBatch.has(listSourceName)
         ) {
           try {
             const rawBuf = Buffer.from(entry.rawRgbaBase64, 'base64');
@@ -671,8 +728,9 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
               'RGBA',
               state.ndiStream.frameRate,
               state.ndiStream.alphaChannel,
-              entry.sourceName || null
+              listSourceName
             );
+            sentSourcesInBatch.add(listSourceName);
           } catch {
             // Ignore raw buffer decode error
           }
@@ -682,7 +740,9 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
     if (
       typeof body.rawRgbaBase64 === 'string' &&
       typeof body.width === 'number' &&
-      typeof body.height === 'number'
+      typeof body.height === 'number' &&
+      primarySourceName &&
+      !sentSourcesInBatch.has(primarySourceName)
     ) {
       try {
         const rawBuf = Buffer.from(body.rawRgbaBase64, 'base64');
@@ -693,7 +753,7 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
           'RGBA',
           state.ndiStream.frameRate,
           state.ndiStream.alphaChannel,
-          typeof body.sourceName === 'string' ? body.sourceName : null
+          primarySourceName
         );
       } catch {
         // Ignore raw buffer decode error

@@ -17,6 +17,8 @@ export class CrossWindowBus {
   private channel: BroadcastChannel | null = null;
   private listeners: Map<string, Set<BroadcastListener>> = new Map();
   private sourceId: string;
+  private unsubscribeIpc: (() => void) | null = null;
+  private recentMessageIds: Set<string> = new Set();
 
   constructor(channelName: string = 'protimer_sync_v1') {
     this.channelName = channelName;
@@ -24,22 +26,46 @@ export class CrossWindowBus {
 
     const hasWindow = typeof window !== 'undefined';
     if (hasWindow && 'BroadcastChannel' in window) {
-      this.channel = new BroadcastChannel(this.channelName);
-      this.channel.onmessage = (event: MessageEvent<BroadcastEnvelope>) => {
-        this.dispatch(event.data);
-      };
-    } else if (hasWindow) {
-      window.addEventListener('storage', this.handleStorageEvent);
+      try {
+        this.channel = new BroadcastChannel(this.channelName);
+        this.channel.onmessage = (event: MessageEvent<BroadcastEnvelope>) => {
+          this.handleIncoming(event.data);
+        };
+      } catch {
+        this.channel = null;
+      }
     }
+    if (hasWindow) {
+      window.addEventListener('storage', this.handleStorageEvent);
+      const electronApi = (window as any).electronAPI;
+      if (electronApi && typeof electronApi.onBusMessage === 'function') {
+        this.unsubscribeIpc = electronApi.onBusMessage((envelope: any) => {
+          if (envelope && (!envelope.channelName || envelope.channelName === this.channelName)) {
+            this.handleIncoming(envelope);
+          }
+        });
+      }
+    }
+  }
+
+  private handleIncoming(envelope: BroadcastEnvelope & { msgId?: string }) {
+    if (!envelope || envelope.sourceId === this.sourceId) return;
+    if (envelope.msgId) {
+      if (this.recentMessageIds.has(envelope.msgId)) return;
+      this.recentMessageIds.add(envelope.msgId);
+      if (this.recentMessageIds.size > 200) {
+        const first = this.recentMessageIds.values().next().value;
+        if (first) this.recentMessageIds.delete(first);
+      }
+    }
+    this.dispatch(envelope);
   }
 
   private handleStorageEvent = (e: StorageEvent) => {
     if (e.key === `__bus_${this.channelName}` && e.newValue) {
       try {
-        const envelope = JSON.parse(e.newValue) as BroadcastEnvelope;
-        if (envelope.sourceId !== this.sourceId) {
-          this.dispatch(envelope);
-        }
+        const envelope = JSON.parse(e.newValue) as BroadcastEnvelope & { msgId?: string };
+        this.handleIncoming(envelope);
       } catch {
         // ignore malformed storage message
       }
@@ -47,20 +73,39 @@ export class CrossWindowBus {
   };
 
   public post<T>(type: string, payload: T): void {
-    const envelope: BroadcastEnvelope<T> = {
+    const envelope: BroadcastEnvelope<T> & { channelName?: string; msgId?: string } = {
       type,
       payload,
       sourceId: this.sourceId,
       timestamp: Date.now(),
+      channelName: this.channelName,
+      msgId: `${this.sourceId}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     };
 
     if (this.channel) {
-      this.channel.postMessage(envelope);
-    } else if (typeof window !== 'undefined') {
       try {
-        localStorage.setItem(`__bus_${this.channelName}`, JSON.stringify(envelope));
+        this.channel.postMessage(envelope);
       } catch {
-        // storage quota / disabled
+        // Ignore BroadcastChannel error on file://
+      }
+    }
+
+    if (typeof window !== 'undefined') {
+      const electronApi = (window as any).electronAPI;
+      if (electronApi && typeof electronApi.postBusMessage === 'function') {
+        try {
+          electronApi.postBusMessage(envelope);
+        } catch {
+          // Ignore IPC serialization warning
+        }
+      }
+
+      if (!this.channel) {
+        try {
+          localStorage.setItem(`__bus_${this.channelName}`, JSON.stringify(envelope));
+        } catch {
+          // storage quota / disabled
+        }
       }
     }
   }
@@ -110,9 +155,14 @@ export class CrossWindowBus {
       this.channel.close();
       this.channel = null;
     }
+    if (this.unsubscribeIpc) {
+      this.unsubscribeIpc();
+      this.unsubscribeIpc = null;
+    }
     if (typeof window !== 'undefined') {
       window.removeEventListener('storage', this.handleStorageEvent);
     }
     this.listeners.clear();
   }
 }
+

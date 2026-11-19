@@ -216,7 +216,7 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
             }`}
           >
             <img
-              src="/assets/aistudio/icon_ec9a41ea.png"
+              src="./assets/aistudio/icon_ec9a41ea.png"
               onError={(e) => {
                 const target = e.currentTarget;
                 if (!target.src.endsWith('/icon.png')) {
@@ -948,7 +948,7 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
             >
               <div className="flex items-center gap-2 font-bold text-sm">
                 <img
-                  src="/assets/aistudio/icon_ec9a41ea.png"
+                  src="./assets/aistudio/icon_ec9a41ea.png"
                   onError={(e) => {
                     const target = e.currentTarget;
                     if (!target.src.endsWith('/icon.png')) {

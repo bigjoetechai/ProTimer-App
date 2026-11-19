@@ -8,6 +8,7 @@
 import React, { useState, useEffect } from 'react';
 import { MainConsolePage } from '../pages/MainConsolePage';
 import { displaySyncService } from '../services/displaySyncService';
+import { resolveApiUrl } from '../utils/apiUrl';
 import { Lock, Monitor, AlertCircle } from 'lucide-react';
 
 export const LanDesktopDisplay: React.FC = () => {
@@ -34,7 +35,7 @@ export const LanDesktopDisplay: React.FC = () => {
         const infoUrl = pinnedListId
           ? `/api/lan/info?listId=${encodeURIComponent(pinnedListId)}`
           : '/api/lan/info';
-        const res = await fetch(infoUrl);
+        const res = await fetch(resolveApiUrl(infoUrl));
         if (res.ok) {
           const data = await res.json();
           const reqPin = data.pinRequired !== false;
@@ -48,7 +49,7 @@ export const LanDesktopDisplay: React.FC = () => {
             sessionStorage.getItem(pinStorageKey) ||
             sessionStorage.getItem('protimer_lan_pin');
           if (savedPin) {
-            const verifyRes = await fetch('/api/lan/verify-pin', {
+            const verifyRes = await fetch(resolveApiUrl('/api/lan/verify-pin'), {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
@@ -93,7 +94,7 @@ export const LanDesktopDisplay: React.FC = () => {
     e.preventDefault();
     setPinError(null);
     try {
-      const res = await fetch('/api/lan/verify-pin', {
+      const res = await fetch(resolveApiUrl('/api/lan/verify-pin'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -138,7 +139,7 @@ export const LanDesktopDisplay: React.FC = () => {
             <div>
               <div className="flex items-center gap-2">
                 <img
-                  src="/assets/aistudio/icon_ec9a41ea.png"
+                  src="./assets/aistudio/icon_ec9a41ea.png"
                   alt="ProTimer"
                   className="w-4 h-4 object-contain"
                 />

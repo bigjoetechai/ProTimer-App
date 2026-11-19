@@ -19,6 +19,7 @@ import {
   resolveLogoImageForList,
 } from '../types';
 import { storageService } from './storageService';
+import { resolveApiUrl } from '../utils/apiUrl';
 import { displaySyncService } from './displaySyncService';
 import { timerManagerService } from './timerManager';
 import {
@@ -188,7 +189,7 @@ class NdiStreamService {
   private async fetchNetworkInfo(): Promise<void> {
     if (typeof window === 'undefined') return;
     try {
-      const res = await fetch('/api/lan/ndi/status');
+      const res = await fetch(resolveApiUrl('/api/lan/ndi/status'));
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data.ips)) this.ips = data.ips;
@@ -440,7 +441,7 @@ class NdiStreamService {
     this.lastSyncedConfigSig = sig;
 
     try {
-      const res = await fetch('/api/lan/ndi/config', {
+      const res = await fetch(resolveApiUrl('/api/lan/ndi/config'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: sig,
@@ -927,7 +928,7 @@ class NdiStreamService {
   ): Promise<void> {
     this.isSendingFrame = true;
     try {
-      const res = await fetch('/api/lan/ndi/frame', {
+      const res = await fetch(resolveApiUrl('/api/lan/ndi/frame'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
