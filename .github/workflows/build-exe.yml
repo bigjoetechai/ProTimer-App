@@ -1,0 +1,52 @@
+name: Build ProTimer Windows .EXE & Populate build/ Folder
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Generate build/ Icons & Prepare NDI Runtime
+        run: node scripts/prepare-build-assets.cjs
+
+      - name: Commit build/ Folder Icons to GitHub Repository (if missing)
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f build/icon.ico build/icon.png build/icon_ec9a41ea.png build/installerIcon.ico build/uninstallerIcon.ico build/installerHeaderIcon.ico
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: add build/ folder icons for Windows .exe packaging [skip ci]"
+            git push || true
+          fi
+
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Package Windows 64-bit Installer (ProTimer-Setup.exe) & Portable (ProTimer-Portable.exe)
+        run: npm run dist:win
+
+      - name: Upload Windows .EXE Deliverables
+        uses: actions/upload-artifact@v4
+        with:
+          name: ProTimer-Windows-v2.0.0
+          path: |
+            release/ProTimer-Setup.exe
+            release/ProTimer-Portable.exe

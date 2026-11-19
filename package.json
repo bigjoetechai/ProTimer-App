@@ -8,6 +8,9 @@
   "description": "ProTimer - Professional Multi-Timer & Stage Production Management",
   "main": "electron/main.cjs",
   "scripts": {
+    "postinstall": "node scripts/prepare-build-assets.cjs",
+    "generate:icons": "node scripts/generate-icons.cjs",
+    "prebuild": "node scripts/generate-icons.cjs",
     "dev": "tsx server.ts",
     "start": "node server.ts",
     "electron:dev": "electron .",
@@ -26,6 +29,7 @@
     "@types/qrcode": ">=1.5.0",
     "@vitejs/plugin-react": ">=4.3.0",
     "dotenv": ">=16.4.0",
+    "electron-updater": "^6.8.11",
     "express": ">=4.19.0",
     "idb": ">=8.0.0",
     "koffi": ">=2.9.0",

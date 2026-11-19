@@ -224,12 +224,17 @@ function createMultiResIco(entries) {
   ]);
 }
 
-const sourceIconPath = path.join(__dirname, '../public/assets/aistudio/ProTimer_icon_ec9a41ea.png');
+const primaryIconPath = path.join(__dirname, '../public/assets/aistudio/icon_ec9a41ea.png');
+const fallbackIconPath = path.join(__dirname, '../public/assets/aistudio/ProTimer_icon_ec9a41ea.png');
+const sourceIconPath = fs.existsSync(primaryIconPath) ? primaryIconPath : fallbackIconPath;
+
 const buildDir = path.join(__dirname, '../build');
+const resourcesDir = path.join(__dirname, '../resources');
 const publicDir = path.join(__dirname, '../public');
 
-if (!fs.existsSync(buildDir)) fs.mkdirSync(buildDir, { recursive: true });
-if (!fs.existsSync(publicDir)) fs.mkdirSync(publicDir, { recursive: true });
+for (const dir of [buildDir, resourcesDir, publicDir]) {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
 
 const sourcePngBuffer = fs.readFileSync(sourceIconPath);
 const decoded = decodeRgbaPng(sourcePngBuffer);
@@ -242,11 +247,21 @@ const icoEntries = sizes.map((size) => ({
 
 const icoBuffer = createMultiResIco(icoEntries);
 
-// Save original 512x512 PNG for build/icon.png and public/icon.png, and multi-res ICO for .ico
-fs.writeFileSync(path.join(buildDir, 'icon.png'), sourcePngBuffer);
+// Save original 512x512 PNG and multi-res ICOs into build/, resources/, and public/
+for (const dir of [buildDir, resourcesDir]) {
+  fs.writeFileSync(path.join(dir, 'icon.png'), sourcePngBuffer);
+  fs.writeFileSync(path.join(dir, 'icon_ec9a41ea.png'), sourcePngBuffer);
+  fs.writeFileSync(path.join(dir, 'icon.ico'), icoBuffer);
+  fs.writeFileSync(path.join(dir, 'installerIcon.ico'), icoBuffer);
+  fs.writeFileSync(path.join(dir, 'uninstallerIcon.ico'), icoBuffer);
+  fs.writeFileSync(path.join(dir, 'installerHeaderIcon.ico'), icoBuffer);
+}
+
 fs.writeFileSync(path.join(publicDir, 'icon.png'), sourcePngBuffer);
-fs.writeFileSync(path.join(buildDir, 'icon.ico'), icoBuffer);
 fs.writeFileSync(path.join(publicDir, 'icon.ico'), icoBuffer);
 
-console.log('Generated ProTimer icons from ProTimer_icon_ec9a41ea.png into build/ and public/ successfully.');
+console.log('Generated ProTimer icons from icon_ec9a41ea.png into build/, resources/, and public/ successfully.');
+
+
+
 

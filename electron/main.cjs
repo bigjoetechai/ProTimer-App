@@ -28,6 +28,7 @@
  */
 
 const { app, BrowserWindow, screen, ipcMain, session, nativeImage } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -865,8 +866,10 @@ function getAppIconPath() {
   const candidates = [
     path.join(__dirname, '../build/icon.ico'),
     path.join(__dirname, '../build/icon.png'),
+    path.join(__dirname, '../build/icon_ec9a41ea.png'),
     path.join(__dirname, '../public/icon.ico'),
     path.join(__dirname, '../public/icon.png'),
+    path.join(__dirname, '../public/assets/aistudio/icon_ec9a41ea.png'),
     path.join(__dirname, '../public/assets/aistudio/ProTimer_icon_ec9a41ea.png'),
   ];
   for (const candidate of candidates) {
@@ -2220,6 +2223,28 @@ app.whenReady().then(async () => {
 
   await startEmbeddedProductionServer();
   createMainWindow();
+
+  // Check for updates via electron-updater (bigjoetechai/ProTimer-App) on app ready and every 1 hour
+  try {
+    autoUpdater.autoDownload = true;
+    autoUpdater.autoInstallOnAppQuit = true;
+    autoUpdater.on('error', (err) => {
+      console.warn('[AutoUpdater] Update check warning:', err && err.message ? err.message : err);
+    });
+
+    autoUpdater.checkForUpdatesAndNotify().catch((err) => {
+      console.warn('[AutoUpdater] Initial checkForUpdatesAndNotify skipped:', err && err.message ? err.message : err);
+    });
+
+    const ONE_HOUR_MS = 60 * 60 * 1000;
+    setInterval(() => {
+      autoUpdater.checkForUpdatesAndNotify().catch((err) => {
+        console.warn('[AutoUpdater] Hourly checkForUpdatesAndNotify skipped:', err && err.message ? err.message : err);
+      });
+    }, ONE_HOUR_MS);
+  } catch (err) {
+    console.warn('[AutoUpdater] Initialization warning:', err && err.message ? err.message : err);
+  }
 
   screen.on('display-added', () => {
     notifyDisplaysChanged();

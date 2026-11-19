@@ -138,7 +138,7 @@ export const LanDesktopDisplay: React.FC = () => {
             <div>
               <div className="flex items-center gap-2">
                 <img
-                  src="/assets/aistudio/ProTimer_icon_ec9a41ea.png"
+                  src="/assets/aistudio/icon_ec9a41ea.png"
                   alt="ProTimer"
                   className="w-4 h-4 object-contain"
                 />
