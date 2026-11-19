@@ -1,4 +1,4 @@
-name: Build Windows EXE
+name: Build EXE and Mac
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  build-windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -14,7 +14,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
 
       - run: npm install --legacy-peer-deps
       - run: npm run dist:win
@@ -23,3 +22,20 @@ jobs:
         with:
           name: ProTimer-Windows
           path: dist/*.exe
+
+  build-mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm install --legacy-peer-deps
+      - run: npm run dist:mac
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ProTimer-Mac
+          path: dist/*.dmg
