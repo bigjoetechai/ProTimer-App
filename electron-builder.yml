@@ -1,0 +1,106 @@
+appId: com.protimer.desktop
+productName: ProTimer
+executableName: ProTimer
+copyright: Copyright © 2026 Bigjoe Technology
+
+npmRebuild: false
+buildDependenciesFromSource: false
+beforePack: scripts/prepare-build-assets.cjs
+
+directories:
+  buildResources: build
+  output: release
+
+files:
+  - dist/**/*
+  - electron/**/*
+  - server.ts
+  - server/**/*
+  - build/icon.ico
+  - build/icon.png
+  - package.json
+  - node_modules/**/*
+  - "!node_modules/electron/**/*"
+  - "!node_modules/electron-builder/**/*"
+  - "!node_modules/app-builder-bin/**/*"
+  - "!node_modules/typescript/**/*"
+  - "!node_modules/vite/**/*"
+  - "!node_modules/@vitejs/**/*"
+  - "!node_modules/@tailwindcss/**/*"
+  - "!node_modules/tailwindcss/**/*"
+  - "!node_modules/esbuild/**/*"
+  - "!node_modules/@esbuild/**/*"
+
+publish:
+  - provider: github
+    owner: bigjoetechai
+    repo: ProTimer-App
+
+asar: true
+asarUnpack:
+  - dist/**/*
+  - node_modules/koffi/**/*
+  - server/**/*
+  - server.ts
+
+extraResources:
+  - from: ndi
+    to: ndi
+    filter:
+      - "**/*"
+
+compression: normal
+
+win:
+  icon: build/icon.ico
+  executableName: ProTimer
+  signAndEditExecutable: true
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeaderIcon: build/icon.ico
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: ProTimer
+  runAfterFinish: true
+  deleteAppDataOnUninstall: false
+  artifactName: ProTimer-Setup.exe
+  uninstallDisplayName: ProTimer
+
+portable:
+  artifactName: ProTimer-Portable.exe
+
+mac:
+  icon: build/icon.png
+  category: public.app-category.video
+  identity: null
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  artifactName: ProTimer-Mac-${arch}.${ext}
+  target:
+    - target: zip
+      arch:
+        - x64
+        - arm64
+
+linux:
+  icon: build/icon.png
+  category: AudioVideo
+  artifactName: ProTimer-Linux-${arch}.${ext}
+  target:
+    - target: AppImage
+      arch:
+        - x64
+

@@ -1,0 +1,343 @@
+/**
+ * Preload script for ProTimer Electron application.
+ * Exposes secure, isolated monitor, window management, and AppData persistence APIs
+ * to the renderer process.
+ * Security: contextIsolation: true, nodeIntegration: false.
+ */
+
+const { contextBridge, ipcRenderer } = require('electron');
+
+let detectedLanPort = 3000;
+for (const arg of process.argv || []) {
+  if (typeof arg === 'string' && arg.startsWith('--protimer-api-port=')) {
+    const parsed = parseInt(arg.split('=')[1], 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      detectedLanPort = parsed;
+    }
+  }
+}
+
+ipcRenderer
+  .invoke('get-app-info')
+  .then((info) => {
+    if (info && typeof info.lanPort === 'number' && info.lanPort > 0) {
+      detectedLanPort = info.lanPort;
+    }
+  })
+  .catch(() => {});
+
+const VALID_DISPLAY_TARGETS = new Set([
+  'presenter',
+  'preview',
+  'multi_preview',
+  'stage',
+  'fullscreen',
+  'multi_fullscreen',
+  'ndi',
+  'lan_control',
+  'lan_display',
+]);
+
+contextBridge.exposeInMainWorld('electronAPI', {
+  isElectron: true,
+  lanPort: detectedLanPort,
+  apiBaseUrl: `http://127.0.0.1:${detectedLanPort}`,
+  getApiBaseUrl: () => `http://127.0.0.1:${detectedLanPort}`,
+  getLanPort: () => detectedLanPort,
+
+  postBusMessage: (envelope) => {
+    if (!envelope || typeof envelope !== 'object') return;
+    ipcRenderer.send('protimer-bus-post', envelope);
+  },
+  onBusMessage: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const handler = (_event, envelope) => callback(envelope);
+    ipcRenderer.on('protimer-bus-message', handler);
+    return () => {
+      ipcRenderer.removeListener('protimer-bus-message', handler);
+    };
+  },
+
+  // ===========================================================================
+  // 1. MONITOR DETECTION
+  // ===========================================================================
+
+  /**
+   * Get all connected physical displays detected by Windows.
+   */
+  getDisplays: () => ipcRenderer.invoke('get-displays'),
+
+  /**
+   * Listen for monitor connection, disconnection, or metric changes.
+   * @param {Function} callback
+   */
+  onDisplaysChanged: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const handler = (_event, displays) => callback(displays);
+    ipcRenderer.on('displays-changed', handler);
+    return () => {
+      ipcRenderer.removeListener('displays-changed', handler);
+    };
+  },
+
+  // ===========================================================================
+  // 2. MODE B: TIMER OUTPUT FULLSCREEN & INDEPENDENT MULTI FULLSCREEN
+  // ===========================================================================
+
+  /**
+   * Open or move dedicated fullscreen output window to target monitor for a specific list tab.
+   * @param {Object} options
+   * @param {string|number} options.monitorId
+   * @param {string} [options.displayTarget='fullscreen']
+   * @param {string} [options.listId]
+   */
+  openFullscreenOutput: (options = {}) => {
+    const monitorId =
+      options && (typeof options.monitorId === 'string' || typeof options.monitorId === 'number')
+        ? options.monitorId
+        : 'Auto';
+    const displayTarget =
+      options && typeof options.displayTarget === 'string' && VALID_DISPLAY_TARGETS.has(options.displayTarget)
+        ? options.displayTarget
+        : 'fullscreen';
+    const listId =
+      options && typeof options.listId === 'string' && options.listId.trim()
+        ? options.listId.trim()
+        : undefined;
+    return ipcRenderer.invoke('open-fullscreen-output', { monitorId, displayTarget, listId });
+  },
+
+  /**
+   * Close the fullscreen output window (for a specific list tab or all) without affecting running timers.
+   * @param {string} [listId]
+   */
+  closeFullscreenOutput: (listId) => {
+    const safeListId = typeof listId === 'string' && listId.trim() ? listId.trim() : undefined;
+    return ipcRenderer.invoke('close-fullscreen-output', safeListId);
+  },
+
+  /**
+   * Check if fullscreen output window is currently active (optionally for a specific list tab).
+   * @param {string} [listId]
+   */
+  isFullscreenOutputActive: (listId) => {
+    const safeListId = typeof listId === 'string' && listId.trim() ? listId.trim() : undefined;
+    return ipcRenderer.invoke('is-fullscreen-output-active', safeListId);
+  },
+
+  /**
+   * Get all list IDs that currently have an active fullscreen output window.
+   */
+  getActiveFullscreenLists: () => ipcRenderer.invoke('get-active-fullscreen-lists'),
+
+  /**
+   * Listen for when a fullscreen output window is closed (e.g. by Escape key or user).
+   * @param {Function} callback
+   */
+  onOutputClosed: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const handler = (_event, info) => callback(info);
+    ipcRenderer.on('output-closed', handler);
+    return () => {
+      ipcRenderer.removeListener('output-closed', handler);
+    };
+  },
+
+  /**
+   * Open independent Multi Fullscreen output window showing active cues across all list tabs.
+   */
+  openMultiFullscreenOutput: (options = {}) => {
+    const monitorId =
+      options && (typeof options.monitorId === 'string' || typeof options.monitorId === 'number')
+        ? options.monitorId
+        : 'Auto';
+    return ipcRenderer.invoke('open-multi-fullscreen-output', { monitorId });
+  },
+
+  /**
+   * Close the independent Multi Fullscreen output window.
+   */
+  closeMultiFullscreenOutput: () => ipcRenderer.invoke('close-multi-fullscreen-output'),
+
+  /**
+   * Check if the Multi Fullscreen output window is currently active.
+   */
+  isMultiFullscreenOutputActive: () => ipcRenderer.invoke('is-multi-fullscreen-output-active'),
+
+  /**
+   * Listen for when the Multi Fullscreen output window is closed.
+   */
+  onMultiOutputClosed: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const handler = () => callback();
+    ipcRenderer.on('multi-output-closed', handler);
+    return () => {
+      ipcRenderer.removeListener('multi-output-closed', handler);
+    };
+  },
+
+  /**
+   * Singleton Frameless Always-On-Top Resizable Preview & Presenter Windows.
+   */
+  togglePreviewWindow: () => ipcRenderer.invoke('toggle-preview-window'),
+  openPreviewWindow: () => ipcRenderer.invoke('open-preview-window'),
+  closePreviewWindow: () => ipcRenderer.invoke('close-preview-window'),
+  isPreviewWindowActive: () => ipcRenderer.invoke('is-preview-window-active'),
+  onPreviewStateChanged: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const handler = (_event, isOpen) => callback(Boolean(isOpen));
+    ipcRenderer.on('preview-window-state', handler);
+    return () => {
+      ipcRenderer.removeListener('preview-window-state', handler);
+    };
+  },
+
+  toggleMultiPreviewWindow: () => ipcRenderer.invoke('toggle-multi-preview-window'),
+  openMultiPreviewWindow: () => ipcRenderer.invoke('open-multi-preview-window'),
+  closeMultiPreviewWindow: () => ipcRenderer.invoke('close-multi-preview-window'),
+  isMultiPreviewWindowActive: () => ipcRenderer.invoke('is-multi-preview-window-active'),
+  onMultiPreviewStateChanged: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const handler = (_event, isOpen) => callback(Boolean(isOpen));
+    ipcRenderer.on('multi-preview-window-state', handler);
+    return () => {
+      ipcRenderer.removeListener('multi-preview-window-state', handler);
+    };
+  },
+
+  togglePresenterWindow: () => ipcRenderer.invoke('toggle-presenter-window'),
+  openPresenterWindow: () => ipcRenderer.invoke('open-presenter-window'),
+  closePresenterWindow: () => ipcRenderer.invoke('close-presenter-window'),
+  isPresenterWindowActive: () => ipcRenderer.invoke('is-presenter-window-active'),
+  onPresenterStateChanged: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const handler = (_event, isOpen) => callback(Boolean(isOpen));
+    ipcRenderer.on('presenter-window-state', handler);
+    return () => {
+      ipcRenderer.removeListener('presenter-window-state', handler);
+    };
+  },
+
+  getCurrentWindowBounds: () => ipcRenderer.invoke('current-window-get-bounds'),
+  setCurrentWindowBounds: (bounds) => {
+    if (!bounds || typeof bounds !== 'object') return Promise.resolve(false);
+    return ipcRenderer.invoke('current-window-set-bounds', bounds);
+  },
+
+  // ===========================================================================
+  // 3. MODE A: APPLICATION FULLSCREEN & WINDOW SIZE MANAGEMENT
+  // ===========================================================================
+
+  /**
+   * Minimize main application window to taskbar.
+   */
+  minimizeWindow: () => ipcRenderer.invoke('window-minimize'),
+
+  /**
+   * Maximize main application window to fill desktop workspace.
+   */
+  maximizeWindow: () => ipcRenderer.invoke('window-maximize'),
+
+  /**
+   * Restore main application window from maximized state.
+   */
+  restoreWindow: () => ipcRenderer.invoke('window-restore'),
+
+  /**
+   * Toggle maximize / restore.
+   */
+  toggleMaximize: () => ipcRenderer.invoke('window-toggle-maximize'),
+
+  /**
+   * Check if main window is currently maximized.
+   */
+  isMaximized: () => ipcRenderer.invoke('window-is-maximized'),
+
+  /**
+   * Close main application window.
+   */
+  closeWindow: () => ipcRenderer.invoke('window-close'),
+
+  /**
+   * Toggle Application Fullscreen (Mode A) on current or target monitor.
+   * @param {string|number} [monitorId]
+   */
+  toggleAppFullscreen: (monitorId) => {
+    const safeId =
+      typeof monitorId === 'string' || typeof monitorId === 'number' ? monitorId : undefined;
+    return ipcRenderer.invoke('toggle-app-fullscreen', safeId);
+  },
+
+  /**
+   * Check if Application Fullscreen (Mode A) is currently active.
+   */
+  isAppFullscreen: () => ipcRenderer.invoke('is-app-fullscreen'),
+
+  /**
+   * Reset application window dimensions back to default 1200 × 800 pixels.
+   */
+  resetWindowSize: () => ipcRenderer.invoke('window-reset-size'),
+
+  /**
+   * Get current window bounds (width, height, x, y).
+   */
+  getWindowBounds: () => ipcRenderer.invoke('window-get-bounds'),
+
+  /**
+   * Listen for window state changes (maximized, fullscreen, dimensions).
+   * @param {Function} callback
+   */
+  onWindowStateChanged: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const handler = (_event, state) => callback(state);
+    ipcRenderer.on('window-state-changed', handler);
+    return () => {
+      ipcRenderer.removeListener('window-state-changed', handler);
+    };
+  },
+
+  // ===========================================================================
+  // 4. PERSISTENT USER DATA (%APPDATA%\ProTimer) & APP METADATA
+  // ===========================================================================
+
+  /**
+   * Read saved user data from Windows AppData (%APPDATA%\ProTimer\protimer-user-data.json).
+   */
+  readUserData: () => ipcRenderer.invoke('user-data-read'),
+
+  /**
+   * Write user data to Windows AppData with automatic backup rotation.
+   * @param {Object} data
+   */
+  writeUserData: (data) => {
+    if (!data || typeof data !== 'object') return Promise.resolve(false);
+    return ipcRenderer.invoke('user-data-write', data);
+  },
+
+  /**
+   * Retrieve application metadata and runtime paths.
+   */
+  getAppInfo: () => ipcRenderer.invoke('get-app-info'),
+
+  /**
+   * Retrieve all installed system font families on the host OS.
+   */
+  getSystemFonts: () => ipcRenderer.invoke('get-system-fonts'),
+
+  // ===========================================================================
+  // 5. AUTO-UPDATER (GitHub Releases via electron-updater)
+  // ===========================================================================
+
+  checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
+  quitAndInstallUpdate: () => ipcRenderer.invoke('quit-and-install-update'),
+  getUpdateStatus: () => ipcRenderer.invoke('get-update-status'),
+  onUpdateStatus: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const handler = (_event, status) => callback(status);
+    ipcRenderer.on('update-status', handler);
+    return () => {
+      ipcRenderer.removeListener('update-status', handler);
+    };
+  },
+});
+

@@ -1,0 +1,8 @@
+{
+  "name": "Remix CueTimer Pro - Multi-Timer Management",
+  "description": "Professional multi-timer management and stage production timing software for live events, broadcast, and presenter cues.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
