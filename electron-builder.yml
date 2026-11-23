@@ -35,6 +35,7 @@ publish:
   - provider: github
     owner: bigjoetechai
     repo: ProTimer-App
+    releaseType: release
 
 asar: true
 asarUnpack:

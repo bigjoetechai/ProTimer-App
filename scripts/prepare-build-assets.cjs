@@ -128,9 +128,7 @@ function ensureDistAndServerBuilt() {
 }
 
 if (require.main === module) {
-  ensureNdiDll().then(() => {
-    ensureDistAndServerBuilt();
-  });
+  ensureNdiDll();
 }
 
 module.exports = async function beforePack() {

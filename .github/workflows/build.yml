@@ -26,6 +26,20 @@ jobs:
         with:
           node-version: 20
 
+      - name: Determine Release Tag from Git Ref or package.json
+        id: pkg
+        shell: bash
+        run: |
+          PKG_VER=$(node -p "require('./package.json').version")
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            TAG_NAME="${GITHUB_REF#refs/tags/}"
+          else
+            TAG_NAME="v${PKG_VER}"
+          fi
+          echo "version=${PKG_VER}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+          echo "Resolved Release Tag: ${TAG_NAME} (package.json v${PKG_VER})"
+
       - name: Install Dependencies
         run: npm install --legacy-peer-deps
 
@@ -35,26 +49,26 @@ jobs:
       - name: Build Frontend Bundle
         run: npm run build
 
-      - name: Build Windows Installer (without publishing on branch push)
-        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+      - name: Build Windows Installer & Auto-Update Metadata (ProTimer-Setup.exe & latest.yml)
         run: npx electron-builder --win --x64 --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
-      - name: Build & Publish Windows Installer to GitHub Releases (on version tag push)
-        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
-        run: npx electron-builder --win --x64 --publish always
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Verify Generated Setup Files in release/
+        shell: bash
+        run: |
+          ls -lh release/
+          test -f release/ProTimer-Setup.exe
+          test -f release/latest.yml
 
-      - name: Upload Windows Release Assets to GitHub Release
-        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+      - name: Publish Setup Files to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.pkg.outputs.tag }}
+          name: ProTimer ${{ steps.pkg.outputs.tag }}
           draft: false
           prerelease: false
+          generate_release_notes: true
           files: |
             release/ProTimer-Setup.exe
             release/ProTimer-Setup.exe.blockmap
@@ -63,11 +77,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload Windows .EXE Artifacts
+      - name: Upload Windows .EXE Build Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ProTimer-Windows-v2.5.0
+          name: ProTimer-Windows-${{ steps.pkg.outputs.tag }}
           path: |
             release/ProTimer-Setup.exe
+            release/ProTimer-Setup.exe.blockmap
             release/ProTimer-Portable.exe
             release/latest.yml
