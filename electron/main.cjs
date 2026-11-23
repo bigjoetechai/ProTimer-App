@@ -4,7 +4,7 @@
  * Application Identity:
  * - Application Name: ProTimer
  * - Application ID: com.protimer.desktop
- * - Version: 2.5.0
+ * - Version: 2.5.3
  *
  * Implements:
  * 1. Single-Instance Lock & Windows Application User Model ID (`com.protimer.desktop`).
@@ -45,7 +45,7 @@ try {
 const APP_ID = 'com.protimer.desktop';
 const APP_NAME = 'ProTimer';
 const APP_COMPANY = 'Bigjoe Technology';
-const APP_VERSION = '2.5.0';
+const APP_VERSION = '2.5.3';
 
 // Set Windows Application User Model ID for taskbar grouping & notifications
 app.setName(APP_NAME);

@@ -196,6 +196,16 @@ export const MainConsolePage: React.FC = () => {
     [ndiStreamStatus.activeByList]
   );
 
+  const activeFsByListSignature = useMemo(
+    () =>
+      Object.entries(activeFullscreenByList || {})
+        .filter(([, v]) => Boolean(v))
+        .map(([k]) => k)
+        .sort()
+        .join(','),
+    [activeFullscreenByList]
+  );
+
   // Keep NDI source names reconciled ONLY when lists are added, deleted, renamed, or switched
   useEffect(() => {
     ndiStreamService.notifySubscribers();
@@ -204,13 +214,14 @@ export const MainConsolePage: React.FC = () => {
     }
   }, [listsSignature, snapshot.activeListId]);
 
-  // Sync live Fullscreen, Multi Fullscreen, and per-list NDI states to LAN / Remote controllers
+  // Sync live Fullscreen, Multi Fullscreen, and per-list NDI states to LAN / Remote controllers & Presenter display
   useEffect(() => {
     const activeListNdiSourceName =
       ndiStreamStatus.sourceNamesByList?.[snapshot.activeListId] ||
       formatListNdiSourceName(currentList.name, preferences.ndiSourceName);
     displaySyncService.updateOutputStatus({
       isFullscreenActive,
+      activeFullscreenByList: activeFullscreenByList || {},
       isMultiFullscreenActive,
       isNdiActive:
         Boolean(ndiStreamStatus.activeByList?.[snapshot.activeListId]) ||
@@ -222,6 +233,7 @@ export const MainConsolePage: React.FC = () => {
     });
   }, [
     isFullscreenActive,
+    activeFsByListSignature,
     isMultiFullscreenActive,
     ndiStreamStatus.active,
     ndiStreamStatus.multiActive,
@@ -833,6 +845,8 @@ export const MainConsolePage: React.FC = () => {
         <FloatingPresenterWindow
           isOpen={isPresenterPopoutOpen}
           onClose={() => setIsPresenterPopoutOpen(false)}
+          payload={payload}
+          activeFullscreenByList={activeFullscreenByList}
           timeStr={formatSeconds(snapshot.currentSeconds, true, snapshot.isOvertime, preferences)}
           currentSeconds={snapshot.currentSeconds}
           activeListId={snapshot.activeListId}

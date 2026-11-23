@@ -2713,7 +2713,7 @@ class TimerManagerService {
       .filter((t): t is TimerItem => Boolean(t));
 
     return {
-      version: '2.5.0',
+      version: '2.5.3',
       exportedAt: Date.now(),
       type: 'single_list',
       list,
@@ -2923,7 +2923,7 @@ class TimerManagerService {
     const allTimers = Array.from(this.timers.values());
 
     return {
-      version: '2.5.0',
+      version: '2.5.3',
       exportedAt: Date.now(),
       type: 'all_lists',
       activeListId: this.activeListId,

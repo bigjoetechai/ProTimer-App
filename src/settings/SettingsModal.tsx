@@ -952,12 +952,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         // When editing the primary Fullscreen / NDI / Preview tab, also apply the patch
                         // to Presenter, Multitimer, and Web Display (LAN) so changes apply across all displays
                         // unless the user specifically switches to another target tab to customize it.
-                        if (activeSizesTargetTab === 'fullscreen_ndi_preview') {
-                          const otherTargets: SizesPositionTargetTab[] = [
-                            'presenter_window',
-                            'multitimer',
-                            'web_display_lan',
-                          ];
+                        if (
+                          activeSizesTargetTab === 'fullscreen_ndi_preview' ||
+                          activeSizesTargetTab === 'presenter_window'
+                        ) {
+                          const otherTargets: SizesPositionTargetTab[] =
+                            activeSizesTargetTab === 'fullscreen_ndi_preview'
+                              ? ['presenter_window', 'multitimer', 'web_display_lan']
+                              : ['fullscreen_ndi_preview'];
                           for (const t of otherTargets) {
                             const targetMap = {
                               ...DEFAULT_TARGET_ELEMENTS_CONFIG,
@@ -981,7 +983,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         };
 
                         // Sync primary Fullscreen / NDI / Preview sizes with top-level scale preferences
-                        if (activeSizesTargetTab === 'fullscreen_ndi_preview') {
+                        if (
+                          activeSizesTargetTab === 'fullscreen_ndi_preview' ||
+                          activeSizesTargetTab === 'presenter_window'
+                        ) {
                           if (elementId === 'countdown' && patch.sizePercent !== undefined) {
                             nextPrefs.timerFontSizePercent = patch.sizePercent;
                           }
@@ -1023,12 +1028,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           },
                         };
 
-                        if (activeSizesTargetTab === 'fullscreen_ndi_preview') {
-                          const otherTargets: SizesPositionTargetTab[] = [
-                            'presenter_window',
-                            'multitimer',
-                            'web_display_lan',
-                          ];
+                        if (
+                          activeSizesTargetTab === 'fullscreen_ndi_preview' ||
+                          activeSizesTargetTab === 'presenter_window'
+                        ) {
+                          const otherTargets: SizesPositionTargetTab[] =
+                            activeSizesTargetTab === 'fullscreen_ndi_preview'
+                              ? ['presenter_window', 'multitimer', 'web_display_lan']
+                              : ['fullscreen_ndi_preview'];
                           for (const t of otherTargets) {
                             updatedExtrasMap[t] = {
                               ...DEFAULT_TARGET_EXTRAS_CONFIG,
@@ -2811,7 +2818,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <p className="text-[13px]">
                         ProTimer Desktop{' '}
                         <span className={`font-mono font-semibold ${isDark ? 'text-white' : 'text-slate-900'}`}>
-                          v2.5.0
+                          v2.5.3
                         </span>{' '}
                         (64-bit)
                       </p>

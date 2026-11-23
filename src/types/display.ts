@@ -116,6 +116,7 @@ export interface DisplaySyncPayload {
   allTimers?: TimerItem[];
   runLogs?: TimerRunLogEntry[];
   isFullscreenActive?: boolean;
+  activeFullscreenByList?: Record<string, boolean>;
   isMultiFullscreenActive?: boolean;
   isNdiActive?: boolean;
   isNdiMultiActive?: boolean;

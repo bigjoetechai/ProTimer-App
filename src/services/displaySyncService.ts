@@ -28,6 +28,7 @@ export type DisplaySyncListener = (payload: DisplaySyncPayload) => void;
 
 export interface OutputDisplayStatus {
   isFullscreenActive: boolean;
+  activeFullscreenByList: Record<string, boolean>;
   isMultiFullscreenActive: boolean;
   isNdiActive: boolean;
   isNdiMultiActive: boolean;
@@ -52,6 +53,7 @@ class DisplaySyncService {
   private outputCommandHandler: ((command: string, payload?: unknown) => void) | null = null;
   private outputStatus: OutputDisplayStatus = {
     isFullscreenActive: false,
+    activeFullscreenByList: {},
     isMultiFullscreenActive: false,
     isNdiActive: false,
     isNdiMultiActive: false,
@@ -290,6 +292,9 @@ class DisplaySyncService {
     const next: OutputDisplayStatus = {
       ...this.outputStatus,
       ...partial,
+      activeFullscreenByList: partial.activeFullscreenByList
+        ? { ...partial.activeFullscreenByList }
+        : this.outputStatus.activeFullscreenByList,
       activeNdiByList: partial.activeNdiByList
         ? { ...partial.activeNdiByList }
         : this.outputStatus.activeNdiByList,
@@ -303,6 +308,8 @@ class DisplaySyncService {
       next.isNdiActive !== this.outputStatus.isNdiActive ||
       next.isNdiMultiActive !== this.outputStatus.isNdiMultiActive ||
       next.ndiSourceName !== this.outputStatus.ndiSourceName ||
+      JSON.stringify(next.activeFullscreenByList) !==
+        JSON.stringify(this.outputStatus.activeFullscreenByList) ||
       JSON.stringify(next.activeNdiByList) !== JSON.stringify(this.outputStatus.activeNdiByList) ||
       JSON.stringify(next.ndiSourceNamesByList) !==
         JSON.stringify(this.outputStatus.ndiSourceNamesByList);
@@ -826,6 +833,7 @@ class DisplaySyncService {
       allTimers: timerManagerService.getAllTimers(),
       runLogs: timerManagerService.getRunLogs(),
       isFullscreenActive: this.outputStatus.isFullscreenActive,
+      activeFullscreenByList: { ...this.outputStatus.activeFullscreenByList },
       isMultiFullscreenActive: this.outputStatus.isMultiFullscreenActive,
       isNdiActive: isListNdiActive || this.outputStatus.isNdiMultiActive,
       isNdiMultiActive: this.outputStatus.isNdiMultiActive,

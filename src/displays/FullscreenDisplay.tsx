@@ -356,7 +356,8 @@ export const FullscreenDisplay: React.FC<FullscreenDisplayProps> = ({
       }
 
       case 'timer_list': {
-        if (!timerListCfg?.visible || !payload.timerList || payload.timerList.length === 0) {
+        const activeTimerList = listCue?.timerList || payload.timerList;
+        if (!timerListCfg?.visible || !activeTimerList || activeTimerList.length === 0) {
           return null;
         }
         return (
@@ -372,7 +373,7 @@ export const FullscreenDisplay: React.FC<FullscreenDisplayProps> = ({
             }}
           >
             <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-1.5">
-              {payload.timerList.slice(0, 6).map((t, i) => {
+              {activeTimerList.slice(0, 6).map((t, i) => {
                 const isCurrent = t.id === activeTimer?.id;
                 return (
                   <div

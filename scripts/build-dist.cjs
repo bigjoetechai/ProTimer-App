@@ -1,5 +1,5 @@
 /**
- * Cross-Platform Electron Packaging Runner for ProTimer v2.5.0.
+ * Cross-Platform Electron Packaging Runner for ProTimer v2.5.3.
  *
  * Supports:
  * - `npm run dist` / `npm run dist:win`  -> Packages Windows 64-bit Installer (NSIS .exe) & Portable (.exe)
@@ -26,7 +26,7 @@ const rawTarget = (process.argv[2] || 'win').toLowerCase();
 
 function logStep(msg) {
   console.log(`\n==================================================================`);
-  console.log(`  [ProTimer v2.5.0 Builder] ${msg}`);
+  console.log(`  [ProTimer v2.5.3 Builder] ${msg}`);
   console.log(`==================================================================\n`);
 }
 
@@ -180,7 +180,7 @@ async function main() {
   }
 
   // Step 2: Build Vite Frontend Bundle
-  logStep('Step 3/4: Building ProTimer v2.5.0 Frontend Bundle (vite build)');
+  logStep('Step 3/4: Building ProTimer v2.5.3 Frontend Bundle (vite build)');
   if (!runCommand('npx', ['vite', 'build'])) {
     console.error('Frontend build (vite build) failed.');
     process.exit(1);
