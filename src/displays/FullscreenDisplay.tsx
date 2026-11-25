@@ -277,7 +277,12 @@ export const FullscreenDisplay: React.FC<FullscreenDisplayProps> = ({
               transform: getElementOffsetTransform(countdownCfg, 4),
             }}
           >
-            {renderTimeWithColonOffset(displayTime, fsElements.colon?.vert)}
+            {renderTimeWithColonOffset(
+              displayTime,
+              fsElements.colon?.vert,
+              fsElements.countdown?.spacing,
+              fsElements.colon?.horiz
+            )}
           </div>
         );
       }

@@ -49,6 +49,8 @@ export interface AppPreferences {
   // Style Sub-Tabs (Sizes & Positions, Progress Bar, Images, Colors & Animations)
   sizesAndPositionsByTarget?: Record<SizesPositionTargetTab, Record<SizesPositionElementId, SizesPositionElementConfig>>;
   sizesAndPositionsExtrasByTarget?: Record<SizesPositionTargetTab, SizesPositionTargetExtras>;
+  countdownSpacing?: number;
+  countdownColonSpacing?: number;
   timerFontSizePercent?: number;
   timerNameSizePercent?: number;
   messageSizePercent?: number;
@@ -120,9 +122,20 @@ export function resolveLogoImageForList(
 }
 
 /**
+ * Extracts the editable base prefix from an NDI source name template
+ * (e.g. `StudioTimer (List 1)` -> `StudioTimer`, `ProTimer (List 1)` -> `ProTimer`).
+ */
+export function extractNdiSourcePrefix(baseTemplate?: string | null): string {
+  const raw = (baseTemplate || '').trim();
+  if (!raw) return 'ProTimer';
+  const stripped = raw.replace(/\s*\([^)]*\)\s*$/, '').trim();
+  return stripped || 'ProTimer';
+}
+
+/**
  * Formats the NDI source name for a specific Cue List tab so the list tab name
  * always appears inside the brackets, e.g. `ProTimer (List 1)` or `ProTimer (Session A)`.
- * If the operator customized the prefix in Preferences -> NDI (e.g. `StudioTimer (List 1)`),
+ * If the operator customized the prefix in Preferences -> NDI (e.g. `StudioTimer`),
  * that custom prefix is preserved while placing the list tab name in brackets.
  */
 export function formatListNdiSourceName(
@@ -130,11 +143,7 @@ export function formatListNdiSourceName(
   baseTemplate?: string | null
 ): string {
   const cleanList = (listName || '').trim() || 'List 1';
-  const raw = (baseTemplate || '').trim();
-  if (!raw || /^ProTimer\s*(\(.*\))?$/i.test(raw)) {
-    return `ProTimer (${cleanList})`;
-  }
-  const prefix = raw.replace(/\s*\([^)]*\)\s*$/, '').trim() || 'ProTimer';
+  const prefix = extractNdiSourcePrefix(baseTemplate);
   return `${prefix} (${cleanList})`;
 }
 
@@ -165,6 +174,7 @@ export interface SizesPositionElementConfig {
   vert?: number;
   horiz?: number;
   sizePercent?: number;
+  spacing?: number;
   font?: string;
   fontStyle?: string;
 }
@@ -249,11 +259,13 @@ export const DEFAULT_TARGET_ELEMENTS_CONFIG: Record<SizesPositionElementId, Size
     vert: 2,
     horiz: 0,
     sizePercent: 113,
-    font: 'Verdana',
+    spacing: 0,
+    font: 'Bebas Neue',
     fontStyle: 'Bold',
   },
   colon: {
     vert: 0,
+    horiz: 0,
   },
   name: {
     visible: true,
@@ -335,6 +347,54 @@ export function createDefaultSizesAndPositions(): Record<
   };
 }
 
+/**
+ * Ensures the Countdown element defaults to 'Bebas Neue' across all display targets
+ * (including migrating legacy saved preferences that still had 'Verdana' as the uncustomized default).
+ */
+export function ensureBebasCountdownDefault(prefs: AppPreferences): AppPreferences {
+  const raw = prefs as AppPreferences & { __bebasCountdownDefaultV2?: boolean };
+  const baseTargets = raw.sizesAndPositionsByTarget || createDefaultSizesAndPositions();
+  const needsMigration = !raw.__bebasCountdownDefaultV2;
+
+  const targetKeys: SizesPositionTargetTab[] = [
+    'fullscreen_ndi_preview',
+    'presenter_window',
+    'multitimer',
+    'web_display_lan',
+  ];
+
+  const nextTargets = { ...baseTargets };
+  let modified = false;
+
+  for (const key of targetKeys) {
+    const existingTarget = nextTargets[key] || JSON.parse(JSON.stringify(DEFAULT_TARGET_ELEMENTS_CONFIG));
+    const existingCountdown = existingTarget.countdown || { ...DEFAULT_TARGET_ELEMENTS_CONFIG.countdown };
+    const currentFont = existingCountdown.font;
+
+    if (!currentFont || (needsMigration && currentFont === 'Verdana')) {
+      nextTargets[key] = {
+        ...existingTarget,
+        countdown: {
+          ...DEFAULT_TARGET_ELEMENTS_CONFIG.countdown,
+          ...existingCountdown,
+          font: 'Bebas Neue',
+        },
+      };
+      modified = true;
+    }
+  }
+
+  if (needsMigration || modified) {
+    return {
+      ...raw,
+      sizesAndPositionsByTarget: nextTargets,
+      __bebasCountdownDefaultV2: true,
+    } as AppPreferences;
+  }
+
+  return prefs;
+}
+
 export const DEFAULT_PREFERENCES: AppPreferences = {
   theme: 'dark',
   defaultTimerType: 'count_down',
@@ -382,6 +442,8 @@ export const DEFAULT_PREFERENCES: AppPreferences = {
   // Style Sub-Tabs
   sizesAndPositionsByTarget: createDefaultSizesAndPositions(),
   sizesAndPositionsExtrasByTarget: createDefaultSizesAndPositionsExtras(),
+  countdownSpacing: 0,
+  countdownColonSpacing: 0,
   timerFontSizePercent: 113,
   timerNameSizePercent: 33,
   messageSizePercent: 33,

@@ -6,7 +6,8 @@
  * Full Dark & Light theme responsive styling.
  */
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   Plus, 
   ChevronDown, 
@@ -24,6 +25,7 @@ import {
   Radio,
   Palette,
   FolderInput,
+  BookmarkPlus,
 } from 'lucide-react';
 import { TimerList, DisplayTarget, DetectedMonitor, formatListNdiSourceName } from '../types';
 import { NdiStreamStatus } from '../services/ndiStreamService';
@@ -42,6 +44,7 @@ interface BottomBarProps {
   onExportList?: (id: string) => void;
   onSetListColor?: (id: string, color?: string) => void;
   onCopyListCuesToList?: (sourceListId: string, targetListId: string, mode?: 'append' | 'replace') => number;
+  onSaveListAsTemplate?: (listId: string) => void;
   onOpenListManager?: () => void;
   getRunningTimerCount?: (id: string) => number;
   onOpenDisplay: (target: DisplayTarget) => void;
@@ -80,6 +83,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
   onExportList,
   onSetListColor,
   onCopyListCuesToList,
+  onSaveListAsTemplate,
   onOpenListManager,
   getRunningTimerCount,
   onOpenDisplay,
@@ -121,6 +125,8 @@ export const BottomBar: React.FC<BottomBarProps> = ({
     visible: boolean;
     x: number;
     y: number;
+    anchorX: number;
+    anchorY: number;
     listId: string;
     listName: string;
   } | null>(null);
@@ -134,24 +140,54 @@ export const BottomBar: React.FC<BottomBarProps> = ({
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (!contextMenu) return;
     const handleClickOutside = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
         setContextMenu(null);
       }
     };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setContextMenu(null);
+      }
+    };
     window.addEventListener('mousedown', handleClickOutside);
-    return () => window.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('mousedown', handleClickOutside);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [contextMenu]);
+
+  useLayoutEffect(() => {
+    if (!contextMenu || !menuRef.current) return;
+    const rect = menuRef.current.getBoundingClientRect();
+    const pad = 10;
+    const clampedX = Math.max(
+      pad,
+      Math.min(contextMenu.anchorX, window.innerWidth - rect.width - pad)
+    );
+    const preferredTop = contextMenu.anchorY - rect.height - 6;
+    const clampedY = Math.max(
+      pad,
+      Math.min(preferredTop, window.innerHeight - rect.height - pad)
+    );
+    if (Math.abs(clampedX - contextMenu.x) > 1 || Math.abs(clampedY - contextMenu.y) > 1) {
+      setContextMenu((prev) => (prev ? { ...prev, x: clampedX, y: clampedY } : null));
+    }
+  }, [contextMenu]);
 
   const handleContextMenu = (e: React.MouseEvent, list: TimerList) => {
     e.preventDefault();
     e.stopPropagation();
     const menuWidth = 240;
-    const menuHeight = 360;
+    const estimatedHeight = 360;
     setContextMenu({
       visible: true,
-      x: Math.min(e.clientX, window.innerWidth - menuWidth - 10),
-      y: Math.max(10, e.clientY - menuHeight),
+      anchorX: e.clientX,
+      anchorY: e.clientY,
+      x: Math.max(10, Math.min(e.clientX, window.innerWidth - menuWidth - 10)),
+      y: Math.max(10, e.clientY - estimatedHeight),
       listId: list.id,
       listName: list.name,
     });
@@ -171,17 +207,17 @@ export const BottomBar: React.FC<BottomBarProps> = ({
   };
 
   return (
-    <footer className={`border-t select-none text-xs relative z-40 transition-colors duration-150 ${
-      isDark ? 'bg-[#0b0e14] border-[#1a2333] text-neutral-300' : 'bg-slate-50 border-slate-200 text-slate-700'
+    <footer className={`glass-surface border-t select-none text-xs relative z-40 transition-colors duration-150 ${
+      isDark ? 'border-white/[0.08] text-neutral-300' : 'border-slate-300/80 text-slate-700'
     }`}>
       {/* =========================================================================
           ROW 1: TIMER LIST TABS & HISTORY TAB
           List 1 | List 2 | List 3 | + | History | [Manage Lists]
          ========================================================================= */}
-      <div className={`h-8 px-2 flex items-center justify-between border-b transition-colors ${
-        isDark ? 'border-[#141a26] bg-[#090b10]' : 'border-slate-200 bg-slate-100/80'
+      <div className={`h-9 px-2.5 flex items-center justify-between border-b transition-colors ${
+        isDark ? 'border-white/[0.07] bg-black/25' : 'border-slate-300/70 bg-white/30'
       }`}>
-        <div className="flex items-center gap-1 overflow-x-auto py-0.5">
+        <div className="flex items-center gap-1.5 overflow-x-auto py-1">
           {lists.map((list) => {
             const isActive = !isHistoryTabActive && list.id === activeListId;
             const runningCount = getRunningTimerCount ? getRunningTimerCount(list.id) : 0;
@@ -232,21 +268,18 @@ export const BottomBar: React.FC<BottomBarProps> = ({
             const tabInlineStyle: React.CSSProperties | undefined = tabColor
               ? isActive
                 ? {
-                    borderBottom: `2px solid ${tabColor}`,
-                    borderTop: `1px solid ${tabColor}cc`,
-                    borderLeft: `1px solid ${tabColor}99`,
-                    borderRight: `1px solid ${tabColor}99`,
+                    borderColor: `${tabColor}bb`,
                     background: isDark
-                      ? `linear-gradient(180deg, ${tabColor}85 0%, ${tabColor}55 100%)`
-                      : `linear-gradient(180deg, ${tabColor}66 0%, ${tabColor}42 100%)`,
-                    boxShadow: `0 0 12px ${tabColor}45`,
+                      ? `linear-gradient(180deg, ${tabColor}70 0%, ${tabColor}3d 100%)`
+                      : `linear-gradient(180deg, ${tabColor}66 0%, ${tabColor}3d 100%)`,
+                    boxShadow: `inset 0 1px 0 rgba(255,255,255,0.32), 0 4px 12px ${tabColor}33`,
                   }
                 : {
-                    borderBottom: `2px solid ${tabColor}`,
-                    borderTop: `1px solid ${tabColor}66`,
-                    borderLeft: `1px solid ${tabColor}55`,
-                    borderRight: `1px solid ${tabColor}55`,
-                    backgroundColor: isDark ? `${tabColor}48` : `${tabColor}38`,
+                    borderColor: `${tabColor}66`,
+                    background: isDark
+                      ? `linear-gradient(180deg, ${tabColor}42 0%, ${tabColor}22 100%)`
+                      : `linear-gradient(180deg, ${tabColor}38 0%, ${tabColor}1c 100%)`,
+                    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.16)',
                   }
               : undefined;
 
@@ -257,20 +290,14 @@ export const BottomBar: React.FC<BottomBarProps> = ({
                 onClick={() => onSelectList(list.id)}
                 onContextMenu={(e) => handleContextMenu(e, list)}
                 onDoubleClick={() => handleStartInlineRename(list)}
-                title={`${list.name} (${list.timerIds.length} cues) — NDI Source: ${listNdiSourceName} (Right-click to change color or copy cues to another tab, Double-click to rename)`}
+                title={`${list.name} (${list.timerIds.length} cues) — NDI Source: ${listNdiSourceName} (Right-click to edit, rename, change color, or delete tab; Double-click to rename)`}
                 style={tabInlineStyle}
-                className={`group px-3 py-1 rounded-t text-xs font-semibold tracking-wide transition-all flex items-center gap-1.5 relative cursor-pointer ${
-                  isActive
-                    ? isDark 
-                      ? 'bg-[#151c28] text-white border-b-2 border-cyan-400 shadow-xs' 
-                      : 'bg-white text-slate-950 border-b-2 border-cyan-600 shadow-xs'
-                    : tabColor
-                    ? isDark
-                      ? 'text-white hover:brightness-110'
-                      : 'text-slate-950 hover:brightness-105'
-                    : isDark 
-                      ? 'text-neutral-400 hover:text-neutral-200 hover:bg-[#121620]' 
-                      : 'text-slate-500 hover:text-slate-900 hover:bg-slate-200'
+                className={`group px-3.5 py-1 rounded-full text-xs font-semibold tracking-wide transition-all flex items-center gap-1.5 relative cursor-pointer ${
+                  tabColor
+                    ? `border ${isDark ? 'text-white hover:brightness-110' : 'text-slate-950 hover:brightness-105'}`
+                    : isActive
+                    ? 'glass-btn glass-btn-cyan-active glass-btn-subtle'
+                    : 'glass-btn glass-btn-subtle'
                 }`}
               >
                 {tabColor && (
@@ -322,9 +349,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
             type="button"
             onClick={onAddList}
             title="Add New List (+)"
-            className={`p-1 px-2 rounded transition-colors flex items-center gap-1 cursor-pointer ${
-              isDark ? 'text-neutral-400 hover:text-white hover:bg-[#151c28]' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-200'
-            }`}
+            className="glass-btn glass-btn-subtle w-6 h-6 rounded-full flex items-center justify-center cursor-pointer shrink-0"
           >
             <Plus className="w-3.5 h-3.5" />
           </button>
@@ -332,22 +357,16 @@ export const BottomBar: React.FC<BottomBarProps> = ({
           {/* History Tab */}
           {onSelectHistoryTab && (
             <>
-              <div className={`h-4 w-px mx-1 ${isDark ? 'bg-[#1b2434]' : 'bg-slate-300'}`} />
+              <div className={`h-4 w-px mx-1 ${isDark ? 'bg-white/10' : 'bg-slate-300'}`} />
               <button
                 type="button"
                 onClick={onSelectHistoryTab}
                 title="Timer Run History (Start & Stop Timestamps)"
-                className={`px-3 py-1 rounded-t text-xs font-semibold tracking-wide transition-all flex items-center gap-1.5 cursor-pointer ${
-                  isHistoryTabActive
-                    ? isDark
-                      ? 'bg-[#151c28] text-cyan-300 border-b-2 border-cyan-400 shadow-xs'
-                    : 'bg-white text-cyan-800 border-b-2 border-cyan-600 shadow-xs'
-                    : isDark
-                    ? 'text-neutral-400 hover:text-neutral-200 hover:bg-[#121620]'
-                    : 'text-slate-500 hover:text-slate-900 hover:bg-slate-200'
+                className={`glass-btn glass-btn-subtle px-3 py-1 rounded-full text-xs font-semibold tracking-wide flex items-center gap-1.5 cursor-pointer ${
+                  isHistoryTabActive ? 'glass-btn-cyan-active' : ''
                 }`}
               >
-                <History className="w-3.5 h-3.5 text-cyan-500" />
+                <History className="w-3.5 h-3.5 text-cyan-400" />
                 <span>History</span>
                 {historyCount > 0 && (
                   <span
@@ -369,7 +388,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
         <div className="flex items-center gap-2">
           {tabCopyFeedback && (
             <span
-              className={`px-2 py-0.5 rounded text-[10.5px] font-medium flex items-center gap-1 border animate-in fade-in ${
+              className={`px-2.5 py-0.5 rounded-full text-[10.5px] font-medium flex items-center gap-1 border animate-in fade-in ${
                 isDark
                   ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300'
                   : 'bg-emerald-50 border-emerald-300 text-emerald-800'
@@ -384,13 +403,9 @@ export const BottomBar: React.FC<BottomBarProps> = ({
               type="button"
               onClick={onOpenListManager}
               title="Open Lists Manager"
-              className={`px-2 py-0.5 text-[11px] rounded flex items-center gap-1.5 transition-colors border border-transparent cursor-pointer ${
-                isDark 
-                  ? 'text-neutral-400 hover:text-cyan-400 hover:bg-[#141a26] hover:border-[#1e2736]' 
-                  : 'text-slate-600 hover:text-cyan-700 hover:bg-slate-200 hover:border-slate-300'
-              }`}
+              className="glass-btn glass-btn-subtle px-3 py-1 text-[11px] rounded-full flex items-center gap-1.5 cursor-pointer"
             >
-              <FolderEdit className="w-3.5 h-3.5 text-cyan-500" />
+              <FolderEdit className="w-3.5 h-3.5 text-cyan-400" />
               <span className="hidden sm:inline">Manage Lists</span>
             </button>
           )}
@@ -402,8 +417,8 @@ export const BottomBar: React.FC<BottomBarProps> = ({
           Presenter | Preview | Fullscreen | NDI | NDI Multi | Multi Preview | Multi FS | LAN Control | LAN Display
           Fullscreen monitor: [ Auto v ]
          ========================================================================= */}
-      <div className={`h-9 px-3 flex items-center justify-between gap-3 overflow-x-auto transition-colors ${
-        isDark ? 'bg-[#0b0e14]' : 'bg-white'
+      <div className={`h-11 px-3 flex items-center justify-between gap-3 overflow-x-auto transition-colors ${
+        isDark ? 'bg-transparent' : 'bg-white/25'
       }`}>
         {/* Output Action Buttons */}
         <div className="flex items-center gap-1.5 whitespace-nowrap">
@@ -495,24 +510,18 @@ export const BottomBar: React.FC<BottomBarProps> = ({
                     ? `${item.label} Active (Click to Toggle)`
                     : item.tooltip
                 }
-                className={`px-2.5 py-1 border rounded text-[11px] font-medium transition-all shadow-xs flex items-center gap-1.5 cursor-pointer ${
+                className={`glass-btn glass-btn-subtle px-3 py-1 rounded-full text-[11px] font-medium flex items-center gap-1.5 cursor-pointer ${
                   isNdiButton && isActive
-                    ? isDark
-                      ? 'bg-emerald-950/85 hover:bg-emerald-900 text-emerald-200 border-emerald-400 ring-1 ring-emerald-400/50'
-                      : 'bg-emerald-100 hover:bg-emerald-200 text-emerald-900 border-emerald-500 ring-1 ring-emerald-500/50'
+                    ? 'glass-btn-emerald-active'
                     : isActive
-                    ? isDark
-                      ? 'bg-cyan-950/80 hover:bg-cyan-900 text-cyan-200 border-cyan-400 ring-1 ring-cyan-400/50'
-                      : 'bg-cyan-100 hover:bg-cyan-200 text-cyan-900 border-cyan-500 ring-1 ring-cyan-500/50'
-                    : isDark
-                    ? 'bg-[#131924] hover:bg-[#1c2536] active:bg-[#232e42] border-[#232e42] hover:border-cyan-500/50 text-neutral-300 hover:text-white'
-                    : 'bg-slate-100 hover:bg-slate-200 active:bg-slate-300 border-slate-300 hover:border-cyan-600/50 text-slate-700 hover:text-slate-900'
+                    ? 'glass-btn-cyan-active'
+                    : ''
                 }`}
               >
                 {isActive && (
                   <span
                     className={`w-1.5 h-1.5 rounded-full animate-pulse ${
-                      isNdiButton ? 'bg-emerald-400' : 'bg-cyan-500'
+                      isNdiButton ? 'bg-emerald-300' : 'bg-cyan-300'
                     }`}
                   />
                 )}
@@ -563,7 +572,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
         <div
           title={`Select dedicated Fullscreen monitor for ${activeListName}`}
           className={`flex items-center gap-2 whitespace-nowrap pl-4 border-l shrink-0 ${
-            isDark ? 'border-[#1a2333]' : 'border-slate-200'
+            isDark ? 'border-white/[0.08]' : 'border-slate-300'
           }`}
         >
           <span className={`text-[11px] ${isDark ? 'text-neutral-400' : 'text-slate-500'}`}>
@@ -573,13 +582,9 @@ export const BottomBar: React.FC<BottomBarProps> = ({
             <select
               value={fullscreenMonitor}
               onChange={(e) => onChangeMonitor(e.target.value)}
-              className={`appearance-none rounded px-3 py-1 pr-6 text-xs focus:outline-hidden focus:border-cyan-500 cursor-pointer shadow-xs border ${
-                isDark 
-                  ? 'bg-[#121722] hover:bg-[#182030] border-[#232e42] text-white' 
-                  : 'bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-900'
-              }`}
+              className="glass-input appearance-none rounded-full px-3.5 py-1 pr-7 text-xs focus:outline-hidden focus:border-cyan-400 cursor-pointer"
             >
-              <option value="Auto">
+              <option value="Auto" className={isDark ? 'bg-[#1c1c20] text-white' : ''}>
                 {detectedMonitors.some((m) => !m.isPrimary)
                   ? 'Auto (External Monitor)'
                   : 'Auto (Primary Monitor)'}
@@ -598,32 +603,34 @@ export const BottomBar: React.FC<BottomBarProps> = ({
                     ? ` [${assignedOtherLists.join(', ')}]`
                     : '';
                 return (
-                  <option key={String(m.id)} value={String(m.id)}>
+                  <option key={String(m.id)} value={String(m.id)} className={isDark ? 'bg-[#1c1c20] text-white' : ''}>
                     {displayName} – {m.resolution}{m.isPrimary ? ' (Primary)' : ' (External)'}{suffix}
                   </option>
                 );
               })}
             </select>
-            <ChevronDown className={`w-3 h-3 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none ${isDark ? 'text-neutral-400' : 'text-slate-500'}`} />
+            <ChevronDown className={`w-3 h-3 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none ${isDark ? 'text-neutral-400' : 'text-slate-500'}`} />
           </div>
         </div>
       </div>
 
-      {/* Tab Right-Click Context Menu */}
-      {contextMenu && (() => {
+      {/* Tab Right-Click Context Menu (portaled to document.body so footer backdrop-filter never clips or offsets fixed positioning) */}
+      {contextMenu && typeof document !== 'undefined' && createPortal((() => {
         const currentMenuList = lists.find((l) => l.id === contextMenu.listId);
         const otherMenuLists = lists.filter((l) => l.id !== contextMenu.listId);
+        const canDeleteList = Boolean(onDeleteList) && lists.length > 1;
         return (
           <div
             ref={menuRef}
             style={{ top: contextMenu.y, left: contextMenu.x }}
-            className={`fixed z-50 w-60 rounded-lg shadow-2xl py-1 text-xs animate-in fade-in duration-100 border ${
-              isDark ? 'bg-[#10141d] border-[#222c3d] text-neutral-200' : 'bg-white border-slate-300 text-slate-800'
+            className={`glass-card fixed z-[9999] w-60 max-h-[calc(100vh-20px)] overflow-y-auto rounded-2xl py-1.5 text-xs select-none animate-in fade-in duration-100 ${
+              isDark ? 'text-neutral-200' : 'text-slate-800'
             }`}
             onClick={(e) => e.stopPropagation()}
+            onContextMenu={(e) => e.preventDefault()}
           >
             <div className={`px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider border-b flex items-center justify-between ${
-              isDark ? 'text-neutral-400 border-[#1b2330]' : 'text-slate-500 border-slate-200'
+              isDark ? 'text-neutral-400 border-white/[0.08]' : 'text-slate-500 border-slate-200'
             }`}>
               <span className="truncate">{contextMenu.listName}</span>
               {currentMenuList && (
@@ -774,8 +781,25 @@ export const BottomBar: React.FC<BottomBarProps> = ({
               }`}
             >
               <Edit3 className="w-3.5 h-3.5 text-neutral-400" />
-              <span>Rename List</span>
+              <span>Rename Tab</span>
             </button>
+
+            {onOpenListManager && (
+              <button
+                type="button"
+                onClick={() => {
+                  onSelectList(contextMenu.listId);
+                  onOpenListManager();
+                  setContextMenu(null);
+                }}
+                className={`w-full text-left px-3 py-1.5 flex items-center gap-2 cursor-pointer ${
+                  isDark ? 'hover:bg-[#1b2434] hover:text-white text-neutral-300' : 'hover:bg-slate-100 hover:text-slate-900 text-slate-700'
+                }`}
+              >
+                <FolderEdit className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Edit / Manage Tabs</span>
+              </button>
+            )}
 
             {onDuplicateList && (
               <button
@@ -790,6 +814,22 @@ export const BottomBar: React.FC<BottomBarProps> = ({
               >
                 <Copy className="w-3.5 h-3.5 text-neutral-400" />
                 <span>Duplicate List</span>
+              </button>
+            )}
+
+            {onSaveListAsTemplate && (
+              <button
+                type="button"
+                onClick={() => {
+                  onSaveListAsTemplate(contextMenu.listId);
+                  setContextMenu(null);
+                }}
+                className={`w-full text-left px-3 py-1.5 flex items-center gap-2 cursor-pointer ${
+                  isDark ? 'hover:bg-[#1b2434] hover:text-cyan-300 text-neutral-300' : 'hover:bg-slate-100 hover:text-cyan-700 text-slate-700'
+                }`}
+              >
+                <BookmarkPlus className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Save Tab as Template...</span>
               </button>
             )}
 
@@ -841,27 +881,34 @@ export const BottomBar: React.FC<BottomBarProps> = ({
               </>
             )}
 
-            {onDeleteList && lists.length > 1 && (
+            {onDeleteList && (
               <>
                 <div className={`border-t my-1 ${isDark ? 'border-[#1b2330]' : 'border-slate-200'}`} />
                 <button
                   type="button"
+                  disabled={!canDeleteList}
+                  title={canDeleteList ? `Delete "${contextMenu.listName}"` : 'At least one list tab must remain'}
                   onClick={() => {
+                    if (!canDeleteList) return;
                     onDeleteList(contextMenu.listId);
                     setContextMenu(null);
                   }}
-                  className={`w-full text-left px-3 py-1.5 flex items-center gap-2 cursor-pointer ${
-                    isDark ? 'hover:bg-red-950/60 text-red-400 hover:text-red-300' : 'hover:bg-red-50 text-red-600 hover:text-red-700'
+                  className={`w-full text-left px-3 py-1.5 flex items-center gap-2 ${
+                    canDeleteList
+                      ? isDark
+                        ? 'cursor-pointer hover:bg-red-950/60 text-red-400 hover:text-red-300'
+                        : 'cursor-pointer hover:bg-red-50 text-red-600 hover:text-red-700'
+                      : 'cursor-not-allowed opacity-40 text-neutral-500'
                   }`}
                 >
                   <Trash2 className="w-3.5 h-3.5" />
-                  <span>Delete List</span>
+                  <span>Delete Tab</span>
                 </button>
               </>
             )}
           </div>
         );
-      })()}
+      })(), document.body)}
     </footer>
   );
 };

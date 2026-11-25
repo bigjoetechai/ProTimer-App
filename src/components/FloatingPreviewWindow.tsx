@@ -41,6 +41,11 @@ import {
   resolveFontStyleCss,
   useLivePreferences,
 } from '../utilities/displayStyleHelper';
+import {
+  clampFloatingBounds,
+  loadFloatingWindowBounds,
+  saveFloatingWindowBounds,
+} from '../utilities/windowBoundsStorage';
 
 interface FloatingPreviewWindowProps {
   isOpen: boolean;
@@ -105,13 +110,21 @@ export const FloatingPreviewWindow: React.FC<FloatingPreviewWindowProps> = ({
   const [bounds, setBounds] = useState<{ x: number; y: number; width: number; height: number }>(() => {
     const winW = typeof window !== 'undefined' ? window.innerWidth : 1280;
     const winH = typeof window !== 'undefined' ? window.innerHeight : 800;
-    return {
-      x: Math.max(20, winW - DEFAULT_WIDTH - 28),
-      y: Math.max(48, winH - DEFAULT_HEIGHT - 96),
-      width: DEFAULT_WIDTH,
-      height: DEFAULT_HEIGHT,
-    };
+    return loadFloatingWindowBounds(
+      'preview',
+      {
+        x: Math.max(20, winW - DEFAULT_WIDTH - 28),
+        y: Math.max(48, winH - DEFAULT_HEIGHT - 96),
+        width: DEFAULT_WIDTH,
+        height: DEFAULT_HEIGHT,
+      },
+      MIN_WIDTH,
+      MIN_HEIGHT
+    );
   });
+
+  const latestBoundsRef = useRef(bounds);
+  latestBoundsRef.current = bounds;
 
   // Step duration increment state (15s, 30s, 60s = 1m, 300s = 5m)
   const [incrementSeconds, setIncrementSeconds] = useState(60);
@@ -156,11 +169,13 @@ export const FloatingPreviewWindow: React.FC<FloatingPreviewWindowProps> = ({
       if (state.type === 'move') {
         const maxX = Math.max(0, window.innerWidth - 80);
         const maxY = Math.max(0, window.innerHeight - 40);
-        setBounds({
+        const next = {
           ...startBounds,
           x: Math.min(maxX, Math.max(0, startBounds.x + dx)),
           y: Math.min(maxY, Math.max(0, startBounds.y + dy)),
-        });
+        };
+        latestBoundsRef.current = next;
+        setBounds(next);
         return;
       }
 
@@ -197,16 +212,21 @@ export const FloatingPreviewWindow: React.FC<FloatingPreviewWindowProps> = ({
           }
         }
 
-        setBounds({
+        const next = {
           x: Math.max(0, newX),
           y: Math.max(0, newY),
           width: newW,
           height: newH,
-        });
+        };
+        latestBoundsRef.current = next;
+        setBounds(next);
       }
     };
 
     const handleMouseUp = () => {
+      if (dragStateRef.current) {
+        saveFloatingWindowBounds('preview', latestBoundsRef.current);
+      }
       dragStateRef.current = null;
     };
 
@@ -217,6 +237,29 @@ export const FloatingPreviewWindow: React.FC<FloatingPreviewWindowProps> = ({
       window.removeEventListener('mouseup', handleMouseUp);
     };
   }, []);
+
+  useEffect(() => {
+    const clampToViewport = () => {
+      setBounds((prev) => {
+        const clamped = clampFloatingBounds(prev, MIN_WIDTH, MIN_HEIGHT);
+        if (
+          clamped.x === prev.x &&
+          clamped.y === prev.y &&
+          clamped.width === prev.width &&
+          clamped.height === prev.height
+        ) {
+          return prev;
+        }
+        return clamped;
+      });
+    };
+
+    if (isOpen) {
+      clampToViewport();
+    }
+    window.addEventListener('resize', clampToViewport);
+    return () => window.removeEventListener('resize', clampToViewport);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -582,7 +625,12 @@ export const FloatingPreviewWindow: React.FC<FloatingPreviewWindowProps> = ({
                       : ''
                   }`}
                 >
-                  {renderTimeWithColonOffset(displayTime, fsElements.colon?.vert)}
+                  {renderTimeWithColonOffset(
+                    displayTime,
+                    fsElements.colon?.vert,
+                    fsElements.countdown?.spacing,
+                    fsElements.colon?.horiz
+                  )}
                 </div>
               )}
 

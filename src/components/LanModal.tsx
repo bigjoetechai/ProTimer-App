@@ -282,46 +282,46 @@ export const LanModal: React.FC<LanModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4 select-none animate-in fade-in duration-150"
+      className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 select-none animate-in fade-in duration-150"
       onClick={onClose}
     >
       <div
-        className="w-[485px] max-w-[96vw] bg-[#141414] border border-[#2e2e2e] rounded-lg shadow-[0_20px_60px_rgba(0,0,0,0.85)] p-4 text-neutral-100"
+        className="glass-card w-[500px] max-w-[96vw] rounded-[28px] p-5 text-neutral-100"
         onClick={(e) => e.stopPropagation()}
       >
         {/* 1. HEADER ROW: "LAN Control" on left, Active List Name (e.g. "List 2") on right */}
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center justify-between mb-3.5">
           <span className="text-[15px] font-bold tracking-tight text-white">
             {mode === 'lan_display' ? 'LAN Display' : 'LAN Control'}
           </span>
           <div className="flex items-center gap-2.5">
-            <span className="text-[14px] text-neutral-400 font-normal">
+            <span className="text-[13px] text-neutral-400 font-normal">
               {activeListName}
             </span>
             <button
               type="button"
               onClick={onClose}
               title="Close"
-              className="text-neutral-500 hover:text-neutral-200 p-0.5 rounded transition-colors cursor-pointer"
+              className="glass-btn glass-btn-subtle w-7 h-7 rounded-full flex items-center justify-center cursor-pointer"
             >
-              <X className="w-4 h-4" />
+              <X className="w-3.5 h-3.5" />
             </button>
           </div>
         </div>
 
         {/* 1B. TWO TABS FOR LAN CONTROL: "Mobile" (1st tab) and "Desktop" (2nd tab) */}
         {mode === 'lan_control' && (
-          <div className="grid grid-cols-2 gap-1.5 p-1 mb-3.5 bg-[#1b1b1b] border border-[#2e2e2e] rounded-md">
+          <div className="glass-subcard grid grid-cols-2 gap-1.5 p-1 mb-4 rounded-full">
             <button
               type="button"
               onClick={() => {
                 setControlTab('mobile');
                 setCopiedUrl(false);
               }}
-              className={`flex items-center justify-center gap-1.5 py-1.5 px-3 rounded text-[12.5px] font-semibold transition-all cursor-pointer ${
+              className={`flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-full text-[12.5px] font-semibold transition-all cursor-pointer ${
                 controlTab === 'mobile'
-                  ? 'bg-[#0284c7] text-white shadow-xs'
-                  : 'text-neutral-400 hover:text-neutral-200 hover:bg-[#242424]'
+                  ? 'glass-btn glass-btn-cyan-active glass-btn-subtle'
+                  : 'text-neutral-400 hover:text-neutral-100'
               }`}
             >
               <Smartphone className="w-3.5 h-3.5" />
@@ -333,10 +333,10 @@ export const LanModal: React.FC<LanModalProps> = ({
                 setControlTab('desktop');
                 setCopiedUrl(false);
               }}
-              className={`flex items-center justify-center gap-1.5 py-1.5 px-3 rounded text-[12.5px] font-semibold transition-all cursor-pointer ${
+              className={`flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-full text-[12.5px] font-semibold transition-all cursor-pointer ${
                 controlTab === 'desktop'
-                  ? 'bg-[#0284c7] text-white shadow-xs'
-                  : 'text-neutral-400 hover:text-neutral-200 hover:bg-[#242424]'
+                  ? 'glass-btn glass-btn-cyan-active glass-btn-subtle'
+                  : 'text-neutral-400 hover:text-neutral-100'
               }`}
             >
               <Monitor className="w-3.5 h-3.5" />
@@ -354,18 +354,20 @@ export const LanModal: React.FC<LanModalProps> = ({
               readOnly
               value={activeUrl}
               onClick={(e) => (e.target as HTMLInputElement).select()}
-              className="w-full bg-[#181818] border-[1.5px] border-[#0284c7] focus:border-[#38bdf8] rounded-[5px] px-2.5 py-1.5 text-[12.5px] font-mono text-white selection:bg-[#0369a1] selection:text-white focus:outline-hidden cursor-text"
+              className="glass-input w-full border-[1.5px] border-cyan-500/70 focus:border-cyan-400 rounded-full px-3.5 py-1.5 text-[12px] font-mono text-white selection:bg-[#0369a1] selection:text-white focus:outline-hidden cursor-text"
             />
           </div>
           <button
             type="button"
             onClick={handleCopyUrl}
-            className="px-4 py-1.5 rounded-[5px] bg-[#1c1c1c] hover:bg-[#282828] active:bg-[#323232] border border-[#454545] text-white text-[13px] font-medium transition-colors flex items-center gap-1.5 shrink-0 cursor-pointer"
+            className={`glass-btn px-4 py-1.5 rounded-full text-[12.5px] font-medium flex items-center gap-1.5 shrink-0 cursor-pointer ${
+              copiedUrl ? 'glass-btn-emerald-active' : ''
+            }`}
           >
             {copiedUrl ? (
               <>
-                <Check className="w-3.5 h-3.5 text-emerald-400" />
-                <span className="text-emerald-400">Copied</span>
+                <Check className="w-3.5 h-3.5 text-emerald-200" />
+                <span>Copied</span>
               </>
             ) : (
               <span>Copy</span>
@@ -514,7 +516,7 @@ export const LanModal: React.FC<LanModalProps> = ({
               )}
 
               {/* Per-List Access PIN Security Controls */}
-              <div className="bg-[#1b1b1b] border border-[#2e2e2e] rounded-md p-2 space-y-1.5">
+              <div className="glass-subcard rounded-2xl p-2.5 space-y-1.5">
                 <div className="flex items-center justify-between gap-2">
                   <label className="flex items-center gap-1.5 text-[11.5px] font-medium text-neutral-200 cursor-pointer">
                     <input
@@ -553,12 +555,12 @@ export const LanModal: React.FC<LanModalProps> = ({
                         }
                       }}
                       placeholder="1234"
-                      className="w-20 bg-[#121212] border border-[#3a3a3a] focus:border-[#0284c7] rounded px-2 py-0.5 text-[12px] font-mono font-bold tracking-widest text-amber-300 text-center focus:outline-hidden"
+                      className="glass-input w-20 rounded-full px-2.5 py-0.5 text-[12px] font-mono font-bold tracking-widest text-amber-300 text-center focus:outline-hidden focus:border-cyan-400"
                     />
                     <button
                       type="button"
                       onClick={() => updateListPinConfig(pinInput, pinRequired)}
-                      className="px-2 py-0.5 rounded bg-[#262626] hover:bg-[#333333] border border-[#404040] text-[11px] text-neutral-200 cursor-pointer"
+                      className="glass-btn glass-btn-subtle px-3 py-0.5 rounded-full text-[11px] cursor-pointer"
                     >
                       Set
                     </button>
@@ -566,7 +568,7 @@ export const LanModal: React.FC<LanModalProps> = ({
                       type="button"
                       onClick={handleGenerateRandomPin}
                       title="Generate Random 4-Digit PIN"
-                      className="p-1 rounded bg-[#262626] hover:bg-[#333333] border border-[#404040] text-neutral-300 hover:text-white cursor-pointer"
+                      className="glass-btn glass-btn-subtle w-6 h-6 rounded-full flex items-center justify-center cursor-pointer"
                     >
                       <RefreshCw className="w-3 h-3" />
                     </button>
@@ -579,7 +581,7 @@ export const LanModal: React.FC<LanModalProps> = ({
                 <button
                   type="button"
                   onClick={handleOpenInBrowser}
-                  className="px-3.5 py-1.5 rounded-[5px] bg-[#1c1c1c] hover:bg-[#282828] active:bg-[#323232] border border-[#454545] text-white text-[13px] font-medium transition-colors cursor-pointer"
+                  className="glass-btn px-4 py-1.5 rounded-full text-[12.5px] font-medium cursor-pointer"
                 >
                   Open in browser
                 </button>

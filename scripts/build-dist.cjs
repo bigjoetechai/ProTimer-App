@@ -1,5 +1,5 @@
 /**
- * Cross-Platform Electron Packaging Runner for ProTimer v2.5.3.
+ * Cross-Platform Electron Packaging Runner for ProTimer.
  *
  * Supports:
  * - `npm run dist` / `npm run dist:win`  -> Packages Windows 64-bit Installer (NSIS .exe) & Portable (.exe)
@@ -23,10 +23,17 @@ const zlib = require('zlib');
 const rootDir = path.resolve(__dirname, '..');
 const ndiDir = path.join(rootDir, 'ndi');
 const rawTarget = (process.argv[2] || 'win').toLowerCase();
+const pkgVersion = (() => {
+  try {
+    return require(path.join(rootDir, 'package.json')).version || '3.0.1';
+  } catch {
+    return '3.0.1';
+  }
+})();
 
 function logStep(msg) {
   console.log(`\n==================================================================`);
-  console.log(`  [ProTimer v2.5.3 Builder] ${msg}`);
+  console.log(`  [ProTimer v${pkgVersion} Builder] ${msg}`);
   console.log(`==================================================================\n`);
 }
 
@@ -136,7 +143,7 @@ function stopRunningProTimerOnWindows() {
 function cleanLockedUnpackedDirs() {
   const releaseDir = path.join(rootDir, 'release');
   if (!fs.existsSync(releaseDir)) return;
-  for (const sub of ['win-unpacked', 'mac', 'mac-arm64', 'mac-universal']) {
+  for (const sub of ['win-unpacked', 'mac', 'mac-arm64', 'mac-universal', 'linux-unpacked', 'linux-arm64-unpacked']) {
     const targetPath = path.join(releaseDir, sub);
     if (fs.existsSync(targetPath)) {
       try {
@@ -168,19 +175,29 @@ async function main() {
   stopRunningProTimerOnWindows();
   cleanLockedUnpackedDirs();
 
-  // Step 0: Verify / Bundle Processing.NDI.Lib.x64.dll in ndi/
-  logStep('Step 1/4: Verifying Bundled NDI Runtime (ndi/Processing.NDI.Lib.x64.dll)');
-  await ensureNdiRuntimeDlls();
+  // Step 0: Verify / Bundle Processing.NDI.Lib.x64.dll in ndi/ when targeting Windows
+  const targetsWindows =
+    rawTarget === 'win' ||
+    rawTarget === 'windows' ||
+    rawTarget === 'all' ||
+    rawTarget === 'publish' ||
+    rawTarget === 'release';
+  if (targetsWindows) {
+    logStep('Step 1/4: Verifying Bundled NDI Runtime (ndi/Processing.NDI.Lib.x64.dll)');
+    await ensureNdiRuntimeDlls();
+  } else {
+    fs.mkdirSync(ndiDir, { recursive: true });
+  }
 
   // Step 1: Generate Icons
-  logStep('Step 2/4: Generating Windows (.ico) & macOS (.png) Icons');
+  logStep('Step 2/4: Generating Windows (.ico) & macOS/Linux (.png) Icons');
   if (!runCommand('node', ['scripts/generate-icons.cjs'])) {
     console.error('Failed to generate application icons.');
     process.exit(1);
   }
 
   // Step 2: Build Vite Frontend Bundle
-  logStep('Step 3/4: Building ProTimer v2.5.3 Frontend Bundle (vite build)');
+  logStep(`Step 3/4: Building ProTimer v${pkgVersion} Frontend Bundle (vite build)`);
   if (!runCommand('npx', ['vite', 'build'])) {
     console.error('Frontend build (vite build) failed.');
     process.exit(1);
@@ -202,19 +219,38 @@ async function main() {
     );
     builderArgs.push('--win', '--x64');
   } else if (rawTarget === 'mac' || rawTarget === 'macos') {
-    logStep('Step 4/4: Packaging macOS Application Bundle (x64 & Apple Silicon arm64)');
+    logStep('Step 4/4: Packaging macOS Application Bundle (Apple Silicon arm64 & Intel x64)');
     if (process.platform === 'darwin') {
-      builderArgs.push('--mac', '--x64', '--arm64');
+      builderArgs.push('--mac', 'dmg', 'zip', '--arm64', '--x64');
     } else {
       console.log(
-        'Note: Building macOS .zip application bundle from Windows (macOS .dmg requires Apple hdiutil on macOS).'
+        'Note: Building macOS .zip application bundle from non-macOS host (macOS .dmg requires Apple hdiutil on macOS).'
       );
-      builderArgs.push('--mac', 'zip', '--x64', '--arm64');
+      builderArgs.push('--mac', 'zip', '--arm64', '--x64');
     }
-  } else if (rawTarget === 'all') {
-    logStep('Step 4/4: Packaging Windows & macOS Deliverables');
+  } else if (rawTarget === 'mac-arm64' || rawTarget === 'mac-silicon') {
+    logStep('Step 4/4: Packaging macOS Apple Silicon (arm64)');
     if (process.platform === 'darwin') {
-      builderArgs.push('--win', '--mac', '--x64', '--arm64');
+      builderArgs.push('--mac', 'dmg', 'zip', '--arm64');
+    } else {
+      builderArgs.push('--mac', 'zip', '--arm64');
+    }
+  } else if (rawTarget === 'mac-x64' || rawTarget === 'mac-intel') {
+    logStep('Step 4/4: Packaging macOS Intel (x64)');
+    if (process.platform === 'darwin') {
+      builderArgs.push('--mac', 'dmg', 'zip', '--x64');
+    } else {
+      builderArgs.push('--mac', 'zip', '--x64');
+    }
+  } else if (rawTarget === 'linux') {
+    logStep('Step 4/4: Packaging Linux AppImage & Debian (.deb) Package (x64)');
+    builderArgs.push('--linux', 'AppImage', 'deb', '--x64');
+  } else if (rawTarget === 'all') {
+    logStep('Step 4/4: Packaging Windows, macOS (Apple Silicon & Intel) & Linux Deliverables');
+    if (process.platform === 'darwin') {
+      builderArgs.push('--win', '--mac', '--linux', '--x64', '--arm64');
+    } else if (process.platform === 'linux') {
+      builderArgs.push('--linux', 'AppImage', 'deb', '--x64');
     } else {
       builderArgs.push('--win', '--mac', 'zip', '--x64');
     }

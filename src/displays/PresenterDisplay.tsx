@@ -8,6 +8,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
+import { X } from 'lucide-react';
 import { useDisplaySync } from '../hooks/useDisplaySync';
 import { MessageOverlay } from '../messages/MessageOverlay';
 import { resolveBackgroundImageForList, resolveLogoImageForList } from '../types';
@@ -26,6 +27,7 @@ import {
   sanitizeImageUrl,
   useLivePreferences,
 } from '../utilities/displayStyleHelper';
+import { savePopoutWindowBounds } from '../utilities/windowBoundsStorage';
 
 type ResizeDirection = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
 
@@ -55,13 +57,46 @@ export const PresenterDisplay: React.FC = () => {
     startBounds: { x: number; y: number; width: number; height: number };
   } | null>(null);
 
+  const persistBrowserPopoutBounds = () => {
+    if (typeof window === 'undefined' || window.electronAPI?.setCurrentWindowBounds) return;
+    savePopoutWindowBounds('presenter', {
+      x: window.screenX,
+      y: window.screenY,
+      width: window.outerWidth || window.innerWidth,
+      height: window.outerHeight || window.innerHeight,
+    });
+  };
+
   useEffect(() => {
     const onResize = () => {
       setViewport({ width: window.innerWidth, height: window.innerHeight });
+      persistBrowserPopoutBounds();
+    };
+    const onBeforeUnload = () => {
+      persistBrowserPopoutBounds();
     };
     window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
+    window.addEventListener('beforeunload', onBeforeUnload);
+    window.addEventListener('pagehide', onBeforeUnload);
+    if (typeof document !== 'undefined') {
+      document.documentElement.style.background = 'transparent';
+      document.body.style.background = 'transparent';
+    }
+    return () => {
+      window.removeEventListener('resize', onResize);
+      window.removeEventListener('beforeunload', onBeforeUnload);
+      window.removeEventListener('pagehide', onBeforeUnload);
+    };
   }, []);
+
+  const handleClosePresenter = () => {
+    if (typeof window !== 'undefined' && window.electronAPI?.closePresenterWindow) {
+      window.electronAPI.closePresenterWindow();
+    } else if (typeof window !== 'undefined') {
+      persistBrowserPopoutBounds();
+      window.close();
+    }
+  };
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
@@ -131,6 +166,9 @@ export const PresenterDisplay: React.FC = () => {
     };
 
     const handleMouseUp = () => {
+      if (dragStateRef.current) {
+        persistBrowserPopoutBounds();
+      }
       dragStateRef.current = null;
     };
 
@@ -226,13 +264,30 @@ export const PresenterDisplay: React.FC = () => {
     </>
   );
 
+  const topRightHoverCloseButton = (
+    <div className="absolute top-0 right-0 w-14 h-11 z-[60] flex items-start justify-end p-2 group/close">
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          handleClosePresenter();
+        }}
+        title="Close Presenter Display"
+        className="w-5 h-5 rounded-full bg-black/70 hover:bg-red-600/90 border border-white/25 hover:border-red-400 text-neutral-200 hover:text-white flex items-center justify-center opacity-0 group-hover/close:opacity-100 group-hover:opacity-80 hover:!opacity-100 transition-all duration-150 cursor-pointer shadow-md"
+      >
+        <X className="w-3 h-3 stroke-[2.5]" />
+      </button>
+    </div>
+  );
+
   if (!payload) {
     return (
       <div
         onMouseDown={startMove}
-        className="h-screen w-screen bg-black text-neutral-500 flex flex-col items-center justify-center font-mono select-none cursor-move relative overflow-hidden"
+        className="group h-screen w-screen bg-black rounded-xl border border-white/25 text-neutral-500 flex flex-col items-center justify-center font-mono select-none cursor-move relative overflow-hidden"
       >
         {resizeHandles}
+        {topRightHoverCloseButton}
       </div>
     );
   }
@@ -242,9 +297,10 @@ export const PresenterDisplay: React.FC = () => {
     return (
       <div
         onMouseDown={startMove}
-        className="h-screen w-screen bg-black select-none cursor-move relative overflow-hidden"
+        className="group h-screen w-screen bg-black rounded-xl border border-white/25 select-none cursor-move relative overflow-hidden"
       >
         {resizeHandles}
+        {topRightHoverCloseButton}
       </div>
     );
   }
@@ -321,9 +377,10 @@ export const PresenterDisplay: React.FC = () => {
     return (
       <div
         onMouseDown={startMove}
-        className="h-screen w-screen bg-black select-none cursor-move relative overflow-hidden"
+        className="group h-screen w-screen bg-black rounded-xl border border-white/25 select-none cursor-move relative overflow-hidden"
       >
         {resizeHandles}
+        {topRightHoverCloseButton}
         <div
           style={{
             width: `${virtualWidth}px`,
@@ -451,10 +508,13 @@ export const PresenterDisplay: React.FC = () => {
     switch (id) {
       case 'countdown': {
         if (countdownCfg?.visible === false) return null;
+        const isBebas = !countdownCfg?.font || countdownCfg.font === 'Bebas Neue';
         return (
           <div
             key="countdown"
-            className={`tracking-tighter tabular-nums leading-none text-center ${
+            className={`tabular-nums leading-none text-center ${
+              isBebas ? 'tracking-normal' : 'tracking-tighter'
+            } ${
               localPrefs.smoothTransitions !== false ? 'transition-colors duration-300' : ''
             } ${
               activeBackgroundImageUrl && !textShadowStyle
@@ -473,12 +533,17 @@ export const PresenterDisplay: React.FC = () => {
               color: resolvedDigitColor,
               fontFamily: resolveFontFamily(countdownCfg?.font),
               ...resolveFontStyleCss(countdownCfg?.fontStyle),
-              fontSize: `calc(clamp(4.5rem, ${vw(18)}, 21rem) * ${countdownScale})`,
+              fontSize: `calc(clamp(4.5rem, ${vw(isBebas ? 22 : 18)}, 24rem) * ${countdownScale})`,
               textShadow: textShadowStyle,
               transform: getElementOffsetTransform(countdownCfg, 4),
             }}
           >
-            {renderTimeWithColonOffset(displayTime, fsElements.colon?.vert)}
+            {renderTimeWithColonOffset(
+              displayTime,
+              fsElements.colon?.vert,
+              fsElements.countdown?.spacing,
+              fsElements.colon?.horiz
+            )}
           </div>
         );
       }
@@ -707,9 +772,10 @@ export const PresenterDisplay: React.FC = () => {
   return (
     <div
       onMouseDown={startMove}
-      className="h-screen w-screen bg-black select-none cursor-move relative overflow-hidden"
+      className="group h-screen w-screen bg-black rounded-xl border border-white/25 select-none cursor-move relative overflow-hidden"
     >
       {resizeHandles}
+      {topRightHoverCloseButton}
 
       <div
         style={{

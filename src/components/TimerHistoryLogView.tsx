@@ -126,26 +126,26 @@ export const TimerHistoryLogView: React.FC<TimerHistoryLogViewProps> = ({
   }, [logs, selectedListFilter, searchQuery, sortField, sortOrder]);
 
   const headerBorder = isDark
-    ? 'border-r border-[#1a2130] hover:bg-[#151c2b]'
-    : 'border-r border-slate-200 hover:bg-slate-200';
+    ? 'border-r border-white/[0.06] hover:bg-white/[0.05]'
+    : 'border-r border-slate-200 hover:bg-slate-200/70';
 
   return (
     <div
       className={`flex-1 flex flex-col min-h-0 select-none relative transition-colors duration-150 ${
-        isDark ? 'bg-[#080a0f]' : 'bg-slate-50'
+        isDark ? 'bg-[#121215]' : 'bg-slate-50'
       }`}
     >
       {/* Top Filter & Actions Bar */}
       <div
-        className={`h-9 border-b px-3 flex items-center justify-between gap-3 text-xs transition-colors ${
-          isDark ? 'bg-[#0c1017] border-[#1b2333]' : 'bg-slate-100 border-slate-200'
+        className={`glass-surface h-10 border-b px-3 flex items-center justify-between gap-3 text-xs transition-colors ${
+          isDark ? 'border-white/[0.08]' : 'border-slate-200/90'
         }`}
       >
         <div className="flex items-center gap-2.5 flex-1 max-w-xl">
           {/* Search Input */}
           <div className="relative flex items-center max-w-xs w-full">
             <Search
-              className={`w-3.5 h-3.5 absolute left-2 pointer-events-none ${
+              className={`w-3.5 h-3.5 absolute left-2.5 pointer-events-none ${
                 isDark ? 'text-neutral-500' : 'text-slate-400'
               }`}
             />
@@ -154,17 +154,15 @@ export const TimerHistoryLogView: React.FC<TimerHistoryLogViewProps> = ({
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search history by cue name, list, or status..."
-              className={`w-full rounded pl-7 pr-6 py-0.5 text-xs transition-colors focus:outline-hidden focus:border-cyan-500 border ${
-                isDark
-                  ? 'bg-[#121722] border-[#222e42] text-white placeholder-neutral-500'
-                  : 'bg-white border-slate-300 text-slate-900 placeholder-slate-400'
+              className={`glass-input w-full rounded-full pl-8 pr-7 py-1 text-xs focus:outline-hidden ${
+                isDark ? 'placeholder-neutral-500' : 'placeholder-slate-400'
               }`}
             />
             {searchQuery && (
               <button
                 type="button"
                 onClick={() => setSearchQuery('')}
-                className={`absolute right-2 cursor-pointer ${
+                className={`absolute right-2.5 cursor-pointer ${
                   isDark ? 'text-neutral-400 hover:text-white' : 'text-slate-500 hover:text-slate-900'
                 }`}
               >
@@ -177,11 +175,7 @@ export const TimerHistoryLogView: React.FC<TimerHistoryLogViewProps> = ({
           <select
             value={selectedListFilter}
             onChange={(e) => setSelectedListFilter(e.target.value)}
-            className={`rounded px-2.5 py-0.5 text-xs border focus:outline-hidden focus:border-cyan-500 cursor-pointer ${
-              isDark
-                ? 'bg-[#121722] border-[#222e42] text-neutral-200'
-                : 'bg-white border-slate-300 text-slate-800'
-            }`}
+            className="glass-input rounded-full px-3 py-1 text-xs focus:outline-hidden cursor-pointer"
           >
             <option value="all">All Cue Lists</option>
             {lists.map((l) => (
@@ -203,11 +197,7 @@ export const TimerHistoryLogView: React.FC<TimerHistoryLogViewProps> = ({
             onClick={onExportCsv}
             disabled={logs.length === 0}
             title="Export Timer Run History to CSV"
-            className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded text-xs font-medium border transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
-              isDark
-                ? 'bg-[#131924] hover:bg-[#1b2434] border-[#232e42] text-cyan-400 hover:text-cyan-300'
-                : 'bg-white hover:bg-slate-100 border-slate-300 text-cyan-700'
-            }`}
+            className="glass-btn glass-btn-cyan glass-btn-subtle flex items-center gap-1.5 px-3 py-1 text-xs font-medium cursor-pointer"
           >
             <Download className="w-3 h-3" />
             <span>Export CSV</span>
@@ -218,11 +208,7 @@ export const TimerHistoryLogView: React.FC<TimerHistoryLogViewProps> = ({
             onClick={onClearLogs}
             disabled={logs.length === 0}
             title="Clear All Recorded Timer Logs"
-            className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded text-xs font-medium border transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
-              isDark
-                ? 'bg-red-950/40 hover:bg-red-900/60 border-red-800/60 text-red-300 hover:text-white'
-                : 'bg-red-50 hover:bg-red-100 border-red-200 text-red-700'
-            }`}
+            className="glass-btn glass-btn-red glass-btn-subtle flex items-center gap-1.5 px-3 py-1 text-xs font-medium cursor-pointer"
           >
             <Trash2 className="w-3 h-3" />
             <span>Clear History</span>
@@ -235,10 +221,10 @@ export const TimerHistoryLogView: React.FC<TimerHistoryLogViewProps> = ({
         {filteredLogs.length > 0 ? (
           <table className="w-full text-left border-collapse">
             <thead
-              className={`sticky top-0 z-10 text-[11px] font-semibold uppercase tracking-wider border-b shadow-2xs ${
+              className={`sticky top-0 z-10 text-[11px] font-semibold uppercase tracking-wider border-b backdrop-blur-md shadow-2xs ${
                 isDark
-                  ? 'bg-[#0f141f] text-neutral-300 border-[#1f2838]'
-                  : 'bg-slate-100 text-slate-700 border-slate-200'
+                  ? 'bg-[#1a1a1f]/95 text-neutral-300 border-white/[0.08]'
+                  : 'bg-slate-100/95 text-slate-700 border-slate-200'
               }`}
             >
               <tr>
@@ -259,7 +245,7 @@ export const TimerHistoryLogView: React.FC<TimerHistoryLogViewProps> = ({
                 <th
                   onClick={() => handleSort('startTimestamp')}
                   className={`py-2.5 px-3.5 w-44 cursor-pointer transition-colors ${headerBorder} ${
-                    isDark ? 'bg-[#121926]/40' : 'bg-emerald-50/40'
+                    isDark ? 'bg-white/[0.025]' : 'bg-emerald-50/40'
                   }`}
                 >
                   Start Timestamp {renderSortIndicator('startTimestamp')}
@@ -267,7 +253,7 @@ export const TimerHistoryLogView: React.FC<TimerHistoryLogViewProps> = ({
                 <th
                   onClick={() => handleSort('stopTimestamp')}
                   className={`py-2.5 px-3.5 w-44 cursor-pointer transition-colors ${headerBorder} ${
-                    isDark ? 'bg-[#121926]/40' : 'bg-amber-50/40'
+                    isDark ? 'bg-white/[0.025]' : 'bg-amber-50/40'
                   }`}
                 >
                   Stop Timestamp {renderSortIndicator('stopTimestamp')}
@@ -306,16 +292,16 @@ export const TimerHistoryLogView: React.FC<TimerHistoryLogViewProps> = ({
                     className={`border-b transition-colors ${
                       isRunning
                         ? isDark
-                          ? 'bg-emerald-950/25 border-[#1a2436] hover:bg-emerald-950/35'
+                          ? 'bg-emerald-950/25 border-white/[0.06] hover:bg-emerald-950/35'
                           : 'bg-emerald-50/70 border-slate-200 hover:bg-emerald-100/70'
                         : isDark
-                        ? 'bg-[#0b0e15] border-[#151c28] hover:bg-[#111722]'
+                        ? 'bg-[#141418] border-white/[0.05] hover:bg-white/[0.04]'
                         : 'bg-white border-slate-200 hover:bg-slate-50'
                     }`}
                   >
                     <td
                       className={`py-2 px-3 text-center font-mono text-[11px] ${
-                        isDark ? 'text-neutral-500 border-r border-[#151c28]' : 'text-slate-400 border-r border-slate-200'
+                        isDark ? 'text-neutral-500 border-r border-white/[0.05]' : 'text-slate-400 border-r border-slate-200'
                       }`}
                     >
                       {filteredLogs.length - idx}
@@ -323,7 +309,7 @@ export const TimerHistoryLogView: React.FC<TimerHistoryLogViewProps> = ({
 
                     <td
                       className={`py-2 px-3.5 font-semibold ${
-                        isDark ? 'text-white border-r border-[#151c28]' : 'text-slate-900 border-r border-slate-200'
+                        isDark ? 'text-white border-r border-white/[0.05]' : 'text-slate-900 border-r border-slate-200'
                       }`}
                     >
                       {entry.timerName}
@@ -331,7 +317,7 @@ export const TimerHistoryLogView: React.FC<TimerHistoryLogViewProps> = ({
 
                     <td
                       className={`py-2 px-3 truncate ${
-                        isDark ? 'text-neutral-300 border-r border-[#151c28]' : 'text-slate-600 border-r border-slate-200'
+                        isDark ? 'text-neutral-300 border-r border-white/[0.05]' : 'text-slate-600 border-r border-slate-200'
                       }`}
                     >
                       {entry.listName}
@@ -339,7 +325,7 @@ export const TimerHistoryLogView: React.FC<TimerHistoryLogViewProps> = ({
 
                     <td
                       className={`py-2 px-3 uppercase text-[10px] font-mono tracking-wider ${
-                        isDark ? 'text-neutral-400 border-r border-[#151c28]' : 'text-slate-500 border-r border-slate-200'
+                        isDark ? 'text-neutral-400 border-r border-white/[0.05]' : 'text-slate-500 border-r border-slate-200'
                       }`}
                     >
                       {entry.timerType.replace('_', ' ')}
@@ -348,7 +334,7 @@ export const TimerHistoryLogView: React.FC<TimerHistoryLogViewProps> = ({
                     {/* Start Timestamp */}
                     <td
                       className={`py-2 px-3.5 font-mono ${
-                        isDark ? 'border-r border-[#151c28]' : 'border-r border-slate-200'
+                        isDark ? 'border-r border-white/[0.05]' : 'border-r border-slate-200'
                       }`}
                     >
                       <div className="flex items-center gap-2">
@@ -364,7 +350,7 @@ export const TimerHistoryLogView: React.FC<TimerHistoryLogViewProps> = ({
                     {/* Stop Timestamp */}
                     <td
                       className={`py-2 px-3.5 font-mono ${
-                        isDark ? 'border-r border-[#151c28]' : 'border-r border-slate-200'
+                        isDark ? 'border-r border-white/[0.05]' : 'border-r border-slate-200'
                       }`}
                     >
                       {entry.stopTimestamp ? (
@@ -378,7 +364,7 @@ export const TimerHistoryLogView: React.FC<TimerHistoryLogViewProps> = ({
                         </div>
                       ) : (
                         <span
-                          className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-bold tracking-wider uppercase ${
+                          className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold tracking-wider uppercase ${
                             isRunning
                               ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
                               : 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
@@ -397,7 +383,7 @@ export const TimerHistoryLogView: React.FC<TimerHistoryLogViewProps> = ({
                     {/* Planned Duration */}
                     <td
                       className={`py-2 px-3 font-mono ${
-                        isDark ? 'text-neutral-300 border-r border-[#151c28]' : 'text-slate-700 border-r border-slate-200'
+                        isDark ? 'text-neutral-300 border-r border-white/[0.05]' : 'text-slate-700 border-r border-slate-200'
                       }`}
                     >
                       {formatSeconds(entry.plannedDurationSeconds, true)}
@@ -406,7 +392,7 @@ export const TimerHistoryLogView: React.FC<TimerHistoryLogViewProps> = ({
                     {/* Actual Elapsed */}
                     <td
                       className={`py-2 px-3 font-mono font-semibold ${
-                        isDark ? 'text-cyan-300 border-r border-[#151c28]' : 'text-cyan-700 border-r border-slate-200'
+                        isDark ? 'text-cyan-300 border-r border-white/[0.05]' : 'text-cyan-700 border-r border-slate-200'
                       }`}
                     >
                       {formatSeconds(entry.elapsedSeconds, true)}
@@ -415,24 +401,24 @@ export const TimerHistoryLogView: React.FC<TimerHistoryLogViewProps> = ({
                     {/* Status Badge */}
                     <td
                       className={`py-2 px-3 ${
-                        isDark ? 'border-r border-[#151c28]' : 'border-r border-slate-200'
+                        isDark ? 'border-r border-white/[0.05]' : 'border-r border-slate-200'
                       }`}
                     >
                       {isRunning && (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-emerald-500/20 text-emerald-400 border border-emerald-500/40">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-emerald-500/20 text-emerald-400 border border-emerald-500/40">
                           <Play className="w-2.5 h-2.5 fill-current" />
                           Running
                         </span>
                       )}
                       {isPaused && (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-amber-500/20 text-amber-400 border border-amber-500/40">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-500/20 text-amber-400 border border-amber-500/40">
                           <Pause className="w-2.5 h-2.5 fill-current" />
                           Paused
                         </span>
                       )}
                       {entry.status === 'stopped' && (
                         <span
-                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border ${
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border ${
                             isDark
                               ? 'bg-red-500/15 text-red-300 border-red-500/30'
                               : 'bg-red-50 text-red-700 border-red-200'
@@ -444,7 +430,7 @@ export const TimerHistoryLogView: React.FC<TimerHistoryLogViewProps> = ({
                       )}
                       {entry.status === 'completed' && (
                         <span
-                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border ${
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border ${
                             isDark
                               ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30'
                               : 'bg-cyan-50 text-cyan-700 border-cyan-200'
@@ -462,9 +448,9 @@ export const TimerHistoryLogView: React.FC<TimerHistoryLogViewProps> = ({
                         type="button"
                         onClick={() => onDeleteLog(entry.id)}
                         title="Delete Log Entry"
-                        className={`p-1 rounded transition-colors cursor-pointer ${
+                        className={`p-1.5 rounded-full transition-colors cursor-pointer ${
                           isDark
-                            ? 'text-neutral-500 hover:text-red-400 hover:bg-red-950/40'
+                            ? 'text-neutral-500 hover:text-red-400 hover:bg-red-500/15'
                             : 'text-slate-400 hover:text-red-600 hover:bg-red-50'
                         }`}
                       >
@@ -478,13 +464,7 @@ export const TimerHistoryLogView: React.FC<TimerHistoryLogViewProps> = ({
           </table>
         ) : (
           <div className="min-h-[260px] flex flex-col items-center justify-center p-8 text-center">
-            <div
-              className={`w-12 h-12 rounded-full border flex items-center justify-center mb-3 ${
-                isDark
-                  ? 'bg-[#0c1018] border-[#1f293d] text-cyan-400'
-                  : 'bg-white border-slate-200 text-cyan-600 shadow-2xs'
-              }`}
-            >
+            <div className="glass-btn glass-btn-cyan w-12 h-12 flex items-center justify-center mb-3 pointer-events-none">
               <History className="w-6 h-6" />
             </div>
             <p className={`text-sm font-semibold ${isDark ? 'text-neutral-200' : 'text-slate-800'}`}>

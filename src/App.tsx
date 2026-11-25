@@ -3,10 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useCallback } from 'react';
 import { MainConsolePage, DisplayPage } from './pages';
 import { DisplayTarget } from './types';
 import { ThemeProvider } from './context';
+import { LaunchSplash } from './components/LaunchSplash';
 
 export default function App() {
   // Parse display query param for multi-window / multi-monitor secondary screens
@@ -17,9 +18,22 @@ export default function App() {
     return target;
   }, []);
 
+  const [showLaunchSplash, setShowLaunchSplash] = useState<boolean>(() => !displayTarget);
+
+  const handleSplashComplete = useCallback(() => {
+    setShowLaunchSplash(false);
+  }, []);
+
   return (
     <ThemeProvider>
-      {displayTarget ? <DisplayPage target={displayTarget} /> : <MainConsolePage />}
+      {displayTarget ? (
+        <DisplayPage target={displayTarget} />
+      ) : (
+        <>
+          <MainConsolePage />
+          {showLaunchSplash && <LaunchSplash onComplete={handleSplashComplete} />}
+        </>
+      )}
     </ThemeProvider>
   );
 }

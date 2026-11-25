@@ -44,18 +44,19 @@ asarUnpack:
   - server/**/*
   - server.ts
 
-extraResources:
-  - from: ndi
-    to: ndi
-    filter:
-      - "**/*"
-
 compression: normal
 
 win:
   icon: build/icon.ico
   executableName: ProTimer
   signAndEditExecutable: true
+  extraResources:
+    - from: ndi
+      to: ndi
+      filter:
+        - "**/*"
+        - "!*.dylib"
+        - "!*.so*"
   target:
     - target: nsis
       arch:
@@ -77,11 +78,11 @@ nsis:
   shortcutName: ProTimer
   runAfterFinish: true
   deleteAppDataOnUninstall: false
-  artifactName: ProTimer-Setup.exe
+  artifactName: ProTimer-v${version}-Setup.exe
   uninstallDisplayName: ProTimer
 
 portable:
-  artifactName: ProTimer-Portable.exe
+  artifactName: ProTimer-v${version}-Portable.exe
 
 mac:
   icon: build/icon.png
@@ -89,19 +90,45 @@ mac:
   identity: null
   hardenedRuntime: false
   gatekeeperAssess: false
-  artifactName: ProTimer-Mac-${arch}.${ext}
+  artifactName: ProTimer-v${version}-Mac-${arch}.${ext}
+  extraResources:
+    - from: ndi
+      to: ndi
+      filter:
+        - "**/*"
+        - "!*.dll"
+        - "!*.so*"
   target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64
     - target: zip
       arch:
-        - x64
         - arm64
+        - x64
+
+dmg:
+  sign: false
+  artifactName: ProTimer-v${version}-Mac-${arch}.${ext}
 
 linux:
   icon: build/icon.png
   category: AudioVideo
-  artifactName: ProTimer-Linux-${arch}.${ext}
+  executableName: protimer
+  maintainer: Bigjoe Technology <support@protimer.app>
+  artifactName: ProTimer-v${version}-Linux-${arch}.${ext}
+  extraResources:
+    - from: ndi
+      to: ndi
+      filter:
+        - "**/*"
+        - "!*.dll"
+        - "!*.dylib"
   target:
     - target: AppImage
       arch:
         - x64
-
+    - target: deb
+      arch:
+        - x64

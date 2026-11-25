@@ -134,13 +134,15 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     return `${Math.round(sec / 60)} min`;
   };
 
-  const containerBg = isDark ? 'bg-[#0c0f16] border-b border-[#1b2333]' : 'bg-[#dfe5ef] border-b border-slate-300 shadow-2xs';
-  const sectionTitleColor = isDark ? 'text-neutral-400' : 'text-slate-600';
-  const labelColor = isDark ? 'text-neutral-300' : 'text-slate-700';
-  const dividerBg = isDark ? 'bg-[#1b2333]' : 'bg-slate-300';
+  const containerBg = isDark
+    ? 'glass-surface border-b border-white/[0.08]'
+    : 'glass-surface border-b border-slate-300/80 shadow-2xs';
+  const sectionTitleColor = isDark ? 'text-neutral-400/90' : 'text-slate-600';
+  const labelColor = isDark ? 'text-[#a8abb3]' : 'text-slate-700';
+  const dividerBg = isDark ? 'bg-white/[0.08]' : 'bg-slate-300';
 
   return (
-    <div className={`${containerBg} px-3 sm:px-4 py-2 flex flex-nowrap items-center justify-start gap-3.5 overflow-x-auto select-none relative min-w-0 transition-colors duration-150`}>
+    <div className={`${containerBg} px-3 sm:px-4 py-2.5 flex flex-nowrap items-center justify-start gap-3.5 overflow-x-auto select-none relative min-w-0 transition-colors duration-150`}>
       {/* =========================================================================
           SECTION 1: CONTROLS
           Buttons: Start, Stop, Cue/Move, Pause, Restart (+ Lap for Stopwatch)
@@ -153,19 +155,17 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               type="button"
               onClick={onStart}
               title="Start Next Cue (Space)"
-              className={`w-11 h-11 rounded flex items-center justify-center transition-all shadow-md active:scale-95 cursor-pointer ${
-                isRunning 
-                  ? 'bg-red-600 ring-2 ring-red-400 text-white' 
-                  : isDark
-                  ? 'bg-[#1a2b22] hover:bg-[#233a2e] text-emerald-400 border border-emerald-800/60'
-                  : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-300'
+              className={`glass-btn w-12 h-10 rounded-full flex items-center justify-center cursor-pointer ${
+                isRunning
+                  ? 'glass-btn-red-active'
+                  : 'glass-btn-emerald'
               }`}
             >
-              <Play className={`w-5 h-5 ml-0.5 group-hover:scale-105 transition-transform ${
-                isRunning ? 'fill-white text-white' : isDark ? 'fill-emerald-400 text-emerald-400' : 'fill-emerald-600 text-emerald-600'
+              <Play className={`w-4 h-4 ml-0.5 group-hover:scale-105 transition-transform ${
+                isRunning ? 'fill-white text-white' : isDark ? 'fill-emerald-300 text-emerald-300' : 'fill-emerald-700 text-emerald-700'
               }`} />
             </button>
-            <span className={`text-[10px] font-medium tracking-tight ${labelColor}`}>Start Next</span>
+            <span className={`text-[10px] font-medium tracking-wide ${labelColor}`}>Start Next</span>
           </div>
 
           {/* 2. Stop */}
@@ -174,22 +174,16 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               type="button"
               onClick={onStop}
               title="Stop Selected Timer"
-              className={`w-11 h-11 rounded flex items-center justify-center shadow-md active:scale-95 transition-all cursor-pointer ${
-                isDark
-                  ? 'bg-[#1f2633] hover:bg-[#263042] border border-[#2e3b52] text-neutral-300 hover:text-white'
-                  : 'bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 hover:text-slate-900'
-              }`}
+              className="glass-btn w-12 h-10 rounded-full flex items-center justify-center cursor-pointer"
             >
-              <Square className="w-5 h-5 fill-current group-hover:scale-105 transition-transform" />
+              <Square className="w-4 h-4 fill-current group-hover:scale-105 transition-transform" />
             </button>
-            <span className={`text-[10px] font-medium tracking-tight ${labelColor}`}>Stop</span>
+            <span className={`text-[10px] font-medium tracking-wide ${labelColor}`}>Stop</span>
           </div>
 
-          {/* 3. Move (Divided Up / Down) */}
+          {/* 3. Move (Divided Up / Down Pill Capsule) */}
           <div className="flex flex-col items-center gap-1 group">
-            <div className={`w-11 h-11 rounded flex flex-col overflow-hidden shadow-md border ${
-              isDark ? 'bg-[#14233a] border-blue-900/60' : 'bg-blue-50/80 border-blue-200'
-            }`}>
+            <div className="glass-btn glass-btn-blue w-12 h-10 rounded-full flex flex-col overflow-hidden p-0">
               {/* Move Up / Previous Cue */}
               <button
                 type="button"
@@ -197,8 +191,8 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                 title="Move to Previous Cue (Shift+C)"
                 className={`flex-1 w-full flex items-center justify-center transition-colors border-b group/up cursor-pointer ${
                   isDark
-                    ? 'hover:bg-[#1f375a] active:bg-[#254570] border-blue-900/60 text-slate-200 hover:text-white'
-                    : 'hover:bg-blue-100 active:bg-blue-200 border-blue-200 text-slate-700 hover:text-slate-900'
+                    ? 'hover:bg-white/10 active:bg-white/15 border-white/12 text-blue-200 hover:text-white'
+                    : 'hover:bg-blue-200/50 active:bg-blue-200/80 border-blue-300/60 text-blue-800 hover:text-slate-900'
                 }`}
               >
                 <ChevronUp className="w-3.5 h-3.5 group-hover/up:scale-110 transition-transform" />
@@ -211,14 +205,14 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                 title="Skip Event / Move to Next Cue (C)"
                 className={`flex-1 w-full flex items-center justify-center transition-colors group/down cursor-pointer ${
                   isDark
-                    ? 'hover:bg-[#1f375a] active:bg-[#254570] text-amber-400 hover:text-amber-300'
-                    : 'hover:bg-blue-100 active:bg-blue-200 text-amber-600 hover:text-amber-700'
+                    ? 'hover:bg-white/10 active:bg-white/15 text-amber-300 hover:text-amber-200'
+                    : 'hover:bg-blue-200/50 active:bg-blue-200/80 text-amber-700 hover:text-amber-800'
                 }`}
               >
                 <ChevronDown className="w-3.5 h-3.5 group-hover/down:scale-110 transition-transform" />
               </button>
             </div>
-            <span className={`text-[10px] font-medium tracking-tight ${labelColor}`}>Move</span>
+            <span className={`text-[10px] font-medium tracking-wide ${labelColor}`}>Move</span>
           </div>
 
           {/* 4. Pause */}
@@ -227,19 +221,17 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               type="button"
               onClick={onPause}
               title={isPaused ? 'Resume Timer' : 'Pause Timer (preserves current value)'}
-              className={`w-11 h-11 rounded border flex items-center justify-center shadow-md active:scale-95 transition-all cursor-pointer ${
+              className={`glass-btn w-12 h-10 rounded-full flex items-center justify-center cursor-pointer ${
                 isPaused
-                  ? 'bg-amber-600 ring-2 ring-amber-400 text-white border-amber-500'
-                  : isDark
-                  ? 'bg-[#152438] hover:bg-[#1c304d] text-cyan-400 border-cyan-950/80'
-                  : 'bg-cyan-50 hover:bg-cyan-100 text-cyan-700 border-cyan-300'
+                  ? 'glass-btn-amber-active'
+                  : 'glass-btn-cyan'
               }`}
             >
-              <Pause className={`w-5 h-5 group-hover:scale-105 transition-transform ${
-                isPaused ? 'fill-white text-white' : isDark ? 'fill-cyan-400 text-cyan-400' : 'fill-cyan-600 text-cyan-600'
+              <Pause className={`w-4 h-4 group-hover:scale-105 transition-transform ${
+                isPaused ? 'fill-white text-white' : isDark ? 'fill-cyan-300 text-cyan-300' : 'fill-cyan-700 text-cyan-700'
               }`} />
             </button>
-            <span className={`text-[10px] font-medium tracking-tight ${labelColor}`}>Pause</span>
+            <span className={`text-[10px] font-medium tracking-wide ${labelColor}`}>Pause</span>
           </div>
 
           {/* 5. Restart */}
@@ -248,30 +240,22 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               type="button"
               onClick={onRestart}
               title="Reset to original duration & start immediately (Restart)"
-              className={`w-11 h-11 rounded flex items-center justify-center shadow-md active:scale-95 transition-all cursor-pointer ${
-                isDark
-                  ? 'bg-[#152438] hover:bg-[#1c304d] border border-cyan-950/80 text-cyan-400'
-                  : 'bg-cyan-50 hover:bg-cyan-100 border border-cyan-300 text-cyan-700'
-              }`}
+              className="glass-btn glass-btn-cyan w-12 h-10 rounded-full flex items-center justify-center cursor-pointer"
             >
               <RotateCcw className="w-4 h-4 group-hover:-rotate-45 transition-transform" />
             </button>
-            <span className={`text-[10px] font-medium tracking-tight ${labelColor}`}>Restart</span>
+            <span className={`text-[10px] font-medium tracking-wide ${labelColor}`}>Restart</span>
           </div>
 
           {/* 6. Stopwatch Lap (Shown for Stopwatch) */}
           {isStopwatch && onRecordLap && (
-            <div className={`flex flex-col items-center gap-1 group pl-1 border-l ${isDark ? 'border-[#1f2838]' : 'border-slate-300'}`}>
+            <div className={`flex flex-col items-center gap-1 group pl-2 border-l ${isDark ? 'border-white/[0.08]' : 'border-slate-300'}`}>
               <button
                 type="button"
                 onClick={onRecordLap}
                 disabled={!isRunning}
                 title="Record Lap Split (Flag)"
-                className={`w-11 h-11 rounded disabled:opacity-50 flex items-center justify-center shadow-md active:scale-95 transition-all cursor-pointer ${
-                  isDark
-                    ? 'bg-[#1e1a2b] hover:bg-[#2b243e] border border-purple-900/60 text-purple-400'
-                    : 'bg-purple-50 hover:bg-purple-100 border border-purple-300 text-purple-700'
-                }`}
+                className="glass-btn glass-btn-purple w-12 h-10 rounded-full flex items-center justify-center cursor-pointer"
               >
                 <Flag className="w-4 h-4 fill-current group-hover:scale-105 transition-transform" />
               </button>
@@ -279,7 +263,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                 type="button"
                 onClick={() => setShowLapsModal(true)}
                 title="View Recorded Stopwatch Laps"
-                className={`text-[10px] font-medium tracking-tight hover:underline cursor-pointer ${
+                className={`text-[10px] font-medium tracking-wide hover:underline cursor-pointer ${
                   isDark ? 'text-purple-300' : 'text-purple-700'
                 }`}
               >
@@ -325,15 +309,11 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                 type="button"
                 onClick={() => onAdjustDuration(incrementSeconds)}
                 title={`Increase duration by ${formatIncrementLabel(incrementSeconds)} (+)`}
-                className={`w-11 h-11 rounded flex items-center justify-center transition-colors shadow-xs active:scale-95 cursor-pointer ${
-                  isDark
-                    ? 'bg-[#162740] hover:bg-[#1f375a] border border-blue-800/60 text-blue-400 hover:text-blue-300'
-                    : 'bg-blue-50 hover:bg-blue-100 border border-blue-300 text-blue-700 hover:text-blue-800'
-                }`}
+                className="glass-btn glass-btn-blue w-12 h-10 rounded-full flex items-center justify-center cursor-pointer"
               >
-                <Plus className="w-5 h-5 group-hover:scale-110 transition-transform" />
+                <Plus className="w-4 h-4 group-hover:scale-110 transition-transform" />
               </button>
-              <span className={`text-[10px] font-medium tracking-tight ${labelColor}`}>
+              <span className={`text-[10px] font-medium tracking-wide ${labelColor}`}>
                 +{formatIncrementLabel(incrementSeconds)}
               </span>
             </div>
@@ -344,15 +324,11 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                 type="button"
                 onClick={() => onAdjustDuration(-incrementSeconds)}
                 title={`Decrease duration by ${formatIncrementLabel(incrementSeconds)} (-)`}
-                className={`w-11 h-11 rounded flex items-center justify-center transition-colors shadow-xs active:scale-95 cursor-pointer ${
-                  isDark
-                    ? 'bg-[#162740] hover:bg-[#1f375a] border border-blue-800/60 text-blue-400 hover:text-blue-300'
-                    : 'bg-blue-50 hover:bg-blue-100 border border-blue-300 text-blue-700 hover:text-blue-800'
-                }`}
+                className="glass-btn glass-btn-blue w-12 h-10 rounded-full flex items-center justify-center cursor-pointer"
               >
-                <Minus className="w-5 h-5 group-hover:scale-110 transition-transform" />
+                <Minus className="w-4 h-4 group-hover:scale-110 transition-transform" />
               </button>
-              <span className={`text-[10px] font-medium tracking-tight ${labelColor}`}>
+              <span className={`text-[10px] font-medium tracking-wide ${labelColor}`}>
                 -{formatIncrementLabel(incrementSeconds)}
               </span>
             </div>
@@ -367,21 +343,17 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                     const rect = stepButtonRef.current.getBoundingClientRect();
                     setStepMenuPos({
                       top: rect.bottom + 6,
-                      left: Math.min(rect.left, window.innerWidth - 128),
+                      left: Math.min(rect.left, window.innerWidth - 136),
                     });
                   }
                   setShowIncrementSelector(!showIncrementSelector);
                 }}
                 title="Change increment step (15s, 30s, 1m, 5m)"
-                className={`w-11 h-11 rounded flex flex-col items-center justify-center transition-colors cursor-pointer ${
-                  isDark
-                    ? 'bg-[#121722] hover:bg-[#1a2333] border border-[#222e42] text-neutral-400 hover:text-white'
-                    : 'bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 hover:text-slate-900'
-                }`}
+                className="glass-btn w-12 h-10 rounded-full flex flex-col items-center justify-center cursor-pointer"
               >
                 <Sliders className="w-4 h-4" />
               </button>
-              <span className={`text-[10px] font-medium tracking-tight ${sectionTitleColor}`}>
+              <span className={`text-[10px] font-medium tracking-wide ${sectionTitleColor}`}>
                 Step
               </span>
 
@@ -389,12 +361,12 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                 <div
                   ref={stepMenuRef}
                   style={{ top: stepMenuPos.top, left: stepMenuPos.left }}
-                  className={`fixed w-32 rounded-md shadow-2xl py-1 z-[100] text-xs animate-in fade-in zoom-in-95 duration-100 ${
-                    isDark ? 'bg-[#101520] border border-[#253247] text-neutral-200' : 'bg-white border border-slate-300 text-slate-800'
+                  className={`glass-card fixed w-36 rounded-2xl py-1.5 z-[100] text-xs animate-in fade-in zoom-in-95 duration-100 ${
+                    isDark ? 'text-neutral-200' : 'text-slate-800'
                   }`}
                 >
-                  <div className={`px-2.5 py-1 text-[10px] font-semibold border-b ${
-                    isDark ? 'text-neutral-400 border-[#1f2838]' : 'text-slate-500 border-slate-200'
+                  <div className={`px-3 py-1 text-[10px] font-semibold border-b ${
+                    isDark ? 'text-neutral-400 border-white/10' : 'text-slate-500 border-slate-200'
                   }`}>
                     Increment:
                   </div>
@@ -406,14 +378,14 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                         setIncrementSeconds(sec);
                         setShowIncrementSelector(false);
                       }}
-                      className={`w-full text-left px-2.5 py-1.5 text-xs flex items-center justify-between cursor-pointer ${
+                      className={`w-full text-left px-3 py-1.5 text-xs flex items-center justify-between transition-colors cursor-pointer ${
                         incrementSeconds === sec 
-                          ? 'text-cyan-500 font-semibold' 
-                          : isDark ? 'text-neutral-300 hover:bg-[#1c273a]' : 'text-slate-700 hover:bg-slate-100'
+                          ? 'text-cyan-400 font-semibold' 
+                          : isDark ? 'text-neutral-300 hover:bg-white/[0.08] hover:text-white' : 'text-slate-700 hover:bg-slate-200/70'
                       }`}
                     >
                       <span>{formatIncrementLabel(sec)}</span>
-                      {incrementSeconds === sec && <Check className="w-3 h-3 text-cyan-500" />}
+                      {incrementSeconds === sec && <Check className="w-3 h-3 text-cyan-400" />}
                     </button>
                   ))}
                 </div>
@@ -431,9 +403,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
         <div className="flex flex-col items-center">
           <div className="flex flex-col items-center gap-1">
             <div 
-              className={`h-11 px-2.5 rounded border flex items-center gap-1 shadow-inner ${
-                isDark ? 'bg-[#0f141d] border-[#222e42]' : 'bg-slate-100 border-slate-300'
-              }`}
+              className="glass-input h-10 px-3 rounded-full flex items-center gap-1"
               title="Speed %"
             >
               <input
@@ -479,7 +449,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                 </button>
               </div>
             </div>
-            <div className="h-4" />
+            <div className="h-3.5" />
           </div>
           <div className="mt-1 text-center">
             <span className={`text-[10px] font-bold tracking-wider ${sectionTitleColor}`}>
@@ -504,17 +474,13 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               type="button"
               onClick={onToggleBlackout}
               title="Hide / Blackout Secondary Displays (H)"
-              className={`w-11 h-11 rounded flex items-center justify-center transition-all shadow-xs active:scale-95 cursor-pointer ${
-                isBlackout
-                  ? 'bg-red-900/80 text-white border border-red-500 ring-2 ring-red-500/50'
-                  : isDark
-                  ? 'bg-[#1a202c] hover:bg-[#252e3e] text-neutral-300 border border-[#2a364a]'
-                  : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300'
+              className={`glass-btn w-12 h-10 rounded-full flex items-center justify-center cursor-pointer ${
+                isBlackout ? 'glass-btn-red-active' : ''
               }`}
             >
-              <Monitor className="w-5 h-5 group-hover:scale-105 transition-transform" />
+              <Monitor className="w-4 h-4 group-hover:scale-105 transition-transform" />
             </button>
-            <span className={`text-[10px] font-medium tracking-tight ${labelColor}`}>Hide</span>
+            <span className={`text-[10px] font-medium tracking-wide ${labelColor}`}>Hide</span>
           </div>
 
           {/* Clock */}
@@ -523,17 +489,13 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               type="button"
               onClick={onToggleClock}
               title="Switch to Real-Time Clock on Displays"
-              className={`w-11 h-11 rounded flex items-center justify-center transition-all shadow-xs active:scale-95 cursor-pointer ${
-                isClockMode
-                  ? 'bg-cyan-900/80 text-white border border-cyan-400 ring-2 ring-cyan-400/50'
-                  : isDark
-                  ? 'bg-[#1a202c] hover:bg-[#252e3e] text-neutral-300 border border-[#2a364a]'
-                  : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300'
+              className={`glass-btn w-12 h-10 rounded-full flex items-center justify-center cursor-pointer ${
+                isClockMode ? 'glass-btn-cyan-active' : ''
               }`}
             >
-              <Clock className="w-5 h-5 group-hover:scale-105 transition-transform" />
+              <Clock className="w-4 h-4 group-hover:scale-105 transition-transform" />
             </button>
-            <span className={`text-[10px] font-medium tracking-tight ${labelColor}`}>Clock</span>
+            <span className={`text-[10px] font-medium tracking-wide ${labelColor}`}>Clock</span>
           </div>
         </div>
         <div className="mt-1 text-center">
@@ -558,15 +520,11 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               type="button"
               onClick={onEditMessage}
               title="Edit Stage Message to Speaker (M)"
-              className={`w-11 h-11 rounded flex items-center justify-center transition-colors shadow-xs active:scale-95 cursor-pointer ${
-                isDark
-                  ? 'bg-[#2b211a] hover:bg-[#382b22] border border-amber-900/60 text-amber-400 hover:text-amber-300'
-                  : 'bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-700 hover:text-amber-800'
-              }`}
+              className="glass-btn glass-btn-amber w-12 h-10 rounded-full flex items-center justify-center cursor-pointer"
             >
-              <Edit3 className="w-5 h-5 group-hover:scale-105 transition-transform" />
+              <Edit3 className="w-4 h-4 group-hover:scale-105 transition-transform" />
             </button>
-            <span className={`text-[10px] font-medium tracking-tight ${labelColor}`}>Edit</span>
+            <span className={`text-[10px] font-medium tracking-wide ${labelColor}`}>Edit</span>
           </div>
 
           {/* Show Message */}
@@ -575,17 +533,15 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               type="button"
               onClick={onToggleMessageShow}
               title="Show / Hide Message on Stage Monitors"
-              className={`w-11 h-11 rounded flex items-center justify-center transition-all shadow-xs active:scale-95 cursor-pointer ${
+              className={`glass-btn w-12 h-10 rounded-full flex items-center justify-center cursor-pointer ${
                 hasActiveMessage && messageVisible
-                  ? 'bg-amber-600 text-white ring-2 ring-amber-400 shadow-md'
-                  : isDark
-                  ? 'bg-[#251e30] hover:bg-[#322842] text-purple-300 border border-purple-900/60'
-                  : 'bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-300'
+                  ? 'glass-btn-amber-active'
+                  : 'glass-btn-purple'
               }`}
             >
-              <MessageSquare className="w-5 h-5 group-hover:scale-105 transition-transform" />
+              <MessageSquare className="w-4 h-4 group-hover:scale-105 transition-transform" />
             </button>
-            <span className={`text-[10px] font-medium tracking-tight ${labelColor}`}>Show</span>
+            <span className={`text-[10px] font-medium tracking-wide ${labelColor}`}>Show</span>
           </div>
         </div>
         <div className="mt-1 text-center">
@@ -599,23 +555,23 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
           STOPWATCH LAPS MODAL
          ========================================================================= */}
       {showLapsModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-xs p-4">
-          <div className={`w-full max-w-sm rounded-lg shadow-2xl p-5 animate-in fade-in zoom-in-95 duration-150 flex flex-col max-h-[80vh] border ${
-            isDark ? 'bg-[#111622] border-[#253247] text-white' : 'bg-white border-slate-300 text-slate-900'
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className={`glass-card w-full max-w-sm rounded-[28px] p-5 animate-in fade-in zoom-in-95 duration-150 flex flex-col max-h-[80vh] ${
+            isDark ? 'text-white' : 'text-slate-900'
           }`}>
             <div className={`flex items-center justify-between pb-3 border-b mb-3 ${
-              isDark ? 'border-[#1f2838]' : 'border-slate-200'
+              isDark ? 'border-white/10' : 'border-slate-200'
             }`}>
               <h4 className="font-semibold text-sm flex items-center gap-2">
-                <Flag className="w-4 h-4 text-purple-500" />
+                <Flag className="w-4 h-4 text-purple-400" />
                 Stopwatch Lap Times ({activeTimer?.laps?.length || 0})
               </h4>
               <button
                 type="button"
                 onClick={() => setShowLapsModal(false)}
-                className={`p-1 rounded cursor-pointer ${isDark ? 'text-neutral-400 hover:text-white' : 'text-slate-500 hover:text-slate-900'}`}
+                className="glass-btn glass-btn-subtle w-7 h-7 rounded-full flex items-center justify-center cursor-pointer"
               >
-                <X className="w-4 h-4" />
+                <X className="w-3.5 h-3.5" />
               </button>
             </div>
 
@@ -624,31 +580,27 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                 activeTimer.laps.map((lap) => (
                   <div
                     key={lap.lapNumber}
-                    className={`flex items-center justify-between p-2 rounded font-mono border ${
-                      isDark ? 'bg-[#090b10] border-[#1f2838]' : 'bg-slate-50 border-slate-200'
-                    }`}
+                    className="glass-subcard flex items-center justify-between px-3 py-2 rounded-xl font-mono"
                   >
-                    <span className="text-purple-500 font-semibold">Lap {lap.lapNumber}</span>
+                    <span className="text-purple-400 font-semibold">Lap {lap.lapNumber}</span>
                     <span className={isDark ? 'text-neutral-300' : 'text-slate-600'}>+{formatSeconds(lap.lapTimeSeconds, true)}</span>
                     <span className={`font-bold ${isDark ? 'text-neutral-100' : 'text-slate-900'}`}>{formatSeconds(lap.overallTimeSeconds, true)}</span>
                   </div>
                 ))
               ) : (
-                <div className={`text-center py-6 ${isDark ? 'text-neutral-500' : 'text-slate-500'}`}>
+                <div className={`text-center py-6 ${isDark ? 'text-neutral-400' : 'text-slate-500'}`}>
                   No laps recorded yet. Press the Lap flag while stopwatch is running.
                 </div>
               )}
             </div>
 
             <div className={`flex items-center justify-end pt-3 border-t ${
-              isDark ? 'border-[#1f2838]' : 'border-slate-200'
+              isDark ? 'border-white/10' : 'border-slate-200'
             }`}>
               <button
                 type="button"
                 onClick={() => setShowLapsModal(false)}
-                className={`px-4 py-1.5 rounded text-xs font-semibold cursor-pointer ${
-                  isDark ? 'bg-[#1e2738] hover:bg-[#28354c] text-white' : 'bg-slate-200 hover:bg-slate-300 text-slate-800'
-                }`}
+                className="glass-btn px-5 py-1.5 rounded-full text-xs font-medium cursor-pointer"
               >
                 Close
               </button>

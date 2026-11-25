@@ -33,8 +33,15 @@ import {
 import { generateId } from '../utilities/idGenerator';
 import { formatSeconds } from '../utilities/timeFormatters';
 import { storageService } from './storageService';
+import { APP_VERSION } from '../constants/appVersion';
 import { audioController } from '../audio/AudioController';
 import { formatClock, calculateEndTime } from '../utilities/timeFormatters';
+import {
+  listTemplatesService,
+  ListTemplate,
+  ListTemplateCategory,
+  TemplateLoadMode,
+} from './listTemplatesService';
 
 export type TimerManagerSubscriber = (snapshot: TimerSnapshot, timers: TimerItem[]) => void;
 
@@ -2547,6 +2554,163 @@ class TimerManagerService {
   }
 
   /**
+   * Return the ordered TimerItem array for any list ID.
+   */
+  public getListTimers(listId: string): TimerItem[] {
+    const list = this.lists.get(listId);
+    if (!list) return [];
+    const items: TimerItem[] = [];
+    for (const tid of list.timerIds) {
+      const timer = this.timers.get(tid);
+      if (timer) items.push(timer);
+    }
+    return items;
+  }
+
+  /**
+   * Save any existing tab list and all its cues as a reusable template.
+   */
+  public saveListAsTemplate(
+    listId: string,
+    options?: {
+      name?: string;
+      description?: string;
+      category?: ListTemplateCategory;
+    }
+  ): ListTemplate | null {
+    const list = this.lists.get(listId);
+    if (!list) return null;
+    const listTimers = this.getListTimers(listId);
+    return listTemplatesService.saveListAsTemplate(list, listTimers, options);
+  }
+
+  /**
+   * Load a list template at a go:
+   * - 'new_tab': creates a new tab list named after the template, populates all cues, and switches to it.
+   * - 'append': appends all template cues to the currently active list.
+   * - 'replace': replaces all cues in the currently active list with the template's cues.
+   */
+  public loadTemplate(
+    template: ListTemplate,
+    mode: TemplateLoadMode = 'new_tab'
+  ): { listId: string; listName: string; cueCount: number } {
+    this.pushHistory(`Load Template "${template.name}"`);
+    const now = Date.now();
+    let targetList: TimerList;
+
+    if (mode === 'new_tab') {
+      const sortedLists = this.getAllLists();
+      const existingNames = new Set(sortedLists.map((l) => l.name.toLowerCase()));
+      let candidateName = template.name.trim() || 'Template List';
+      if (existingNames.has(candidateName.toLowerCase())) {
+        let suffix = 2;
+        while (existingNames.has(`${candidateName} (${suffix})`.toLowerCase())) {
+          suffix += 1;
+        }
+        candidateName = `${candidateName} (${suffix})`;
+      }
+
+      const maxOrder = sortedLists.reduce((max, l) => Math.max(max, l.order ?? 0), -1);
+      const newListId = generateId('list');
+      targetList = {
+        id: newListId,
+        name: candidateName,
+        description: template.description || '',
+        color: template.color,
+        order: maxOrder + 1,
+        timerIds: [],
+        createdAt: now,
+        updatedAt: now,
+      };
+      this.lists.set(newListId, targetList);
+    } else {
+      const active = this.lists.get(this.activeListId) || this.getAllLists()[0];
+      if (!active) {
+        return this.loadTemplate(template, 'new_tab');
+      }
+      targetList = active;
+
+      if (mode === 'replace') {
+        targetList.timerIds.forEach((tid) => {
+          this.runningTimerIds.delete(tid);
+          this.timers.delete(tid);
+          storageService.deleteTimer(tid);
+        });
+        targetList.timerIds = [];
+        this.activeTimerIdByList.set(targetList.id, null);
+        this.cuedTimerIdByList.set(targetList.id, null);
+        if (this.activeListId === targetList.id) {
+          this.activeTimerId = null;
+          this.cuedTimerId = null;
+        }
+        this.checkStopTicker();
+      }
+    }
+
+    const baseOrder = targetList.timerIds.length;
+    const createdTimers: TimerItem[] = [];
+    const createdIds: string[] = [];
+
+    template.cues.forEach((cueDef, idx) => {
+      const timerId = generateId('t');
+      const duration = Math.max(0, cueDef.durationSeconds || 0);
+      const newTimer: TimerItem = {
+        id: timerId,
+        name: cueDef.name || `Cue ${idx + 1}`,
+        order: baseOrder + idx,
+        durationSeconds: duration,
+        elapsedSeconds: 0,
+        remainingSeconds: duration,
+        type: cueDef.type || 'countdown',
+        status: 'idle',
+        speed: cueDef.speed || 100,
+        endAction: cueDef.endAction || 'count_up',
+        colorTag: cueDef.colorTag,
+        notes: cueDef.notes,
+        alert1: cueDef.alert1 ? { ...cueDef.alert1 } : undefined,
+        alert2: cueDef.alert2 ? { ...cueDef.alert2 } : undefined,
+        laps: [],
+        createdAt: now + idx,
+        updatedAt: now + idx,
+      };
+      this.timers.set(timerId, newTimer);
+      createdTimers.push(newTimer);
+      createdIds.push(timerId);
+    });
+
+    targetList.timerIds.push(...createdIds);
+    targetList.updatedAt = Date.now();
+    if (createdTimers.length > 0) {
+      storageService.saveTimersBatch(createdTimers);
+    }
+    storageService.saveList(targetList);
+
+    const firstPlayable =
+      createdTimers.find((t) => t.type !== 'spacer')?.id || createdTimers[0]?.id || null;
+
+    if (mode === 'new_tab') {
+      this.cuedTimerIdByList.set(targetList.id, firstPlayable);
+      this.activeTimerIdByList.set(targetList.id, null);
+      this.switchList(targetList.id);
+    } else {
+      const currentCued = this.cuedTimerIdByList.get(targetList.id);
+      if (!currentCued || !targetList.timerIds.includes(currentCued)) {
+        this.cuedTimerIdByList.set(targetList.id, firstPlayable);
+        if (this.activeListId === targetList.id && !this.activeTimerId) {
+          this.cuedTimerId = firstPlayable;
+        }
+      }
+      this.notifySubscribers();
+    }
+
+    return {
+      listId: targetList.id,
+      listName: targetList.name,
+      cueCount: createdTimers.length,
+    };
+  }
+
+  /**
    * 3. Delete list (maintains at least 1 list at all times).
    */
   public deleteList(listId: string): boolean {
@@ -2713,7 +2877,7 @@ class TimerManagerService {
       .filter((t): t is TimerItem => Boolean(t));
 
     return {
-      version: '2.5.3',
+      version: APP_VERSION,
       exportedAt: Date.now(),
       type: 'single_list',
       list,
@@ -2923,7 +3087,7 @@ class TimerManagerService {
     const allTimers = Array.from(this.timers.values());
 
     return {
-      version: '2.5.3',
+      version: APP_VERSION,
       exportedAt: Date.now(),
       type: 'all_lists',
       activeListId: this.activeListId,

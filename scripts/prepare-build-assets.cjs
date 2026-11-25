@@ -64,8 +64,12 @@ function extractFromTgzBuffer(tgzBuf, fileMap) {
   }
 }
 
-async function ensureNdiDll() {
+async function ensureNdiDll(targetPlatform = process.platform) {
   fs.mkdirSync(ndiDir, { recursive: true });
+  if (targetPlatform !== 'win32') {
+    return;
+  }
+
   const winDllPath = path.join(ndiDir, 'Processing.NDI.Lib.x64.dll');
   const licensePath = path.join(ndiDir, 'libndi_licenses.txt');
 
@@ -128,11 +132,13 @@ function ensureDistAndServerBuilt() {
 }
 
 if (require.main === module) {
-  ensureNdiDll();
+  const cliTarget = process.argv.includes('--win') ? 'win32' : process.platform;
+  ensureNdiDll(cliTarget);
 }
 
-module.exports = async function beforePack() {
+module.exports = async function beforePack(context) {
+  const targetPlatform = (context && context.electronPlatformName) || process.platform;
   require('./generate-icons.cjs');
-  await ensureNdiDll();
+  await ensureNdiDll(targetPlatform);
   ensureDistAndServerBuilt();
 };

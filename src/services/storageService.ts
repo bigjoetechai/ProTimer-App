@@ -6,7 +6,14 @@
  */
 
 import { openDB, IDBPDatabase } from 'idb';
-import { TimerItem, TimerList, TimerRunLogEntry, AppPreferences, DEFAULT_PREFERENCES } from '../types';
+import {
+  TimerItem,
+  TimerList,
+  TimerRunLogEntry,
+  AppPreferences,
+  DEFAULT_PREFERENCES,
+  ensureBebasCountdownDefault,
+} from '../types';
 
 const DB_NAME = 'protimer_local_db';
 const LEGACY_DB_NAME = 'cuetimer_local_db';
@@ -175,20 +182,36 @@ class StorageService {
     try {
       const raw = localStorage.getItem(PREFS_KEY);
       if (raw) {
-        const merged: AppPreferences = { ...DEFAULT_PREFERENCES, ...JSON.parse(raw) };
+        const parsed = JSON.parse(raw);
+        const wasMigrated = Boolean(parsed?.__bebasCountdownDefaultV2);
+        const merged = ensureBebasCountdownDefault({
+          ...DEFAULT_PREFERENCES,
+          ...parsed,
+        });
+        if (!wasMigrated) {
+          try {
+            localStorage.setItem(PREFS_KEY, JSON.stringify(merged));
+          } catch {
+            // Ignore write error
+          }
+        }
         this.cachedPreferences = merged;
         return merged;
       }
     } catch (e) {
       console.warn('Failed to read preferences from localStorage:', e);
     }
-    this.cachedPreferences = { ...DEFAULT_PREFERENCES };
+    this.cachedPreferences = ensureBebasCountdownDefault({ ...DEFAULT_PREFERENCES });
     return this.cachedPreferences;
   }
 
   public savePreferences(prefs: AppPreferences): void {
     if (typeof window === 'undefined') return;
-    this.cachedPreferences = { ...DEFAULT_PREFERENCES, ...prefs };
+    this.cachedPreferences = {
+      ...DEFAULT_PREFERENCES,
+      ...prefs,
+      __bebasCountdownDefaultV2: true,
+    } as AppPreferences;
     try {
       localStorage.setItem(PREFS_KEY, JSON.stringify(this.cachedPreferences));
     } catch (e) {

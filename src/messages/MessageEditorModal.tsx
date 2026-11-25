@@ -63,30 +63,28 @@ export const MessageEditorModal: React.FC<MessageEditorModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-4">
-      <div className={`w-full max-w-md rounded-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150 border ${
-        isDark ? 'bg-[#181a20] border-[#2d3139] text-neutral-100' : 'bg-white border-slate-300 text-slate-800'
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+      <div className={`glass-card w-full max-w-md rounded-[28px] overflow-hidden animate-in fade-in zoom-in-95 duration-150 ${
+        isDark ? 'text-neutral-100' : 'text-slate-800'
       }`}>
-        <div className={`flex items-center justify-between px-4 py-3 border-b ${
-          isDark ? 'border-[#2d3139] bg-[#121418]' : 'border-slate-200 bg-slate-50'
+        <div className={`flex items-center justify-between px-5 py-3.5 border-b ${
+          isDark ? 'border-white/[0.08] bg-white/[0.03]' : 'border-slate-200 bg-white/40'
         }`}>
           <h3 className="font-semibold text-sm tracking-wide flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 text-amber-500" />
+            <AlertCircle className="w-4 h-4 text-amber-400" />
             <span>Stage / Presenter Message</span>
           </h3>
           <button
             onClick={onClose}
-            className={`p-1 rounded transition-colors cursor-pointer ${
-              isDark ? 'text-neutral-400 hover:text-white hover:bg-neutral-800' : 'text-slate-400 hover:text-slate-700 hover:bg-slate-200'
-            }`}
+            className="glass-btn glass-btn-subtle w-7 h-7 rounded-full flex items-center justify-center cursor-pointer"
           >
-            <X className="w-4 h-4" />
+            <X className="w-3.5 h-3.5" />
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-4 space-y-4">
+        <form onSubmit={handleSubmit} className="p-5 space-y-4">
           <div>
-            <label className={`block text-xs font-medium mb-1 ${isDark ? 'text-neutral-300' : 'text-slate-700'}`}>
+            <label className={`block text-xs font-medium mb-1.5 ${isDark ? 'text-neutral-300' : 'text-slate-700'}`}>
               Message Content
             </label>
             <input
@@ -95,11 +93,7 @@ export const MessageEditorModal: React.FC<MessageEditorModalProps> = ({
               onChange={(e) => setText(e.target.value)}
               placeholder="e.g. WRAP UP PLEASE"
               autoFocus
-              className={`w-full px-3 py-2 rounded text-sm font-mono uppercase tracking-wider focus:outline-hidden focus:border-cyan-500 border ${
-                isDark 
-                  ? 'bg-[#0c0d10] border-[#373c46] text-white placeholder-neutral-500' 
-                  : 'bg-slate-50 border-slate-300 text-slate-900 placeholder-slate-400'
-              }`}
+              className="glass-input w-full px-3.5 py-2 rounded-xl text-sm font-mono uppercase tracking-wider focus:outline-hidden focus:border-cyan-400"
             />
           </div>
 
@@ -113,11 +107,7 @@ export const MessageEditorModal: React.FC<MessageEditorModalProps> = ({
                   key={preset}
                   type="button"
                   onClick={() => setText(preset)}
-                  className={`px-2 py-1 text-xs rounded border transition-colors cursor-pointer ${
-                    isDark
-                      ? 'bg-[#232730] hover:bg-[#2e3340] text-neutral-300 border-[#373c46]'
-                      : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300'
-                  }`}
+                  className="glass-btn glass-btn-subtle px-3 py-1 text-[11px] rounded-full cursor-pointer"
                 >
                   {preset}
                 </button>
@@ -125,9 +115,9 @@ export const MessageEditorModal: React.FC<MessageEditorModalProps> = ({
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3 pt-2">
-            <label className={`flex items-center gap-2 text-xs cursor-pointer p-2.5 rounded border ${
-              isDark ? 'bg-[#121418] border-[#2d3139] text-neutral-300' : 'bg-slate-50 border-slate-200 text-slate-700'
+          <div className="grid grid-cols-2 gap-3 pt-1">
+            <label className={`glass-subcard flex items-center gap-2 text-xs cursor-pointer p-2.5 rounded-xl ${
+              isDark ? 'text-neutral-300' : 'text-slate-700'
             }`}>
               <input
                 type="checkbox"
@@ -138,8 +128,8 @@ export const MessageEditorModal: React.FC<MessageEditorModalProps> = ({
               <span>Flash text</span>
             </label>
 
-            <label className={`flex items-center gap-2 text-xs cursor-pointer p-2.5 rounded border ${
-              isDark ? 'bg-[#121418] border-[#2d3139] text-neutral-300' : 'bg-slate-50 border-slate-200 text-slate-700'
+            <label className={`glass-subcard flex items-center gap-2 text-xs cursor-pointer p-2.5 rounded-xl ${
+              isDark ? 'text-neutral-300' : 'text-slate-700'
             }`}>
               <input
                 type="checkbox"
@@ -162,7 +152,7 @@ export const MessageEditorModal: React.FC<MessageEditorModalProps> = ({
                   type="button"
                   onClick={() => setColor(c)}
                   className={`w-6 h-6 rounded-full border-2 transition-transform cursor-pointer ${
-                    color === c ? 'scale-110 border-cyan-500 ring-2 ring-cyan-500/50' : 'border-transparent'
+                    color === c ? 'scale-110 border-cyan-400 ring-2 ring-cyan-500/50' : 'border-transparent'
                   }`}
                   style={{ backgroundColor: c }}
                 />
@@ -171,7 +161,7 @@ export const MessageEditorModal: React.FC<MessageEditorModalProps> = ({
           </div>
 
           <div className={`flex items-center justify-between pt-3 border-t ${
-            isDark ? 'border-[#2d3139]' : 'border-slate-200'
+            isDark ? 'border-white/[0.08]' : 'border-slate-200'
           }`}>
             {currentMessage?.visible ? (
               <button
@@ -180,11 +170,7 @@ export const MessageEditorModal: React.FC<MessageEditorModalProps> = ({
                   onClear();
                   onClose();
                 }}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded border transition-colors cursor-pointer ${
-                  isDark
-                    ? 'text-neutral-400 hover:text-red-400 hover:bg-red-950/30 border-neutral-700 hover:border-red-800'
-                    : 'text-slate-600 hover:text-red-600 hover:bg-red-50 border-slate-300 hover:border-red-300'
-                }`}
+                className="glass-btn glass-btn-red glass-btn-subtle flex items-center gap-1.5 px-3.5 py-1.5 text-xs rounded-full cursor-pointer"
               >
                 <EyeOff className="w-3.5 h-3.5" />
                 Clear Display
@@ -195,15 +181,13 @@ export const MessageEditorModal: React.FC<MessageEditorModalProps> = ({
               <button
                 type="button"
                 onClick={onClose}
-                className={`px-3 py-1.5 text-xs rounded transition-colors cursor-pointer ${
-                  isDark ? 'text-neutral-300 hover:text-white hover:bg-neutral-800' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
-                }`}
+                className="glass-btn glass-btn-subtle px-4 py-1.5 text-xs rounded-full cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold bg-amber-600 hover:bg-amber-500 text-white rounded transition-colors shadow-xs cursor-pointer"
+                className="glass-btn glass-btn-amber-active flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold rounded-full cursor-pointer"
               >
                 <Send className="w-3.5 h-3.5" />
                 Broadcast to Stage

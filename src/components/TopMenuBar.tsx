@@ -29,12 +29,14 @@ import {
   X,
 } from 'lucide-react';
 import { useWindowManager } from '../hooks';
+import { APP_VERSION_TAG } from '../constants/appVersion';
 
 interface TopMenuBarProps {
   currentListName: string;
   isDark: boolean;
   onToggleTheme: () => void;
   onOpenSettings: () => void;
+  onOpenShortcuts?: () => void;
   onOpenLanModal?: () => void;
   onNewTimer: () => void;
   onAddTimerType?: (type: 'countdown' | 'count_up' | 'end_time' | 'stopwatch' | 'clock' | 'empty' | 'spacer') => void;
@@ -67,6 +69,7 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
   isDark,
   onToggleTheme,
   onOpenSettings,
+  onOpenShortcuts,
   onOpenLanModal,
   onNewTimer,
   onAddTimerType,
@@ -209,30 +212,32 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
     setIsEditingListName(false);
   };
 
-  // Dynamic Theme Helpers
+  // Dynamic Theme Helpers (Frosted Glass)
   const headerClass = isDark
-    ? 'h-9 bg-[#0e1117] border-b border-[#1e2533] text-neutral-300'
-    : 'h-9 bg-[#e2e7f0] border-b border-slate-300 text-slate-800 shadow-2xs';
+    ? 'h-10 glass-surface border-b border-white/[0.08] text-neutral-300'
+    : 'h-10 glass-surface border-b border-slate-300/80 text-slate-800 shadow-2xs';
 
   const menuBtnClass = (isActive: boolean) =>
-    `flex items-center gap-1 px-2.5 py-1 rounded transition-colors cursor-pointer select-none ${
+    `flex items-center gap-1 px-3 py-1 rounded-full transition-all cursor-pointer select-none ${
       isActive
-        ? isDark ? 'bg-[#1e293b] text-white' : 'bg-slate-300 text-slate-900 font-semibold'
-        : isDark ? 'hover:bg-[#161c27] text-neutral-300 hover:text-white' : 'hover:bg-[#d5dce7] text-slate-700 hover:text-slate-900'
+        ? 'glass-btn glass-btn-subtle text-white'
+        : isDark
+          ? 'text-neutral-300 hover:text-white hover:bg-white/[0.08] border border-transparent hover:border-white/[0.12]'
+          : 'text-slate-700 hover:text-slate-900 hover:bg-white/60 border border-transparent hover:border-slate-300/60'
     }`;
 
   const dropdownBaseClass = (width = 'w-48') =>
-    `absolute top-full left-0 mt-1 ${width} rounded-md py-1 text-xs animate-in fade-in zoom-in-95 duration-100 z-50 ${
-      isDark ? 'bg-[#111622] border border-[#222e42] text-neutral-200 shadow-2xl' : 'bg-[#e6ebf3] border border-slate-300 text-slate-800 shadow-xl'
+    `glass-card absolute top-full left-0 mt-1.5 ${width} rounded-2xl py-1.5 text-xs animate-in fade-in zoom-in-95 duration-100 z-50 ${
+      isDark ? 'text-neutral-200' : 'text-slate-800'
     }`;
 
   const dropdownItemClass =
     `w-full text-left px-3.5 py-1.5 flex items-center transition-colors cursor-pointer ${
-      isDark ? 'hover:bg-[#1e293b] text-neutral-100 hover:text-white' : 'hover:bg-[#d5dce7] text-slate-800 hover:text-slate-900'
+      isDark ? 'hover:bg-white/[0.08] text-neutral-200 hover:text-white' : 'hover:bg-slate-200/70 text-slate-800 hover:text-slate-900'
     }`;
 
-  const dropdownDividerClass = `border-t my-1 ${isDark ? 'border-[#1e2533]' : 'border-slate-300'}`;
-  const separatorBorder = isDark ? 'border-[#1e2533]' : 'border-slate-300';
+  const dropdownDividerClass = `border-t my-1 ${isDark ? 'border-white/[0.08]' : 'border-slate-300/80'}`;
+  const separatorBorder = isDark ? 'border-white/[0.09]' : 'border-slate-300';
 
   return (
     <header 
@@ -252,14 +257,12 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
           <button
             type="button"
             onClick={() => setActiveMenu(activeMenu === 'brand' ? null : 'brand')}
-            className={`flex items-center gap-1.5 px-2 py-1 rounded font-bold select-none transition-colors cursor-pointer ${
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full font-bold select-none transition-all cursor-pointer ${
               activeMenu === 'brand'
-                ? isDark
-                  ? 'bg-[#1e293b] text-white'
-                  : 'bg-slate-300 text-slate-900'
+                ? 'glass-btn glass-btn-subtle'
                 : isDark
-                  ? 'hover:bg-[#161c27]'
-                  : 'hover:bg-[#d5dce7]'
+                  ? 'hover:bg-white/[0.08] border border-transparent hover:border-white/[0.12]'
+                  : 'hover:bg-white/60 border border-transparent hover:border-slate-300/60'
             }`}
           >
             <img
@@ -295,7 +298,7 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
                   <span>About ProTimer</span>
                 </div>
                 <span className={`text-[11px] font-normal ${isDark ? 'text-neutral-400' : 'text-slate-500'}`}>
-                  v2.5.3
+                  {APP_VERSION_TAG}
                 </span>
               </button>
 
@@ -721,13 +724,20 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
               </button>
               <button
                 onClick={() => {
-                  onOpenSettings();
+                  if (onOpenShortcuts) {
+                    onOpenShortcuts();
+                  } else {
+                    onOpenSettings();
+                  }
                   setActiveMenu(null);
                 }}
-                className={`${dropdownItemClass} gap-2`}
+                className={`${dropdownItemClass} justify-between`}
               >
-                <Keyboard className="w-3.5 h-3.5 text-amber-500" />
-                <span>Keyboard Shortcuts Cheatsheet</span>
+                <div className="flex items-center gap-2">
+                  <Keyboard className="w-3.5 h-3.5 text-amber-500" />
+                  <span>Keyboard Shortcuts Manager...</span>
+                </div>
+                <span className={`text-[10px] font-mono ${isDark ? 'text-neutral-500' : 'text-slate-400'}`}>Ctrl+K</span>
               </button>
               {onOpenLanModal && (
                 <button
@@ -813,19 +823,13 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
         </div>
 
         {/* UNDO & REDO ICONS */}
-        <div className={`flex items-center gap-0.5 ml-1 pl-2 border-l ${separatorBorder}`}>
+        <div className={`flex items-center gap-1 ml-1 pl-2 border-l ${separatorBorder}`}>
           <button
             type="button"
             disabled={!canUndo}
             onClick={onUndo}
             title={undoLabel ? `Undo: ${undoLabel} (Ctrl+Z)` : 'Undo (Ctrl+Z)'}
-            className={`p-1 rounded transition-colors ${
-              !canUndo
-                ? 'opacity-35 cursor-not-allowed text-neutral-500'
-                : isDark
-                  ? 'hover:bg-[#1a202c] text-neutral-300 hover:text-white cursor-pointer'
-                  : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900 cursor-pointer'
-            }`}
+            className="glass-btn glass-btn-subtle w-7 h-7 rounded-full flex items-center justify-center cursor-pointer"
           >
             <Undo2 className="w-3.5 h-3.5" />
           </button>
@@ -834,13 +838,7 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
             disabled={!canRedo}
             onClick={onRedo}
             title={redoLabel ? `Redo: ${redoLabel} (Ctrl+Y)` : 'Redo (Ctrl+Y)'}
-            className={`p-1 rounded transition-colors ${
-              !canRedo
-                ? 'opacity-35 cursor-not-allowed text-neutral-500'
-                : isDark
-                  ? 'hover:bg-[#1a202c] text-neutral-300 hover:text-white cursor-pointer'
-                  : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900 cursor-pointer'
-            }`}
+            className="glass-btn glass-btn-subtle w-7 h-7 rounded-full flex items-center justify-center cursor-pointer"
           >
             <Redo2 className="w-3.5 h-3.5" />
           </button>
@@ -848,7 +846,7 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
       </div>
 
       {/* RIGHT: Active List, User Profile, Theme Toggle, Cloud Status, Window Controls */}
-      <div className="flex items-center gap-2 sm:gap-3">
+      <div className="flex items-center gap-2 sm:gap-2.5">
         {/* Active List Badge with Rename affordance */}
         {isEditingListName ? (
           <form onSubmit={handleListNameSubmit} className="flex items-center gap-1">
@@ -858,11 +856,9 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
               onChange={(e) => setListNameInput(e.target.value)}
               onBlur={() => setIsEditingListName(false)}
               autoFocus
-              className={`px-2 py-0.5 border border-cyan-500 rounded text-xs focus:outline-hidden ${
-                isDark ? 'bg-[#161c26] text-white' : 'bg-white text-slate-900 shadow-xs'
-              }`}
+              className="glass-input px-3 py-0.5 rounded-full text-xs focus:outline-hidden focus:border-cyan-500"
             />
-            <button type="submit" className="p-1 text-cyan-500 hover:text-cyan-400 cursor-pointer">
+            <button type="submit" className="glass-btn glass-btn-cyan glass-btn-subtle p-1 rounded-full cursor-pointer">
               <Check className="w-3 h-3" />
             </button>
           </form>
@@ -871,11 +867,7 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
             type="button"
             onClick={() => setIsEditingListName(true)}
             title="Click to rename active list"
-            className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded border transition-colors cursor-pointer ${
-              isDark 
-                ? 'bg-[#151a24] hover:bg-[#1c2331] border-[#232d3f] text-neutral-200' 
-                : 'bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-800'
-            }`}
+            className="glass-btn glass-btn-subtle flex items-center gap-1.5 px-3 py-1 rounded-full cursor-pointer"
           >
             <Edit3 className={`w-3 h-3 ${isDark ? 'text-neutral-400' : 'text-slate-500'}`} />
             <span className="font-medium tracking-wide">{currentListName}</span>
@@ -888,34 +880,28 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
             type="button"
             onClick={() => setShowProfileMenu(!showProfileMenu)}
             title={`Operator: ${operatorName}`}
-            className={`p-1 px-1.5 rounded border flex items-center gap-1 transition-colors cursor-pointer ${
-              isDark
-                ? 'bg-[#161c26] hover:bg-[#1f2838] border-[#232d3f] text-neutral-300 hover:text-white'
-                : 'bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-700 hover:text-slate-900'
-            }`}
+            className="glass-btn glass-btn-subtle px-2.5 py-1 rounded-full flex items-center gap-1.5 cursor-pointer"
           >
-            <User className="w-3.5 h-3.5 text-cyan-500" />
+            <User className="w-3.5 h-3.5 text-cyan-400" />
             <span className="hidden md:inline text-[11px] font-medium">{operatorName}</span>
           </button>
 
           {showProfileMenu && (
-            <div className={`absolute right-0 top-full mt-1 w-52 rounded-md shadow-xl p-3 text-xs animate-in fade-in zoom-in-95 duration-100 z-50 ${
-              isDark ? 'bg-[#111622] border border-[#222e42] text-neutral-200' : 'bg-white border border-slate-300 text-slate-800'
+            <div className={`glass-card absolute right-0 top-full mt-1.5 w-56 rounded-2xl p-3.5 text-xs animate-in fade-in zoom-in-95 duration-100 z-50 ${
+              isDark ? 'text-neutral-200' : 'text-slate-800'
             }`}>
               <div className={`font-semibold mb-1 ${isDark ? 'text-white' : 'text-slate-900'}`}>Production Operator</div>
-              <div className={`text-[11px] mb-2 ${isDark ? 'text-neutral-400' : 'text-slate-500'}`}>Role: Director / Stage Cue Master</div>
+              <div className={`text-[11px] mb-2.5 ${isDark ? 'text-neutral-400' : 'text-slate-500'}`}>Role: Director / Stage Cue Master</div>
               <input
                 type="text"
                 value={operatorName}
                 onChange={(e) => setOperatorName(e.target.value)}
                 placeholder="Operator Name"
-                className={`w-full px-2 py-1 border rounded text-xs mb-2 ${
-                  isDark ? 'bg-[#0c0f16] border-[#26334a] text-white' : 'bg-slate-50 border-slate-300 text-slate-900'
-                }`}
+                className="glass-input w-full px-3 py-1.5 rounded-full text-xs mb-2.5"
               />
               <button
                 onClick={() => setShowProfileMenu(false)}
-                className="w-full py-1 bg-cyan-600 hover:bg-cyan-500 text-white rounded text-[11px] font-medium transition-colors cursor-pointer"
+                className="glass-btn glass-btn-cyan-active w-full py-1.5 rounded-full text-[11px] font-semibold cursor-pointer"
               >
                 Update Profile
               </button>
@@ -923,16 +909,25 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
           )}
         </div>
 
+        {/* Keyboard Shortcuts Manager Button */}
+        {onOpenShortcuts && (
+          <button
+            type="button"
+            onClick={onOpenShortcuts}
+            title="Keyboard Shortcuts Manager (Ctrl+K)"
+            aria-label="Open Keyboard Shortcuts Manager"
+            className="glass-btn glass-btn-subtle w-7 h-7 rounded-full flex items-center justify-center cursor-pointer"
+          >
+            <Keyboard className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400" />
+          </button>
+        )}
+
         {/* Theme Toggle Button */}
         <button
           type="button"
           onClick={onToggleTheme}
           title={isDark ? 'Switch to Light Theme' : 'Switch to Dark Theme'}
-          className={`p-1.5 rounded transition-colors cursor-pointer ${
-            isDark 
-              ? 'text-neutral-400 hover:text-white hover:bg-[#1a202c]' 
-              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
-          }`}
+          className="glass-btn glass-btn-subtle w-7 h-7 rounded-full flex items-center justify-center cursor-pointer"
         >
           {isDark ? (
             <Moon className="w-3.5 h-3.5 text-cyan-400" />
@@ -947,26 +942,24 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
             type="button"
             onClick={() => setShowCloudMenu(!showCloudMenu)}
             title="Local-First Mode (Offline Guaranteed)"
-            className={`p-1 rounded transition-colors flex items-center gap-1 cursor-pointer ${
-              isDark ? 'text-neutral-400 hover:text-cyan-400 hover:bg-[#1a202c]' : 'text-slate-600 hover:text-cyan-600 hover:bg-slate-200'
-            }`}
+            className="glass-btn glass-btn-subtle w-7 h-7 rounded-full flex items-center justify-center cursor-pointer"
           >
-            <Cloud className={`w-3.5 h-3.5 ${cloudStatus === 'synced' ? 'text-emerald-500' : 'text-cyan-500'}`} />
+            <Cloud className={`w-3.5 h-3.5 ${cloudStatus === 'synced' ? 'text-emerald-400' : 'text-cyan-400'}`} />
           </button>
 
           {showCloudMenu && (
-            <div className={`absolute right-0 top-full mt-1 w-56 rounded-md shadow-xl p-3 text-xs animate-in fade-in zoom-in-95 duration-100 z-50 ${
-              isDark ? 'bg-[#111622] border border-[#222e42] text-neutral-200' : 'bg-white border border-slate-300 text-slate-800'
+            <div className={`glass-card absolute right-0 top-full mt-1.5 w-60 rounded-2xl p-3.5 text-xs animate-in fade-in zoom-in-95 duration-100 z-50 ${
+              isDark ? 'text-neutral-200' : 'text-slate-800'
             }`}>
               <div className={`flex items-center gap-1.5 font-semibold mb-1 ${isDark ? 'text-white' : 'text-slate-900'}`}>
-                <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
                 Local-First Storage Active
               </div>
-              <p className={`text-[11px] mb-2 leading-relaxed ${isDark ? 'text-neutral-400' : 'text-slate-600'}`}>
+              <p className={`text-[11px] mb-2.5 leading-relaxed ${isDark ? 'text-neutral-400' : 'text-slate-600'}`}>
                 All timers and cues are saved locally to your device via IndexedDB. No internet connection is needed.
               </p>
-              <div className={`text-[10px] font-mono p-1.5 rounded border ${
-                isDark ? 'text-cyan-400 bg-cyan-950/40 border-cyan-800/40' : 'text-cyan-800 bg-cyan-50 border-cyan-200'
+              <div className={`text-[10px] font-mono px-2.5 py-1.5 rounded-xl border ${
+                isDark ? 'text-cyan-300 bg-cyan-950/35 border-cyan-500/30' : 'text-cyan-800 bg-cyan-50 border-cyan-200'
               }`}>
                 Cross-Window Sync: CONNECTED
               </div>
@@ -978,20 +971,18 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
       {/* Brand Dropdown Info Modals (About, Contact / Support, User Guide, Activation, Check for Updates) */}
       {activeBrandDialog && (
         <div
-          className="fixed inset-0 z-[200] bg-black/60 flex items-center justify-center p-4"
+          className="fixed inset-0 z-[200] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
           onClick={() => setActiveBrandDialog(null)}
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className={`w-full max-w-md rounded-md border shadow-2xl overflow-hidden text-xs ${
-              isDark
-                ? 'bg-[#111622] border-[#222e42] text-neutral-200'
-                : 'bg-[#e6ebf3] border-slate-300 text-slate-800'
+            className={`glass-card w-full max-w-md rounded-[28px] overflow-hidden text-xs ${
+              isDark ? 'text-neutral-200' : 'text-slate-800'
             }`}
           >
             <div
-              className={`flex items-center justify-between px-4 py-3 border-b ${
-                isDark ? 'bg-[#0c1018] border-[#1e2636]' : 'bg-[#d8dfe9] border-slate-300'
+              className={`flex items-center justify-between px-5 py-3.5 border-b ${
+                isDark ? 'bg-white/[0.03] border-white/[0.08]' : 'bg-white/40 border-slate-300/70'
               }`}
             >
               <div className="flex items-center gap-2 font-bold text-sm">
@@ -1017,11 +1008,9 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
               <button
                 type="button"
                 onClick={() => setActiveBrandDialog(null)}
-                className={`p-1 rounded transition-colors cursor-pointer ${
-                  isDark ? 'hover:bg-[#1e293b] text-neutral-400 hover:text-white' : 'hover:bg-slate-300 text-slate-600'
-                }`}
+                className="glass-btn glass-btn-subtle w-7 h-7 rounded-full flex items-center justify-center cursor-pointer"
               >
-                <X className="w-4 h-4" />
+                <X className="w-3.5 h-3.5" />
               </button>
             </div>
 
@@ -1036,7 +1025,7 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
                       </div>
                     </div>
                     <span className="px-2 py-0.5 rounded bg-cyan-500/15 text-cyan-400 border border-cyan-500/30 font-mono font-semibold">
-                      v2.5.3
+                      {APP_VERSION_TAG}
                     </span>
                   </div>
                   <p className={isDark ? 'text-neutral-400' : 'text-slate-600'}>
@@ -1045,7 +1034,7 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
                   </p>
                   <div className={`pt-2 border-t text-[11px] font-mono space-y-0.5 ${isDark ? 'border-[#1e2636] text-neutral-400' : 'border-slate-300 text-slate-600'}`}>
                     <div>Owner / Company: Bigjoe Technology</div>
-                    <div>Build: v2.5.3 (64-bit) • Copyright © 2026 Bigjoe Technology</div>
+                    <div>Build: {APP_VERSION_TAG} (64-bit) • Copyright © 2026 Bigjoe Technology</div>
                   </div>
                 </>
               )}
@@ -1060,7 +1049,7 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
                   }`}>
                     <div>Company: Bigjoe Technology</div>
                     <div>Support Email: support@protimer.app</div>
-                    <div>Version: ProTimer v2.5.3</div>
+                    <div>Version: ProTimer {APP_VERSION_TAG}</div>
                   </div>
                 </>
               )}
@@ -1081,7 +1070,7 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
                 <div className="space-y-2">
                   <div className="flex items-center gap-2 text-emerald-500 font-semibold">
                     <CheckCircle2 className="w-4 h-4" />
-                    <span>ProTimer v2.5.3 — Activated (Full Production License)</span>
+                    <span>ProTimer {APP_VERSION_TAG} — Activated (Full Production License)</span>
                   </div>
                   <p className={isDark ? 'text-neutral-400' : 'text-slate-600'}>
                     All broadcast features—including Multi-List Fullscreen, NDI Output, and LAN Remote Control—are unlocked and active on this workstation.
@@ -1128,7 +1117,7 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
                       <button
                         type="button"
                         onClick={() => window.electronAPI?.quitAndInstallUpdate?.()}
-                        className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-semibold transition-colors cursor-pointer"
+                        className="glass-btn glass-btn-emerald-active px-4 py-1.5 rounded-full font-semibold cursor-pointer"
                       >
                         Restart and Install Now
                       </button>
@@ -1137,9 +1126,9 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
 
                   {(updateInfo.status === 'idle' || updateInfo.status === 'up-to-date') && (
                     <>
-                      <div className="flex items-center gap-2 text-emerald-500 font-semibold">
+                      <div className="flex items-center gap-2 text-emerald-400 font-semibold">
                         <CheckCircle2 className="w-4 h-4" />
-                        <span>You are running the latest version (v2.5.3)</span>
+                        <span>You are running the latest version ({APP_VERSION_TAG})</span>
                       </div>
                       <p className={isDark ? 'text-neutral-400' : 'text-slate-600'}>
                         ProTimer checks GitHub Releases automatically on startup and every hour.
@@ -1164,11 +1153,7 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
                       type="button"
                       onClick={triggerManualUpdateCheck}
                       disabled={updateInfo.status === 'checking' || updateInfo.status === 'downloading'}
-                      className={`px-3 py-1 rounded border text-[11px] font-medium transition-colors cursor-pointer ${
-                        isDark
-                          ? 'bg-[#161c26] hover:bg-[#1f2838] border-[#263248] text-neutral-200 disabled:opacity-40'
-                          : 'bg-white hover:bg-slate-100 border-slate-300 text-slate-800 disabled:opacity-40'
-                      }`}
+                      className="glass-btn glass-btn-subtle px-4 py-1.5 rounded-full text-[11px] font-medium cursor-pointer"
                     >
                       Check Again
                     </button>
@@ -1178,14 +1163,14 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
             </div>
 
             <div
-              className={`px-4 py-2.5 border-t flex justify-end ${
-                isDark ? 'bg-[#0c1018] border-[#1e2636]' : 'bg-[#d8dfe9] border-slate-300'
+              className={`px-5 py-3 border-t flex justify-end ${
+                isDark ? 'bg-white/[0.03] border-white/[0.08]' : 'bg-white/40 border-slate-300/70'
               }`}
             >
               <button
                 type="button"
                 onClick={() => setActiveBrandDialog(null)}
-                className="px-4 py-1 bg-cyan-600 hover:bg-cyan-500 text-white rounded font-semibold transition-colors cursor-pointer"
+                className="glass-btn glass-btn-cyan-active px-5 py-1.5 rounded-full font-semibold cursor-pointer"
               >
                 Close
               </button>

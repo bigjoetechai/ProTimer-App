@@ -33,41 +33,107 @@ import { Radio, Layers, LayoutGrid } from 'lucide-react';
 export const NdiDisplay: React.FC = () => {
   const { payload } = useDisplaySync(true);
   const prefs = useLivePreferences(payload?.preferences);
-  const [bgMode, setBgMode] = useState<'transparent' | 'black' | 'green'>('black');
+  const urlParams =
+    typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+  const initialKeyParam = urlParams?.get('key');
+  const [bgMode, setBgMode] = useState<'transparent' | 'black' | 'green'>(
+    initialKeyParam === 'transparent' || initialKeyParam === 'green' || initialKeyParam === 'black'
+      ? initialKeyParam
+      : 'black'
+  );
   const [showSafeMargins, setShowSafeMargins] = useState(false);
-  const urlMode =
-    typeof window !== 'undefined'
-      ? new URLSearchParams(window.location.search).get('mode')
-      : null;
+  const urlMode = urlParams?.get('mode') || null;
   const [multiViewOverride, setMultiViewOverride] = useState<boolean | null>(
     urlMode === 'multi' ? true : urlMode === 'single' ? false : null
   );
 
+  const effectiveBgMode = prefs.ndiAlphaChannel ? 'transparent' : bgMode;
+
   if (!payload || payload.isBlackout) {
-    return <div className="h-screen w-screen bg-transparent" />;
+    const blackoutBg =
+      effectiveBgMode === 'transparent'
+        ? 'bg-transparent'
+        : effectiveBgMode === 'green'
+        ? 'bg-[#00b140]'
+        : 'bg-black';
+    return <div className={`h-screen w-screen ${blackoutBg}`} />;
   }
 
-  const requestedListId =
-    typeof window !== 'undefined'
-      ? new URLSearchParams(window.location.search).get('listId') ||
-        new URLSearchParams(window.location.search).get('id')
-      : null;
+  const requestedListId = urlParams?.get('listId') || urlParams?.get('id') || null;
 
   const listActiveCues = payload.listActiveCues || [];
   const targetCueSummary = requestedListId
     ? listActiveCues.find((c) => c.listId === requestedListId)
     : listActiveCues.find((c) => c.listId === payload.activeListId) || listActiveCues[0];
 
+  // Strictly prevent leaking another list's timer when a specific listId was pinned in the URL
+  const canFallbackToPayload = !requestedListId || requestedListId === payload.activeListId;
+
+  const activeListId =
+    targetCueSummary?.listId ||
+    requestedListId ||
+    payload.activeListId ||
+    'list_1';
   const activeListName =
     targetCueSummary?.listName ||
-    payload.activeListName ||
+    payload.lists?.find((l) => l.id === activeListId)?.name ||
+    (canFallbackToPayload ? payload.activeListName : null) ||
     'List 1';
+  const activeTimer = targetCueSummary
+    ? targetCueSummary.activeTimer
+    : canFallbackToPayload
+    ? payload.activeTimer
+    : null;
+  const nextTimer = targetCueSummary
+    ? targetCueSummary.nextTimer
+    : canFallbackToPayload
+    ? payload.nextTimer
+    : null;
+  const secondsRemaining = targetCueSummary
+    ? targetCueSummary.secondsRemaining
+    : canFallbackToPayload
+    ? payload.secondsRemaining
+    : 0;
+  const isOvertime = targetCueSummary
+    ? targetCueSummary.isOvertime
+    : canFallbackToPayload
+    ? payload.isOvertime
+    : false;
+  const status = targetCueSummary
+    ? targetCueSummary.status
+    : canFallbackToPayload
+    ? payload.status
+    : 'idle';
+  const activeAlertLevel = targetCueSummary
+    ? targetCueSummary.activeAlertLevel
+    : canFallbackToPayload
+    ? payload.activeAlertLevel
+    : 'none';
+  const alertColor = targetCueSummary
+    ? targetCueSummary.alertColor
+    : canFallbackToPayload
+    ? payload.alertColor
+    : undefined;
+  const alertFlash = targetCueSummary
+    ? targetCueSummary.alertFlash
+    : canFallbackToPayload
+    ? payload.alertFlash
+    : false;
+  const alertOnOff = targetCueSummary
+    ? targetCueSummary.alertOnOff
+    : canFallbackToPayload
+    ? payload.alertOnOff
+    : false;
+  const progressPercent = targetCueSummary
+    ? targetCueSummary.progressPercent
+    : canFallbackToPayload
+    ? payload.progressPercent
+    : 0;
 
   const ndiRes = prefs.ndiResolution || 'HD - 1920 x 1080';
   const ndiFps = prefs.ndiFrameRate || 30;
   const ndiSourceName =
-    (requestedListId && payload.ndiSourceNamesByList?.[requestedListId]) ||
-    (payload.activeListId && payload.ndiSourceNamesByList?.[payload.activeListId]) ||
+    payload.ndiSourceNamesByList?.[activeListId] ||
     formatListNdiSourceName(activeListName, prefs.ndiSourceName);
   const isMultiDisplay =
     multiViewOverride !== null
@@ -98,33 +164,41 @@ export const NdiDisplay: React.FC = () => {
   const formattedClock = formatClock(new Date(), undefined, prefs);
   const formattedDate = payload.dateFormatted || formatDate(new Date(), prefs);
   const formattedCountdown = formatSeconds(
-    payload.secondsRemaining,
+    secondsRemaining,
     true,
-    payload.isOvertime,
+    isOvertime,
     prefs
   );
 
-  const displayTime = payload.isClockMode
-    ? formattedClock
-    : payload.isOvertime
-    ? `+${formattedCountdown.replace(/^[+-]/, '')}`
-    : formattedCountdown.replace(/^-/, '+');
+  const isDigitalClockCue = activeTimer?.type === 'digital_clock';
+  const isEmptyCue = activeTimer?.type === 'empty';
+  const displayTime =
+    payload.isClockMode || isDigitalClockCue
+      ? formattedClock
+      : isEmptyCue
+      ? '--:--:--'
+      : isOvertime
+      ? `+${formattedCountdown.replace(/^[+-]/, '')}`
+      : formattedCountdown.replace(/^-/, '+');
 
   const resolvedDigitColor = resolveDisplayDigitColor({
-    isOvertime: payload.isOvertime,
-    isPaused: payload.status === 'paused',
-    activeAlertLevel: payload.activeAlertLevel,
-    alertColor: payload.alertColor,
+    isOvertime,
+    isPaused: status === 'paused',
+    activeAlertLevel,
+    alertColor,
     prefs,
   });
 
-  const activeListId = payload.activeListId || 'list_1';
   const resolvedFromPrefs = resolveBackgroundImageForList(prefs, activeListId);
   const hasLocalListBgMap = Boolean(
     prefs.listBackgroundImages && Object.keys(prefs.listBackgroundImages).length > 0
   );
   const rawBgImageUrl =
-    resolvedFromPrefs || (!hasLocalListBgMap ? payload.backgroundImageUrl || '' : '');
+    resolvedFromPrefs ||
+    targetCueSummary?.backgroundImageUrl ||
+    (!hasLocalListBgMap && activeListId === payload.activeListId
+      ? payload.backgroundImageUrl || ''
+      : '');
   const activeBackgroundImageUrl = prefs.ndiAlphaChannel ? '' : rawBgImageUrl;
   const backgroundFit = payload.backgroundFit || prefs.backgroundFit || 'cover';
   const backgroundOpacity =
@@ -134,14 +208,17 @@ export const NdiDisplay: React.FC = () => {
     prefs.listLogoImages && Object.keys(prefs.listLogoImages).length > 0
   );
   const activeLogoUrl =
-    resolvedLogoFromPrefs || (!hasLocalListLogoMap ? payload.logoImageUrl || '' : '');
+    resolvedLogoFromPrefs ||
+    targetCueSummary?.logoImageUrl ||
+    (!hasLocalListLogoMap && activeListId === payload.activeListId
+      ? payload.logoImageUrl || ''
+      : '');
 
   const { outerStyle, innerTransformStyle } = getTargetCanvasStyles(
     fsExtras,
     Boolean(activeBackgroundImageUrl)
   );
 
-  const effectiveBgMode = prefs.ndiAlphaChannel ? 'transparent' : bgMode;
   const bgClasses = {
     transparent: 'bg-transparent',
     black: 'bg-black',
@@ -196,8 +273,8 @@ export const NdiDisplay: React.FC = () => {
         </div>
       )}
 
-      {/* Top NDI Metadata Toolbar (Discreet) */}
-      <div className="flex items-center justify-between opacity-50 hover:opacity-100 transition-opacity z-20">
+      {/* Top NDI Metadata Toolbar (Hidden by default for clean broadcast capture; visible on hover) */}
+      <div className="flex items-center justify-between opacity-0 hover:opacity-100 focus-within:opacity-100 transition-opacity duration-200 z-20">
         <div className="flex items-center gap-2 text-xs">
           <Radio className="w-4 h-4 text-red-500 animate-pulse" />
           <span className="font-bold text-red-400">
@@ -309,7 +386,12 @@ export const NdiDisplay: React.FC = () => {
                       fontFamily: resolveFontFamily(countdownCfg?.font),
                     }}
                   >
-                    {renderTimeWithColonOffset(tileDisplayTime, fsElements.colon?.vert)}
+                    {renderTimeWithColonOffset(
+                      tileDisplayTime,
+                      fsElements.colon?.vert,
+                      fsElements.countdown?.spacing,
+                      fsElements.colon?.horiz
+                    )}
                   </div>
                 </div>
 
@@ -357,7 +439,7 @@ export const NdiDisplay: React.FC = () => {
             </div>
           )}
 
-          {nameCfg?.visible !== false && payload.activeTimer && (
+          {nameCfg?.visible !== false && activeTimer && (
             <div
               className="tracking-wider uppercase text-cyan-300 mb-2 drop-shadow-md"
               style={{
@@ -368,7 +450,7 @@ export const NdiDisplay: React.FC = () => {
                 transform: getElementOffsetTransform(nameCfg, 3),
               }}
             >
-              {payload.activeTimer.name}
+              {activeTimer.name}
             </div>
           )}
 
@@ -377,11 +459,11 @@ export const NdiDisplay: React.FC = () => {
               className={`tracking-tighter tabular-nums leading-none drop-shadow-2xl ${
                 prefs.smoothTransitions !== false ? 'transition-colors duration-300' : ''
               } ${
-                payload.isOvertime
+                isOvertime
                   ? 'animate-overtime-blink'
-                  : payload.alertOnOff
+                  : alertOnOff
                   ? 'animate-overtime-blink'
-                  : payload.alertFlash && prefs.flashAlertsEnabled !== false
+                  : alertFlash && prefs.flashAlertsEnabled !== false
                   ? 'animate-pulse'
                   : ''
               }`}
@@ -394,7 +476,12 @@ export const NdiDisplay: React.FC = () => {
                 transform: getElementOffsetTransform(countdownCfg, 4),
               }}
             >
-              {renderTimeWithColonOffset(displayTime, fsElements.colon?.vert)}
+              {renderTimeWithColonOffset(
+                displayTime,
+                fsElements.colon?.vert,
+                fsElements.countdown?.spacing,
+                fsElements.colon?.horiz
+              )}
             </div>
           )}
 
@@ -408,29 +495,29 @@ export const NdiDisplay: React.FC = () => {
             >
               <div
                 className={`h-full transition-all duration-300 ${
-                  payload.isOvertime || payload.activeAlertLevel === 'danger'
+                  isOvertime || activeAlertLevel === 'danger'
                     ? 'bg-red-500'
-                    : payload.activeAlertLevel === 'warning'
+                    : activeAlertLevel === 'warning'
                     ? 'bg-amber-500'
                     : 'bg-emerald-500'
                 }`}
-                style={{ width: `${Math.min(100, Math.max(0, payload.progressPercent))}%` }}
+                style={{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }}
               />
             </div>
           )}
         </div>
       )}
 
-      {/* Bottom Info Bar */}
+      {/* Bottom Info Bar (Hidden by default for clean broadcast capture; visible on hover) */}
       <div
-        className="relative z-10 flex items-center justify-between text-xs text-neutral-400 border-t border-neutral-800/60 pt-2"
+        className="relative z-10 flex items-center justify-between text-xs text-neutral-400 border-t border-neutral-800/60 pt-2 opacity-0 hover:opacity-100 transition-opacity duration-200"
         style={{
           fontFamily: resolveFontFamily(nameCfg?.font),
         }}
       >
-        <span>STATUS: {payload.status.toUpperCase()}</span>
-        <span>SPEED: {payload.speed}%</span>
-        <span>NEXT: {payload.nextTimer?.name || 'STANDBY'}</span>
+        <span>STATUS: {status.toUpperCase()}</span>
+        <span>SPEED: {activeTimer?.speed ?? payload.speed}%</span>
+        <span>NEXT: {nextTimer?.name || 'STANDBY'}</span>
       </div>
 
       <MessageOverlay

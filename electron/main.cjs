@@ -4,7 +4,7 @@
  * Application Identity:
  * - Application Name: ProTimer
  * - Application ID: com.protimer.desktop
- * - Version: 2.5.3
+ * - Version: 3.0.1 (read dynamically from package.json)
  *
  * Implements:
  * 1. Single-Instance Lock & Windows Application User Model ID (`com.protimer.desktop`).
@@ -45,7 +45,15 @@ try {
 const APP_ID = 'com.protimer.desktop';
 const APP_NAME = 'ProTimer';
 const APP_COMPANY = 'Bigjoe Technology';
-const APP_VERSION = '2.5.3';
+let APP_VERSION = '3.0.1';
+try {
+  const pkg = require('../package.json');
+  if (pkg && typeof pkg.version === 'string' && pkg.version.trim()) {
+    APP_VERSION = pkg.version.trim();
+  }
+} catch {
+  // Fallback to default APP_VERSION
+}
 
 // Set Windows Application User Model ID for taskbar grouping & notifications
 app.setName(APP_NAME);
@@ -123,11 +131,12 @@ const lanState = {
     frameCount: 0,
     lastFrameDataUrl: null,
     lastFrameTimestamp: 0,
+    framesByList: {},
   },
 };
 const sseClients = new Set();
 const sseClientMeta = new Map();
-const ndiStreamClients = new Set();
+const ndiStreamClients = new Map();
 
 function getOrCreateEmbeddedListConfig(listId) {
   const key = listId || 'default';
@@ -162,7 +171,24 @@ function getEmbeddedControlPagesCountByList() {
   return { mobileByList, desktopByList, totalByList };
 }
 
-function pushFrameToEmbeddedNdiClients(dataUrl) {
+function writeEmbeddedMjpegFrame(res, dataUrl) {
+  const commaIdx = dataUrl.indexOf(',');
+  if (commaIdx === -1) return false;
+  const headerPart = dataUrl.slice(0, commaIdx);
+  const base64Part = dataUrl.slice(commaIdx + 1);
+  const mimeMatch = headerPart.match(/^data:([^;]+);base64$/);
+  const contentType = mimeMatch ? mimeMatch[1] : 'image/png';
+  const buffer = Buffer.from(base64Part, 'base64');
+
+  res.write('--ndi_frame\r\n');
+  res.write(`Content-Type: ${contentType}\r\n`);
+  res.write(`Content-Length: ${buffer.length}\r\n\r\n`);
+  res.write(buffer);
+  res.write('\r\n');
+  return true;
+}
+
+function pushFrameToEmbeddedNdiClients(dataUrl, targetListId = null) {
   if (ndiStreamClients.size === 0 || !dataUrl) return;
   const commaIdx = dataUrl.indexOf(',');
   if (commaIdx === -1) return;
@@ -172,7 +198,13 @@ function pushFrameToEmbeddedNdiClients(dataUrl) {
   const contentType = mimeMatch ? mimeMatch[1] : 'image/png';
   const buffer = Buffer.from(base64Part, 'base64');
 
-  for (const res of ndiStreamClients) {
+  for (const [res, meta] of ndiStreamClients.entries()) {
+    if (targetListId !== null) {
+      if (meta.listId !== targetListId) continue;
+    } else {
+      if (meta.listId !== null) continue;
+    }
+
     try {
       res.write('--ndi_frame\r\n');
       res.write(`Content-Type: ${contentType}\r\n`);
@@ -694,6 +726,17 @@ function handleEmbeddedLanApi(req, res) {
     const primaryIp = ips[0] || 'localhost';
     const nativeDiagnostics = ndiNativeBridge.getRuntimeDiagnostics();
     const nativeReceivers = Number(nativeDiagnostics?.connectedReceivers) || 0;
+    const perListCaptureUrls = {};
+    for (const [lid, sName] of Object.entries(lanState.ndiStream.sourceNamesByList || {})) {
+      const encodedId = encodeURIComponent(lid);
+      perListCaptureUrls[lid] = {
+        sourceName: sName,
+        active: Boolean(lanState.ndiStream.multiActive || lanState.ndiStream.activeByList?.[lid]),
+        browserSourceUrl: `http://${primaryIp}:${activeLanPort}/?display=ndi&listId=${encodedId}`,
+        mjpegStreamUrl: `http://${primaryIp}:${activeLanPort}/api/lan/ndi/mjpeg?listId=${encodedId}`,
+        liveFrameUrl: `http://${primaryIp}:${activeLanPort}/api/lan/ndi/frame.png?listId=${encodedId}`,
+      };
+    }
     sendJson(200, {
       ...lanState.ndiStream,
       ips,
@@ -705,6 +748,7 @@ function handleEmbeddedLanApi(req, res) {
         mjpegStreamUrl: `http://${primaryIp}:${activeLanPort}/api/lan/ndi/mjpeg`,
         liveFrameUrl: `http://${primaryIp}:${activeLanPort}/api/lan/ndi/frame.png`,
       },
+      perListCaptureUrls,
     });
     return true;
   }
@@ -777,6 +821,19 @@ function handleEmbeddedLanApi(req, res) {
 
       let nativeDiagnostics;
       if (nextActive) {
+        if (!lanState.ndiStream.framesByList || typeof lanState.ndiStream.framesByList !== 'object') {
+          lanState.ndiStream.framesByList = {};
+        }
+        // Prune stale cached frames for deactivated list tabs
+        if (!lanState.ndiStream.multiActive) {
+          for (const cachedListId of Object.keys(lanState.ndiStream.framesByList)) {
+            if (!lanState.ndiStream.activeByList?.[cachedListId]) {
+              delete lanState.ndiStream.framesByList[cachedListId];
+            }
+          }
+          const remaining = Object.values(lanState.ndiStream.framesByList);
+          lanState.ndiStream.lastFrameDataUrl = remaining.length > 0 ? remaining[0] : null;
+        }
         nativeDiagnostics = ndiNativeBridge.startSender({
           sourceName: lanState.ndiStream.sourceName,
           activeSourceNames: lanState.ndiStream.activeSourceNames,
@@ -792,6 +849,7 @@ function handleEmbeddedLanApi(req, res) {
         startElectronNdiOffscreenCapture();
       } else {
         lanState.ndiStream.lastFrameDataUrl = null;
+        lanState.ndiStream.framesByList = {};
         lanState.ndiStream.frameCount = 0;
         stopElectronNdiOffscreenCapture();
         nativeDiagnostics = ndiNativeBridge.stopSender();
@@ -814,53 +872,105 @@ function handleEmbeddedLanApi(req, res) {
 
   // POST /api/lan/ndi/frame
   if (pathname === '/api/lan/ndi/frame' && method === 'POST') {
-    readBody(EMBEDDED_MAX_MEDIA_BYTES).then((body) => {
-      if (body.__payloadTooLarge) {
-        sendJson(413, { success: false, error: 'Frame payload too large' });
-        return;
-      }
-      const dataUrl = body.frameDataUrl || body.frame;
-      const primarySourceName =
-        (typeof body.sourceName === 'string' && body.sourceName.trim()) ||
-        lanState.ndiStream.sourceName;
+    readBody(EMBEDDED_MAX_MEDIA_BYTES)
+      .then((body) => {
+        try {
+          if (body.__payloadTooLarge) {
+            sendJson(413, { success: false, error: 'Frame payload too large' });
+            return;
+          }
+          // Ignore late in-flight frames after NDI output was turned OFF
+          if (!lanState.ndiStream.active) {
+            const nativeReceivers = ndiNativeBridge.getConnectedReceiversCount();
+            sendJson(200, {
+              success: true,
+              ignored: true,
+              receiversCount: ndiStreamClients.size + nativeReceivers,
+              frameCount: lanState.ndiStream.frameCount,
+            });
+            return;
+          }
+          if (!lanState.ndiStream.framesByList || typeof lanState.ndiStream.framesByList !== 'object') {
+            lanState.ndiStream.framesByList = {};
+          }
 
-      const sentSourcesInBatch = new Set();
+          const dataUrl = body.frameDataUrl || body.frame;
+          const primarySourceName =
+            (typeof body.sourceName === 'string' && body.sourceName.trim()) ||
+            lanState.ndiStream.sourceName;
+          const authorizedSources = new Set(lanState.ndiStream.activeSourceNames || []);
 
-      if (typeof dataUrl === 'string' && dataUrl.startsWith('data:image/')) {
-        lanState.ndiStream.lastFrameDataUrl = dataUrl;
-        lanState.ndiStream.lastFrameTimestamp = Date.now();
-        lanState.ndiStream.lastFrameAt = Date.now();
-        lanState.ndiStream.frameCount += 1;
-        pushFrameToEmbeddedNdiClients(dataUrl);
-        if (primarySourceName) {
-          decodeDataUrlAndSendToNdi(dataUrl, primarySourceName);
-          sentSourcesInBatch.add(primarySourceName);
-        }
-      }
+          const sentSourcesInBatch = new Set();
+          let updatedAnyFrame = false;
 
-      if (body.perListFrames && typeof body.perListFrames === 'object') {
-        for (const [lid, entry] of Object.entries(body.perListFrames)) {
-          if (entry && typeof entry === 'object' && typeof entry.frameDataUrl === 'string') {
-            lanState.ndiStream.framesByList[lid] = entry.frameDataUrl;
-            const listSource =
-              (typeof entry.sourceName === 'string' && entry.sourceName.trim()) ||
-              lanState.ndiStream.sourceNamesByList?.[lid] ||
-              null;
-            if (listSource && !sentSourcesInBatch.has(listSource)) {
-              decodeDataUrlAndSendToNdi(entry.frameDataUrl, listSource);
-              sentSourcesInBatch.add(listSource);
+          // 1. Process per-list NDI frames FIRST so each active list tab (List 1, List 2, etc.)
+          // always pushes its own dedicated countdown frame to its exact NDI source name and MJPEG subscribers.
+          if (body.perListFrames && typeof body.perListFrames === 'object') {
+            for (const [lid, entry] of Object.entries(body.perListFrames)) {
+              if (!lanState.ndiStream.multiActive && !lanState.ndiStream.activeByList?.[lid]) {
+                continue;
+              }
+              if (
+                entry &&
+                typeof entry === 'object' &&
+                typeof entry.frameDataUrl === 'string' &&
+                entry.frameDataUrl.startsWith('data:image/')
+              ) {
+                lanState.ndiStream.framesByList[lid] = entry.frameDataUrl;
+                if (!lanState.ndiStream.lastFrameDataUrl) {
+                  lanState.ndiStream.lastFrameDataUrl = entry.frameDataUrl;
+                }
+                updatedAnyFrame = true;
+                pushFrameToEmbeddedNdiClients(entry.frameDataUrl, lid);
+                const listSource =
+                  (typeof entry.sourceName === 'string' && entry.sourceName.trim()) ||
+                  lanState.ndiStream.sourceNamesByList?.[lid] ||
+                  null;
+                const isSourceAuthorized =
+                  authorizedSources.size === 0 || (listSource && authorizedSources.has(listSource));
+                if (listSource && isSourceAuthorized && !sentSourcesInBatch.has(listSource)) {
+                  decodeDataUrlAndSendToNdi(entry.frameDataUrl, listSource);
+                  sentSourcesInBatch.add(listSource);
+                }
+              }
             }
           }
-        }
-      }
 
-      const nativeReceivers = ndiNativeBridge.getConnectedReceiversCount();
-      sendJson(200, {
-        success: true,
-        receiversCount: ndiStreamClients.size + nativeReceivers,
-        frameCount: lanState.ndiStream.frameCount,
+          // 2. Process primary / Multi Output frame
+          const isPrimaryAuthorized =
+            authorizedSources.size === 0 || authorizedSources.has(primarySourceName);
+          if (typeof dataUrl === 'string' && dataUrl.startsWith('data:image/')) {
+            lanState.ndiStream.lastFrameDataUrl = dataUrl;
+            updatedAnyFrame = true;
+            pushFrameToEmbeddedNdiClients(dataUrl, null);
+            if (primarySourceName && isPrimaryAuthorized && !sentSourcesInBatch.has(primarySourceName)) {
+              decodeDataUrlAndSendToNdi(dataUrl, primarySourceName);
+              sentSourcesInBatch.add(primarySourceName);
+            }
+          }
+
+          if (updatedAnyFrame) {
+            lanState.ndiStream.lastFrameTimestamp = Date.now();
+            lanState.ndiStream.lastFrameAt = Date.now();
+            lanState.ndiStream.frameCount += 1;
+          }
+
+          const nativeReceivers = ndiNativeBridge.getConnectedReceiversCount();
+          sendJson(200, {
+            success: true,
+            receiversCount: ndiStreamClients.size + nativeReceivers,
+            frameCount: lanState.ndiStream.frameCount,
+          });
+        } catch (err) {
+          sendJson(500, {
+            success: false,
+            error: err && err.message ? err.message : 'Failed to process NDI frame',
+          });
+        }
+      })
+      .catch(() => {
+        sendJson(500, { success: false, error: 'Failed to read NDI frame request body' });
       });
-    });
     return true;
   }
 
@@ -869,13 +979,32 @@ function handleEmbeddedLanApi(req, res) {
     (pathname === '/api/lan/ndi/frame' || pathname === '/api/lan/ndi/frame.png') &&
     method === 'GET'
   ) {
-    if (!lanState.ndiStream.active || !lanState.ndiStream.lastFrameDataUrl) {
-      sendJson(404, { error: 'NDI stream is currently inactive or no frame available' });
+    const reqListId = parsedUrl.searchParams.get('listId') || '';
+    let chosenDataUrl = null;
+    let chosenSourceName = lanState.ndiStream.sourceName;
+
+    if (reqListId) {
+      const isReqListActive =
+        lanState.ndiStream.active &&
+        (lanState.ndiStream.multiActive || Boolean(lanState.ndiStream.activeByList?.[reqListId]));
+      chosenDataUrl = isReqListActive ? lanState.ndiStream.framesByList?.[reqListId] || null : null;
+      chosenSourceName =
+        lanState.ndiStream.sourceNamesByList?.[reqListId] || lanState.ndiStream.sourceName;
+    } else {
+      chosenDataUrl = lanState.ndiStream.active ? lanState.ndiStream.lastFrameDataUrl : null;
+    }
+
+    if (!lanState.ndiStream.active || !chosenDataUrl) {
+      sendJson(404, {
+        error: reqListId
+          ? `NDI stream for list "${reqListId}" is currently inactive or no frame available`
+          : 'NDI stream is currently inactive or no frame available',
+      });
       return true;
     }
-    const commaIdx = lanState.ndiStream.lastFrameDataUrl.indexOf(',');
-    const headerPart = lanState.ndiStream.lastFrameDataUrl.slice(0, commaIdx);
-    const base64Part = lanState.ndiStream.lastFrameDataUrl.slice(commaIdx + 1);
+    const commaIdx = chosenDataUrl.indexOf(',');
+    const headerPart = chosenDataUrl.slice(0, commaIdx);
+    const base64Part = chosenDataUrl.slice(commaIdx + 1);
     const mimeMatch = headerPart.match(/^data:([^;]+);base64$/);
     const contentType = mimeMatch ? mimeMatch[1] : 'image/png';
     const buffer = Buffer.from(base64Part, 'base64');
@@ -885,7 +1014,7 @@ function handleEmbeddedLanApi(req, res) {
       'Content-Length': buffer.length,
       'Cache-Control': 'no-store, no-cache, must-revalidate',
       'Access-Control-Allow-Origin': '*',
-      'X-NDI-Source-Name': lanState.ndiStream.sourceName,
+      'X-NDI-Source-Name': chosenSourceName,
     });
     res.end(buffer);
     return true;
@@ -893,15 +1022,42 @@ function handleEmbeddedLanApi(req, res) {
 
   // GET /api/lan/ndi/mjpeg
   if (pathname === '/api/lan/ndi/mjpeg' && method === 'GET') {
+    const reqListId = parsedUrl.searchParams.get('listId') || null;
+    const rawMode = parsedUrl.searchParams.get('mode');
+    const reqMode = rawMode === 'multi' ? 'multi' : rawMode === 'single' ? 'single' : null;
+    const headerSourceName = reqListId
+      ? lanState.ndiStream.sourceNamesByList?.[reqListId] || `ProTimer (${reqListId})`
+      : reqMode === 'multi'
+      ? lanState.ndiStream.multiSourceName
+      : lanState.ndiStream.sourceName;
+
     res.writeHead(200, {
       'Content-Type': 'multipart/x-mixed-replace; boundary=ndi_frame',
       'Cache-Control': 'no-store, no-cache, must-revalidate',
       Pragma: 'no-cache',
       Connection: 'keep-alive',
       'Access-Control-Allow-Origin': '*',
-      'X-NDI-Source-Name': lanState.ndiStream.sourceName,
+      'X-NDI-Source-Name': headerSourceName,
     });
-    ndiStreamClients.add(res);
+    ndiStreamClients.set(res, { listId: reqListId, mode: reqMode });
+
+    const initialDataUrl = reqListId
+      ? lanState.ndiStream.active &&
+        (lanState.ndiStream.multiActive || Boolean(lanState.ndiStream.activeByList?.[reqListId]))
+        ? lanState.ndiStream.framesByList?.[reqListId] || null
+        : null
+      : lanState.ndiStream.active
+      ? lanState.ndiStream.lastFrameDataUrl
+      : null;
+
+    if (initialDataUrl) {
+      try {
+        writeEmbeddedMjpegFrame(res, initialDataUrl);
+      } catch {
+        // ignore write error
+      }
+    }
+
     req.on('close', () => {
       ndiStreamClients.delete(res);
     });
@@ -1019,7 +1175,7 @@ function getBaseUrl() {
 }
 
 function getAppIconPath() {
-  const candidates = [
+  const winCandidates = [
     path.join(__dirname, '../build/icon.ico'),
     path.join(__dirname, '../build/icon.png'),
     path.join(__dirname, '../build/icon_ec9a41ea.png'),
@@ -1028,6 +1184,16 @@ function getAppIconPath() {
     path.join(__dirname, '../public/assets/aistudio/icon_ec9a41ea.png'),
     path.join(__dirname, '../public/assets/aistudio/ProTimer_icon_ec9a41ea.png'),
   ];
+  const unixCandidates = [
+    path.join(__dirname, '../build/icon.png'),
+    path.join(__dirname, '../build/icon_ec9a41ea.png'),
+    path.join(__dirname, '../public/icon.png'),
+    path.join(__dirname, '../public/assets/aistudio/icon_ec9a41ea.png'),
+    path.join(__dirname, '../public/assets/aistudio/ProTimer_icon_ec9a41ea.png'),
+    path.join(__dirname, '../build/icon.ico'),
+    path.join(__dirname, '../public/icon.ico'),
+  ];
+  const candidates = process.platform === 'win32' ? winCandidates : unixCandidates;
   for (const candidate of candidates) {
     if (fs.existsSync(candidate)) {
       return candidate;
@@ -1219,6 +1385,155 @@ function sanitizeWindowBounds(state) {
     height,
     isMaximized: state.isMaximized,
     isFullScreen: state.isFullScreen,
+  };
+}
+
+// =============================================================================
+// SECONDARY WINDOW BOUNDS PERSISTENCE (Presenter & Preview)
+// =============================================================================
+
+let secondaryWindowBoundsCache = null;
+let secondaryBoundsSaveTimeout = null;
+
+function getSecondaryWindowBoundsFilePath() {
+  return path.join(app.getPath('userData'), 'secondary-window-bounds.json');
+}
+
+function readAllSecondaryWindowBounds() {
+  if (secondaryWindowBoundsCache && typeof secondaryWindowBoundsCache === 'object') {
+    return secondaryWindowBoundsCache;
+  }
+  const filePath = getSecondaryWindowBoundsFilePath();
+  try {
+    if (fs.existsSync(filePath)) {
+      const raw = fs.readFileSync(filePath, 'utf8');
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        secondaryWindowBoundsCache = { ...parsed };
+        return secondaryWindowBoundsCache;
+      }
+    }
+  } catch (err) {
+    console.warn('Could not read secondary-window-bounds.json, using defaults:', err);
+  }
+  secondaryWindowBoundsCache = {};
+  return secondaryWindowBoundsCache;
+}
+
+function flushSecondaryWindowBounds() {
+  if (secondaryBoundsSaveTimeout) {
+    clearTimeout(secondaryBoundsSaveTimeout);
+    secondaryBoundsSaveTimeout = null;
+  }
+  if (!secondaryWindowBoundsCache || typeof secondaryWindowBoundsCache !== 'object') return;
+  try {
+    const filePath = getSecondaryWindowBoundsFilePath();
+    fs.writeFileSync(filePath, JSON.stringify(secondaryWindowBoundsCache, null, 2), 'utf8');
+  } catch (err) {
+    console.warn('Could not save secondary-window-bounds.json:', err);
+  }
+}
+
+function loadSecondaryWindowBounds(windowKey) {
+  const all = readAllSecondaryWindowBounds();
+  const entry = all[windowKey];
+  if (
+    entry &&
+    typeof entry === 'object' &&
+    typeof entry.x === 'number' &&
+    Number.isFinite(entry.x) &&
+    typeof entry.y === 'number' &&
+    Number.isFinite(entry.y) &&
+    typeof entry.width === 'number' &&
+    Number.isFinite(entry.width) &&
+    typeof entry.height === 'number' &&
+    Number.isFinite(entry.height)
+  ) {
+    return {
+      x: Math.round(entry.x),
+      y: Math.round(entry.y),
+      width: Math.round(entry.width),
+      height: Math.round(entry.height),
+    };
+  }
+  return null;
+}
+
+function saveSecondaryWindowBounds(windowKey, bounds, immediate = false) {
+  if (
+    !bounds ||
+    typeof bounds !== 'object' ||
+    typeof bounds.x !== 'number' ||
+    !Number.isFinite(bounds.x) ||
+    typeof bounds.y !== 'number' ||
+    !Number.isFinite(bounds.y) ||
+    typeof bounds.width !== 'number' ||
+    !Number.isFinite(bounds.width) ||
+    typeof bounds.height !== 'number' ||
+    !Number.isFinite(bounds.height)
+  ) {
+    return;
+  }
+
+  const all = readAllSecondaryWindowBounds();
+  all[windowKey] = {
+    x: Math.round(bounds.x),
+    y: Math.round(bounds.y),
+    width: Math.max(150, Math.round(bounds.width)),
+    height: Math.max(90, Math.round(bounds.height)),
+  };
+
+  if (immediate) {
+    flushSecondaryWindowBounds();
+    return;
+  }
+
+  if (secondaryBoundsSaveTimeout) {
+    clearTimeout(secondaryBoundsSaveTimeout);
+  }
+  secondaryBoundsSaveTimeout = setTimeout(() => {
+    flushSecondaryWindowBounds();
+  }, 250);
+}
+
+/**
+ * Validate secondary window bounds (Presenter / Preview) against all connected displays.
+ * Preserves the remembered size and position if at least 40x40px intersects any display workArea;
+ * otherwise preserves remembered dimensions and repositions safely onto the primary display.
+ */
+function sanitizeSecondaryWindowBounds(saved, defaultBounds, minWidth = 150, minHeight = 90) {
+  if (!saved) return defaultBounds;
+
+  const allDisplays = screen.getAllDisplays();
+  const primaryWorkArea = screen.getPrimaryDisplay().workArea;
+
+  const width = Math.max(minWidth, Math.round(saved.width));
+  const height = Math.max(minHeight, Math.round(saved.height));
+  const x = Math.round(saved.x);
+  const y = Math.round(saved.y);
+
+  const minVisible = 40;
+  const isVisibleOnAnyDisplay = allDisplays.some((display) => {
+    const wa = display.workArea || display.bounds;
+    const overlapX = Math.min(x + width, wa.x + wa.width) - Math.max(x, wa.x);
+    const overlapY = Math.min(y + height, wa.y + wa.height) - Math.max(y, wa.y);
+    return overlapX >= minVisible && overlapY >= minVisible;
+  });
+
+  if (isVisibleOnAnyDisplay) {
+    return { x, y, width, height };
+  }
+
+  const clampedW = Math.min(primaryWorkArea.width, width);
+  const clampedH = Math.min(primaryWorkArea.height, height);
+  const maxX = primaryWorkArea.x + Math.max(0, primaryWorkArea.width - clampedW);
+  const maxY = primaryWorkArea.y + Math.max(0, primaryWorkArea.height - clampedH);
+
+  return {
+    x: Math.min(maxX, Math.max(primaryWorkArea.x, defaultBounds.x)),
+    y: Math.min(maxY, Math.max(primaryWorkArea.y, defaultBounds.y)),
+    width: clampedW,
+    height: clampedH,
   };
 }
 
@@ -1529,12 +1844,18 @@ function openPreviewWindow() {
   const defaultH = 240;
   const defaultX = workArea.x + Math.max(20, workArea.width - defaultW - 32);
   const defaultY = workArea.y + Math.max(48, workArea.height - defaultH - 96);
+  const initialBounds = sanitizeSecondaryWindowBounds(
+    loadSecondaryWindowBounds('preview'),
+    { x: defaultX, y: defaultY, width: defaultW, height: defaultH },
+    150,
+    90
+  );
 
   previewWindow = new BrowserWindow({
-    x: defaultX,
-    y: defaultY,
-    width: defaultW,
-    height: defaultH,
+    x: initialBounds.x,
+    y: initialBounds.y,
+    width: initialBounds.width,
+    height: initialBounds.height,
     minWidth: 150,
     minHeight: 90,
     frame: false,
@@ -1559,6 +1880,17 @@ function openPreviewWindow() {
   });
 
   applyAlwaysOnTopOverlap(previewWindow);
+
+  const capturePreviewBounds = (immediate = false) => {
+    if (!previewWindow || previewWindow.isDestroyed()) return;
+    saveSecondaryWindowBounds('preview', previewWindow.getBounds(), immediate);
+  };
+
+  previewWindow.on('move', () => capturePreviewBounds(false));
+  previewWindow.on('moved', () => capturePreviewBounds(false));
+  previewWindow.on('resize', () => capturePreviewBounds(false));
+  previewWindow.on('resized', () => capturePreviewBounds(false));
+  previewWindow.on('close', () => capturePreviewBounds(true));
 
   const baseUrl = getBaseUrl();
   const separator = baseUrl.includes('?') ? '&' : '?';
@@ -1588,6 +1920,7 @@ function openPreviewWindow() {
 
 function closePreviewWindow() {
   if (previewWindow && !previewWindow.isDestroyed()) {
+    saveSecondaryWindowBounds('preview', previewWindow.getBounds(), true);
     previewWindow.close();
     previewWindow = null;
   }
@@ -1705,15 +2038,23 @@ function openPresenterWindow() {
   const defaultH = 240;
   const defaultX = workArea.x + 28;
   const defaultY = workArea.y + Math.max(48, workArea.height - defaultH - 96);
+  const initialBounds = sanitizeSecondaryWindowBounds(
+    loadSecondaryWindowBounds('presenter'),
+    { x: defaultX, y: defaultY, width: defaultW, height: defaultH },
+    150,
+    90
+  );
 
   presenterWindow = new BrowserWindow({
-    x: defaultX,
-    y: defaultY,
-    width: defaultW,
-    height: defaultH,
+    x: initialBounds.x,
+    y: initialBounds.y,
+    width: initialBounds.width,
+    height: initialBounds.height,
     minWidth: 150,
     minHeight: 90,
     frame: false,
+    transparent: true,
+    roundedCorners: true,
     resizable: true,
     minimizable: false,
     maximizable: false,
@@ -1724,7 +2065,7 @@ function openPresenterWindow() {
     show: false,
     paintWhenInitiallyHidden: true,
     icon: getAppIconPath(),
-    backgroundColor: '#000000',
+    backgroundColor: '#00000000',
     title: 'ProTimer - Presenter',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -1735,6 +2076,17 @@ function openPresenterWindow() {
   });
 
   applyAlwaysOnTopOverlap(presenterWindow);
+
+  const capturePresenterBounds = (immediate = false) => {
+    if (!presenterWindow || presenterWindow.isDestroyed()) return;
+    saveSecondaryWindowBounds('presenter', presenterWindow.getBounds(), immediate);
+  };
+
+  presenterWindow.on('move', () => capturePresenterBounds(false));
+  presenterWindow.on('moved', () => capturePresenterBounds(false));
+  presenterWindow.on('resize', () => capturePresenterBounds(false));
+  presenterWindow.on('resized', () => capturePresenterBounds(false));
+  presenterWindow.on('close', () => capturePresenterBounds(true));
 
   const baseUrl = getBaseUrl();
   const separator = baseUrl.includes('?') ? '&' : '?';
@@ -1764,6 +2116,7 @@ function openPresenterWindow() {
 
 function closePresenterWindow() {
   if (presenterWindow && !presenterWindow.isDestroyed()) {
+    saveSecondaryWindowBounds('presenter', presenterWindow.getBounds(), true);
     presenterWindow.close();
     presenterWindow = null;
   }
@@ -2049,6 +2402,34 @@ function handleDisplayRemoved(oldDisplay) {
       mainWindow.setBounds({ x, y, width: w, height: h });
     }
   }
+
+  const recoverSecondaryWindow = (win, key, defaultX) => {
+    if (!win || win.isDestroyed()) return;
+    const pWork = primary.workArea;
+    const cur = win.getBounds();
+    const safe = sanitizeSecondaryWindowBounds(
+      cur,
+      {
+        x: defaultX,
+        y: pWork.y + Math.max(48, pWork.height - cur.height - 96),
+        width: cur.width,
+        height: cur.height,
+      },
+      150,
+      90
+    );
+    if (safe.x !== cur.x || safe.y !== cur.y || safe.width !== cur.width || safe.height !== cur.height) {
+      win.setBounds(safe);
+      saveSecondaryWindowBounds(key, safe, true);
+    }
+  };
+
+  recoverSecondaryWindow(
+    previewWindow,
+    'preview',
+    primary.workArea.x + Math.max(20, primary.workArea.width - 360 - 32)
+  );
+  recoverSecondaryWindow(presenterWindow, 'presenter', primary.workArea.x + 28);
 }
 
 // =============================================================================
@@ -2188,6 +2569,11 @@ ipcMain.handle('current-window-set-bounds', async (event, bounds) => {
         : current.height,
   };
   senderWin.setBounds(nextBounds);
+  if (senderWin === previewWindow) {
+    saveSecondaryWindowBounds('preview', nextBounds, false);
+  } else if (senderWin === presenterWindow) {
+    saveSecondaryWindowBounds('presenter', nextBounds, false);
+  }
   return true;
 });
 
@@ -2603,6 +2989,16 @@ app.whenReady().then(async () => {
       createMainWindow();
     }
   });
+});
+
+app.on('before-quit', () => {
+  if (previewWindow && !previewWindow.isDestroyed()) {
+    saveSecondaryWindowBounds('preview', previewWindow.getBounds(), true);
+  }
+  if (presenterWindow && !presenterWindow.isDestroyed()) {
+    saveSecondaryWindowBounds('presenter', presenterWindow.getBounds(), true);
+  }
+  flushSecondaryWindowBounds();
 });
 
 app.on('window-all-closed', () => {

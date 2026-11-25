@@ -12,7 +12,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { X, Upload, Download, RotateCcw, Check, ChevronDown, ChevronUp, Radio } from 'lucide-react';
+import { X, Upload, Download, RotateCcw, Check, ChevronDown, ChevronUp, Radio, Copy } from 'lucide-react';
 import {
   AppPreferences,
   DEFAULT_PREFERENCES,
@@ -24,15 +24,20 @@ import {
   DEFAULT_TARGET_EXTRAS_CONFIG,
   createDefaultSizesAndPositions,
   createDefaultSizesAndPositionsExtras,
+  ensureBebasCountdownDefault,
   TimerList,
+  extractNdiSourcePrefix,
   formatListNdiSourceName,
 } from '../types';
 import { useTheme } from '../hooks';
 import { timerManagerService } from '../services/timerManager';
 import { ndiStreamService, NdiStreamStatus } from '../services/ndiStreamService';
+import { APP_VERSION_TAG } from '../constants/appVersion';
 import {
   COMMON_SYSTEM_FONTS,
+  renderTimeWithColonOffset,
   resolveFontFamily,
+  resolveFontStyleCss,
   useSystemFonts,
 } from '../utilities/displayStyleHelper';
 
@@ -236,14 +241,12 @@ const TimeBoxInput: React.FC<TimeBoxInputProps> = ({
           (e.target as HTMLInputElement).blur();
         }
       }}
-      className={`w-[104px] text-center font-mono text-[13px] px-2.5 py-1.5 rounded border transition-colors focus:outline-hidden ${
+      className={`w-[104px] text-center font-mono text-[13px] px-2.5 py-1.5 rounded-lg transition-colors focus:outline-hidden ${
         disabled
           ? isDark
-            ? 'bg-[#0d1118]/60 border-[#1e2636] text-neutral-600 cursor-not-allowed'
-            : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
-          : isDark
-          ? 'bg-[#121722] hover:bg-[#161d2b] border-[#263246] text-neutral-100 focus:border-cyan-400'
-          : 'bg-white hover:bg-slate-50 border-slate-300 text-slate-900 focus:border-cyan-600'
+            ? 'bg-white/[0.03] border border-white/[0.06] text-neutral-600 cursor-not-allowed'
+            : 'bg-slate-100 border border-slate-200 text-slate-400 cursor-not-allowed'
+          : 'glass-input'
       }`}
     />
   );
@@ -272,11 +275,7 @@ const NumericStepper: React.FC<NumericStepperProps> = ({
 
   return (
     <div
-      className={`inline-flex items-center justify-between ${boxClassName} px-2 rounded border transition-colors ${
-        isDark
-          ? 'bg-[#121722] hover:bg-[#161d2b] border-[#2a364b] text-neutral-100 focus-within:border-cyan-400'
-          : 'bg-white hover:bg-slate-50 border-slate-300 text-slate-900 focus-within:border-cyan-600'
-      }`}
+      className={`glass-input inline-flex items-center justify-between ${boxClassName} px-2 rounded-lg transition-colors`}
     >
       <input
         type="text"
@@ -384,7 +383,7 @@ const SIZES_POSITION_ROWS: Array<{
     indented: true,
     hasVisible: false,
     hasVert: true,
-    hasHoriz: false,
+    hasHoriz: true,
     hasSize: false,
     hasFont: false,
     hasStyle: false,
@@ -492,10 +491,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 }) => {
   const { isDark, setTheme } = useTheme();
   const systemFonts = useSystemFonts();
-  const [prefs, setPrefs] = useState<AppPreferences>({
-    ...DEFAULT_PREFERENCES,
-    ...preferences,
-  });
+  const [prefs, setPrefs] = useState<AppPreferences>(() =>
+    ensureBebasCountdownDefault({
+      ...DEFAULT_PREFERENCES,
+      ...preferences,
+    })
+  );
   const [activeSection, setActiveSection] = useState<SidePanelSection>('style');
   const [activeStyleTab, setActiveStyleTab] = useState<StyleSubTab>('general_settings');
   const [activeSizesTargetTab, setActiveSizesTargetTab] =
@@ -505,6 +506,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [ndiStatus, setNdiStatus] = useState<NdiStreamStatus>(() =>
     ndiStreamService.getStatus()
   );
+  const [copiedNdiKey, setCopiedNdiKey] = useState<string | null>(null);
+  const copyNdiUrl = (key: string, url: string) => {
+    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      navigator.clipboard.writeText(url).catch(() => {});
+    }
+    setCopiedNdiKey(key);
+    window.setTimeout(() => {
+      setCopiedNdiKey((prev) => (prev === key ? null : prev));
+    }, 1800);
+  };
   const applyFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const listBgImageInputRef = useRef<HTMLInputElement>(null);
@@ -521,10 +532,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   useEffect(() => {
     if (isOpen) {
-      setPrefs({
-        ...DEFAULT_PREFERENCES,
-        ...preferences,
-      });
+      setPrefs(
+        ensureBebasCountdownDefault({
+          ...DEFAULT_PREFERENCES,
+          ...preferences,
+        })
+      );
       setHasUnappliedChanges(false);
       setAppliedFeedback(false);
     }
@@ -629,49 +642,44 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     { id: 'colors_animations', label: 'Colors & Animations' },
   ];
 
-  // App-matched theme classes
+  // App-matched frosted glass theme classes
   const outerShellCls = isDark
-    ? 'bg-[#0f131a] border-[#222d3d] text-neutral-200'
-    : 'bg-white border-slate-300 text-slate-800';
+    ? 'glass-card text-neutral-200'
+    : 'glass-card text-slate-800';
   const topHeaderCls = isDark
-    ? 'bg-[#0b0e14] border-[#1b2333]'
-    : 'bg-slate-100 border-slate-200';
+    ? 'bg-white/[0.025] border-white/[0.08]'
+    : 'bg-white/35 border-slate-200/80';
   const sideBarCls = isDark
-    ? 'bg-[#0b0e14] border-[#1b2333]'
-    : 'bg-slate-100/90 border-slate-200';
-  const rightAreaCls = isDark ? 'bg-[#0f131a]' : 'bg-slate-50';
+    ? 'bg-black/20 border-white/[0.08]'
+    : 'bg-slate-100/60 border-slate-200/80';
+  const rightAreaCls = isDark ? 'bg-transparent' : 'bg-transparent';
   const subTabBarCls = isDark
-    ? 'bg-[#0c1017] border-[#1b2333]'
-    : 'bg-slate-100 border-slate-200';
-  const contentCardCls = isDark
-    ? 'bg-[#0b0e14] border-[#1a2333]'
-    : 'bg-white border-slate-200 shadow-2xs';
+    ? 'bg-white/[0.02] border-white/[0.08]'
+    : 'bg-white/25 border-slate-200/80';
+  const contentCardCls = 'glass-subcard rounded-2xl';
   const sectionHeadingCls = isDark
     ? 'text-[13px] font-semibold uppercase tracking-wide text-[#4ea8ff]'
     : 'text-[13px] font-semibold uppercase tracking-wide text-cyan-700';
-  const selectCls = isDark
-    ? 'appearance-none bg-[#121722] hover:bg-[#171e2c] border border-[#263246] rounded px-3 py-1.5 pr-8 text-[13px] text-neutral-100 focus:outline-hidden focus:border-cyan-400 cursor-pointer'
-    : 'appearance-none bg-white hover:bg-slate-50 border border-slate-300 rounded px-3 py-1.5 pr-8 text-[13px] text-slate-900 focus:outline-hidden focus:border-cyan-600 cursor-pointer';
-  const inputCls = isDark
-    ? 'w-full px-3 py-1.5 bg-[#121722] border border-[#263246] rounded text-[13px] text-white focus:outline-hidden focus:border-cyan-400'
-    : 'w-full px-3 py-1.5 bg-white border border-slate-300 rounded text-[13px] text-slate-900 focus:outline-hidden focus:border-cyan-600';
-  const iconBtnCls = isDark
-    ? 'p-1.5 rounded text-neutral-400 hover:text-white hover:bg-[#182030] transition-colors cursor-pointer'
-    : 'p-1.5 rounded text-slate-500 hover:text-slate-900 hover:bg-slate-200 transition-colors cursor-pointer';
+  const selectCls =
+    'glass-input appearance-none rounded-full px-3.5 py-1.5 pr-8 text-[13px] focus:outline-hidden cursor-pointer';
+  const inputCls =
+    'glass-input w-full px-3.5 py-1.5 rounded-xl text-[13px] focus:outline-hidden';
+  const iconBtnCls =
+    'glass-btn glass-btn-subtle w-8 h-8 flex items-center justify-center cursor-pointer';
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-xs p-4 select-none"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 select-none"
       onClick={handleClose}
     >
       <div
-        className={`w-full max-w-[900px] h-[530px] border rounded-lg shadow-2xl flex flex-col overflow-hidden transition-colors duration-150 ${outerShellCls}`}
+        className={`w-full max-w-[920px] h-[545px] rounded-[28px] flex flex-col overflow-hidden transition-colors duration-150 ${outerShellCls}`}
         onClick={(e) => e.stopPropagation()}
       >
         {/* =====================================================================
             TOP HEADER BAR
            ===================================================================== */}
-        <div className={`h-12 px-5 border-b flex items-center justify-between shrink-0 ${topHeaderCls}`}>
+        <div className={`h-13 px-5 border-b flex items-center justify-between shrink-0 ${topHeaderCls}`}>
           <h2 className={`text-[15px] font-semibold tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>
             Preferences
           </h2>
@@ -690,7 +698,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               title="Export Preferences"
               className={iconBtnCls}
             >
-              <Upload className="w-4 h-4" />
+              <Upload className="w-3.5 h-3.5" />
             </button>
             <button
               type="button"
@@ -698,7 +706,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               title="Import Preferences"
               className={iconBtnCls}
             >
-              <Download className="w-4 h-4" />
+              <Download className="w-3.5 h-3.5" />
             </button>
             <button
               type="button"
@@ -706,10 +714,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               title="Reset to Default Preferences"
               className={iconBtnCls}
             >
-              <RotateCcw className="w-4 h-4" />
+              <RotateCcw className="w-3.5 h-3.5" />
             </button>
 
-            <div className={`h-4 w-[1px] mx-1.5 ${isDark ? 'bg-[#222d3d]' : 'bg-slate-300'}`} />
+            <div className={`h-4 w-[1px] mx-1.5 ${isDark ? 'bg-white/[0.1]' : 'bg-slate-300'}`} />
 
             <button
               type="button"
@@ -717,7 +725,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               title="Close Preferences"
               className={iconBtnCls}
             >
-              <X className="w-4 h-4" />
+              <X className="w-3.5 h-3.5" />
             </button>
           </div>
         </div>
@@ -727,7 +735,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
            ===================================================================== */}
         <div className="flex flex-1 min-h-0">
           {/* LEFT SIDEBAR */}
-          <div className={`w-[160px] border-r py-2 flex flex-col shrink-0 ${sideBarCls}`}>
+          <div className={`w-[168px] border-r p-2.5 flex flex-col gap-1.5 shrink-0 ${sideBarCls}`}>
             {sideNavItems.map((item) => {
               const isSelected = activeSection === item.id;
               return (
@@ -735,23 +743,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   key={item.id}
                   type="button"
                   onClick={() => setActiveSection(item.id)}
-                  className={`relative w-full text-left px-4 py-2.5 text-[13px] font-medium transition-colors cursor-pointer ${
+                  className={`relative w-full text-left px-3.5 py-2 rounded-full text-[13px] font-medium transition-all cursor-pointer ${
                     isSelected
-                      ? isDark
-                        ? 'bg-[#151c28] text-[#4ea8ff]'
-                        : 'bg-white text-cyan-700 shadow-2xs'
+                      ? 'glass-btn glass-btn-cyan-active glass-btn-subtle'
                       : isDark
-                      ? 'text-neutral-400 hover:text-white hover:bg-[#111622]'
-                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/70'
+                      ? 'text-neutral-400 hover:text-white hover:bg-white/[0.06]'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
                   }`}
                 >
-                  {isSelected && (
-                    <span
-                      className={`absolute left-0 top-0.5 bottom-0.5 w-[3px] rounded-r ${
-                        isDark ? 'bg-[#2b8cff]' : 'bg-cyan-600'
-                      }`}
-                    />
-                  )}
                   <span>{item.label}</span>
                 </button>
               );
@@ -763,7 +762,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             {activeSection === 'style' && (
               <>
                 {/* STYLE TOP SUB-TABS */}
-                <div className={`px-4 pt-1 border-b flex items-center gap-1 overflow-x-auto shrink-0 ${subTabBarCls}`}>
+                <div className={`px-4 py-2 border-b flex items-center gap-1.5 overflow-x-auto shrink-0 ${subTabBarCls}`}>
                   {styleSubTabs.map((tab) => {
                     const isTabActive = activeStyleTab === tab.id;
                     return (
@@ -771,14 +770,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         key={tab.id}
                         type="button"
                         onClick={() => setActiveStyleTab(tab.id)}
-                        className={`px-3.5 py-2.5 text-[13px] font-medium border-b-2 transition-colors whitespace-nowrap cursor-pointer ${
+                        className={`px-3.5 py-1.5 rounded-full text-[12.5px] font-medium transition-all whitespace-nowrap cursor-pointer ${
                           isTabActive
-                            ? isDark
-                              ? 'border-[#2b8cff] text-[#4ea8ff]'
-                              : 'border-cyan-600 text-cyan-700'
+                            ? 'glass-btn glass-btn-cyan-active glass-btn-subtle'
                             : isDark
-                            ? 'border-transparent text-neutral-400 hover:text-white'
-                            : 'border-transparent text-slate-600 hover:text-slate-900'
+                            ? 'text-neutral-400 hover:text-white hover:bg-white/[0.06]'
+                            : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
                         }`}
                       >
                         {tab.label}
@@ -789,7 +786,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                 {/* STYLE TAB CONTENT */}
                 <div className="flex-1 p-3 overflow-y-auto">
-                  <div className={`h-full border rounded-xs p-5 overflow-y-auto ${contentCardCls}`}>
+                  <div className={`h-full p-5 overflow-y-auto ${contentCardCls}`}>
                     {/* 1. GENERAL SETTINGS */}
                     {activeStyleTab === 'general_settings' && (
                       <div className="space-y-6">
@@ -949,17 +946,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           },
                         };
 
-                        // When editing the primary Fullscreen / NDI / Preview tab, also apply the patch
-                        // to Presenter, Multitimer, and Web Display (LAN) so changes apply across all displays
-                        // unless the user specifically switches to another target tab to customize it.
+                        const isGlobalSpacingPatch =
+                          (elementId === 'countdown' && patch.spacing !== undefined) ||
+                          (elementId === 'colon' && patch.horiz !== undefined);
+
+                        // Global countdown HH:MM:SS spacing & colon horizontal spacing ALWAYS apply to all displays.
+                        // Other edits on Fullscreen / NDI / Preview also propagate across all displays.
                         if (
+                          isGlobalSpacingPatch ||
                           activeSizesTargetTab === 'fullscreen_ndi_preview' ||
                           activeSizesTargetTab === 'presenter_window'
                         ) {
-                          const otherTargets: SizesPositionTargetTab[] =
-                            activeSizesTargetTab === 'fullscreen_ndi_preview'
-                              ? ['presenter_window', 'multitimer', 'web_display_lan']
-                              : ['fullscreen_ndi_preview'];
+                          const allTargetKeys: SizesPositionTargetTab[] = [
+                            'fullscreen_ndi_preview',
+                            'presenter_window',
+                            'multitimer',
+                            'web_display_lan',
+                          ];
+                          const otherTargets: SizesPositionTargetTab[] = isGlobalSpacingPatch
+                            ? allTargetKeys.filter((t) => t !== activeSizesTargetTab)
+                            : activeSizesTargetTab === 'fullscreen_ndi_preview'
+                            ? ['presenter_window', 'multitimer', 'web_display_lan']
+                            : ['fullscreen_ndi_preview'];
                           for (const t of otherTargets) {
                             const targetMap = {
                               ...DEFAULT_TARGET_ELEMENTS_CONFIG,
@@ -981,6 +989,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           ...prefs,
                           sizesAndPositionsByTarget: updatedTargets,
                         };
+
+                        if (elementId === 'countdown' && patch.spacing !== undefined) {
+                          nextPrefs.countdownSpacing = patch.spacing;
+                        }
+                        if (elementId === 'colon' && patch.horiz !== undefined) {
+                          nextPrefs.countdownColonSpacing = patch.horiz;
+                        }
 
                         // Sync primary Fullscreen / NDI / Preview sizes with top-level scale preferences
                         if (
@@ -1052,13 +1067,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         stagePreferences(nextPrefs);
                       };
 
-                      const compactSelectCls = isDark
-                        ? 'appearance-none bg-[#121722] hover:bg-[#171e2c] border border-[#2a364b] rounded px-2 h-[26px] pr-6 text-[12px] text-neutral-100 focus:outline-hidden focus:border-cyan-400 cursor-pointer w-full'
-                        : 'appearance-none bg-white hover:bg-slate-50 border border-slate-300 rounded px-2 h-[26px] pr-6 text-[12px] text-slate-900 focus:outline-hidden focus:border-cyan-600 cursor-pointer w-full';
+                      const compactSelectCls =
+                        'glass-input appearance-none rounded-lg px-2 h-[26px] pr-6 text-[12px] focus:outline-hidden cursor-pointer w-full';
 
-                      const dpadBtnCls = isDark
-                        ? 'w-[34px] h-[25px] rounded border border-[#2a364b] bg-[#121722] hover:bg-[#1a2232] active:bg-[#222d42] text-neutral-200 hover:text-white flex items-center justify-center transition-colors cursor-pointer text-[10px]'
-                        : 'w-[34px] h-[25px] rounded border border-slate-300 bg-white hover:bg-slate-100 active:bg-slate-200 text-slate-700 hover:text-slate-900 flex items-center justify-center transition-colors cursor-pointer text-[10px]';
+                      const dpadBtnCls =
+                        'glass-btn glass-btn-subtle w-[34px] h-[25px] flex items-center justify-center cursor-pointer text-[10px]';
 
                       return (
                         <div className="space-y-5">
@@ -1071,14 +1084,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                   key={targetBtn.id}
                                   type="button"
                                   onClick={() => setActiveSizesTargetTab(targetBtn.id)}
-                                  className={`px-3 py-1 rounded text-[12px] font-medium border transition-colors cursor-pointer ${
-                                    isTargetActive
-                                      ? isDark
-                                        ? 'bg-[#0078e7] border-[#2b8cff] text-white font-semibold shadow-2xs'
-                                        : 'bg-cyan-600 border-cyan-600 text-white font-semibold shadow-2xs'
-                                      : isDark
-                                      ? 'bg-transparent hover:bg-[#151c28] border-[#2a364b] text-neutral-300 hover:text-white'
-                                      : 'bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-700 hover:text-slate-900'
+                                  className={`glass-btn glass-btn-subtle px-3.5 py-1 text-[12px] font-medium cursor-pointer ${
+                                    isTargetActive ? 'glass-btn-cyan-active font-semibold' : ''
                                   }`}
                                 >
                                   {targetBtn.label}
@@ -1104,7 +1111,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                   <th className="py-1.5 px-1.5 w-[68px]">Vert</th>
                                   <th className="py-1.5 px-1.5 w-[68px]">Horiz</th>
                                   <th className="py-1.5 px-1.5 w-[68px]">Size %</th>
-                                  <th className="py-1.5 px-1.5 w-[108px]">Font</th>
+                                  <th className="py-1.5 px-1.5 w-[134px]">Font</th>
                                   <th className="py-1.5 pl-1.5 w-[104px]">Style</th>
                                 </tr>
                               </thead>
@@ -1116,171 +1123,338 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                   };
                                   const isEven = idx % 2 === 0;
 
-                                  return (
-                                    <tr
-                                      key={row.id}
-                                      className={`transition-colors ${
-                                        isEven
-                                          ? isDark
-                                            ? 'bg-[#121722]/75'
-                                            : 'bg-slate-100/75'
-                                          : 'bg-transparent'
-                                      }`}
-                                    >
-                                      {/* Element Name */}
-                                      <td
-                                        className={`py-1 pr-2 font-normal ${
-                                          row.indented ? 'pl-3.5' : 'pl-1'
-                                        } ${isDark ? 'text-neutral-200' : 'text-slate-800'}`}
-                                      >
-                                        {row.label}
-                                      </td>
+                                  const countdownRowCfg: SizesPositionElementConfig = {
+                                    ...DEFAULT_TARGET_ELEMENTS_CONFIG.countdown,
+                                    ...(currentTargetMap.countdown || {}),
+                                  };
+                                  const colonRowCfg: SizesPositionElementConfig = {
+                                    ...DEFAULT_TARGET_ELEMENTS_CONFIG.colon,
+                                    ...(currentTargetMap.colon || {}),
+                                  };
+                                  const currentDigitSpacing =
+                                    countdownRowCfg.spacing ?? prefs.countdownSpacing ?? 0;
+                                  const currentColonHoriz =
+                                    colonRowCfg.horiz ?? prefs.countdownColonSpacing ?? 0;
 
-                                      {/* Visible Checkbox */}
-                                      <td className="py-1 px-2 text-center">
-                                        {row.hasVisible ? (
-                                          <div className="inline-flex items-center justify-center">
-                                            <PrefCheckbox
+                                  return (
+                                    <React.Fragment key={row.id}>
+                                      <tr
+                                        className={`transition-colors ${
+                                          isEven
+                                            ? isDark
+                                              ? 'bg-[#121722]/75'
+                                              : 'bg-slate-100/75'
+                                            : 'bg-transparent'
+                                        }`}
+                                      >
+                                        {/* Element Name */}
+                                        <td
+                                          className={`py-1 pr-2 font-normal ${
+                                            row.indented ? 'pl-3.5' : 'pl-1'
+                                          } ${isDark ? 'text-neutral-200' : 'text-slate-800'}`}
+                                        >
+                                          {row.label}
+                                        </td>
+
+                                        {/* Visible Checkbox */}
+                                        <td className="py-1 px-2 text-center">
+                                          {row.hasVisible ? (
+                                            <div className="inline-flex items-center justify-center">
+                                              <PrefCheckbox
+                                                isDark={isDark}
+                                                checked={Boolean(cfg.visible)}
+                                                onChange={(val) =>
+                                                  updateElementConfig(row.id, { visible: val })
+                                                }
+                                              />
+                                            </div>
+                                          ) : null}
+                                        </td>
+
+                                        {/* Location Dropdown */}
+                                        <td className="py-1 px-1.5">
+                                          {row.locationOptions ? (
+                                            <div className="relative">
+                                              <select
+                                                value={cfg.location || row.locationOptions[0]}
+                                                onChange={(e) =>
+                                                  updateElementConfig(row.id, {
+                                                    location: e.target.value,
+                                                  })
+                                                }
+                                                className={compactSelectCls}
+                                              >
+                                                {row.locationOptions.map((loc) => (
+                                                  <option key={loc} value={loc}>
+                                                    {loc}
+                                                  </option>
+                                                ))}
+                                              </select>
+                                              <ChevronDown className="w-3 h-3 text-neutral-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+                                            </div>
+                                          ) : null}
+                                        </td>
+
+                                        {/* Vert Stepper */}
+                                        <td className="py-1 px-1.5">
+                                          {row.hasVert ? (
+                                            <NumericStepper
+                                              value={cfg.vert ?? 0}
+                                              min={-100}
+                                              max={100}
                                               isDark={isDark}
-                                              checked={Boolean(cfg.visible)}
                                               onChange={(val) =>
-                                                updateElementConfig(row.id, { visible: val })
+                                                updateElementConfig(row.id, { vert: val })
                                               }
                                             />
-                                          </div>
-                                        ) : null}
-                                      </td>
+                                          ) : null}
+                                        </td>
 
-                                      {/* Location Dropdown */}
-                                      <td className="py-1 px-1.5">
-                                        {row.locationOptions ? (
-                                          <div className="relative">
-                                            <select
-                                              value={cfg.location || row.locationOptions[0]}
-                                              onChange={(e) =>
-                                                updateElementConfig(row.id, {
-                                                  location: e.target.value,
-                                                })
+                                        {/* Horiz Stepper */}
+                                        <td
+                                          className="py-1 px-1.5"
+                                          title={
+                                            row.id === 'colon'
+                                              ? 'Space around colons (:) in HH:MM:SS — applies to all displays'
+                                              : undefined
+                                          }
+                                        >
+                                          {row.hasHoriz ? (
+                                            <NumericStepper
+                                              value={
+                                                row.id === 'colon'
+                                                  ? currentColonHoriz
+                                                  : cfg.horiz ?? 0
                                               }
-                                              className={compactSelectCls}
-                                            >
-                                              {row.locationOptions.map((loc) => (
-                                                <option key={loc} value={loc}>
-                                                  {loc}
-                                                </option>
-                                              ))}
-                                            </select>
-                                            <ChevronDown className="w-3 h-3 text-neutral-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
-                                          </div>
-                                        ) : null}
-                                      </td>
-
-                                      {/* Vert Stepper */}
-                                      <td className="py-1 px-1.5">
-                                        {row.hasVert ? (
-                                          <NumericStepper
-                                            value={cfg.vert ?? 0}
-                                            min={-100}
-                                            max={100}
-                                            isDark={isDark}
-                                            onChange={(val) =>
-                                              updateElementConfig(row.id, { vert: val })
-                                            }
-                                          />
-                                        ) : null}
-                                      </td>
-
-                                      {/* Horiz Stepper */}
-                                      <td className="py-1 px-1.5">
-                                        {row.hasHoriz ? (
-                                          <NumericStepper
-                                            value={cfg.horiz ?? 0}
-                                            min={-100}
-                                            max={100}
-                                            isDark={isDark}
-                                            onChange={(val) =>
-                                              updateElementConfig(row.id, { horiz: val })
-                                            }
-                                          />
-                                        ) : null}
-                                      </td>
-
-                                      {/* Size % Stepper */}
-                                      <td className="py-1 px-1.5">
-                                        {row.hasSize ? (
-                                          <NumericStepper
-                                            value={cfg.sizePercent ?? 33}
-                                            min={5}
-                                            max={300}
-                                            isDark={isDark}
-                                            onChange={(val) =>
-                                              updateElementConfig(row.id, { sizePercent: val })
-                                            }
-                                          />
-                                        ) : null}
-                                      </td>
-
-                                      {/* Font Dropdown */}
-                                      <td className="py-1 px-1.5">
-                                        {row.hasFont ? (
-                                          <div className="relative">
-                                            <select
-                                              value={cfg.font || 'Verdana'}
-                                              onChange={(e) =>
-                                                updateElementConfig(row.id, {
-                                                  font: e.target.value,
-                                                })
+                                              min={row.id === 'colon' ? -20 : -100}
+                                              max={row.id === 'colon' ? 60 : 100}
+                                              isDark={isDark}
+                                              onChange={(val) =>
+                                                updateElementConfig(row.id, { horiz: val })
                                               }
-                                              style={{
-                                                fontFamily: resolveFontFamily(cfg.font || 'Verdana'),
-                                              }}
-                                              className={compactSelectCls}
-                                            >
-                                              {(cfg.font &&
-                                              !systemFonts.includes(cfg.font)
-                                                ? [cfg.font, ...systemFonts]
-                                                : systemFonts.length > 0
-                                                ? systemFonts
-                                                : FONT_FAMILY_OPTIONS
-                                              ).map((f) => (
-                                                <option
-                                                  key={f}
-                                                  value={f}
-                                                  style={{ fontFamily: resolveFontFamily(f) }}
+                                            />
+                                          ) : null}
+                                        </td>
+
+                                        {/* Size % Stepper */}
+                                        <td className="py-1 px-1.5">
+                                          {row.hasSize ? (
+                                            <NumericStepper
+                                              value={cfg.sizePercent ?? 33}
+                                              min={5}
+                                              max={300}
+                                              isDark={isDark}
+                                              onChange={(val) =>
+                                                updateElementConfig(row.id, { sizePercent: val })
+                                              }
+                                            />
+                                          ) : null}
+                                        </td>
+
+                                        {/* Font Dropdown */}
+                                        <td className="py-1 px-1.5">
+                                          {row.hasFont ? (() => {
+                                            const defaultRowFont =
+                                              row.id === 'countdown' ? 'Bebas Neue' : 'Verdana';
+                                            const selectedFont = cfg.font || defaultRowFont;
+                                            const availableFontOptions = Array.from(
+                                              new Set([
+                                                'Bebas Neue',
+                                                'Verdana',
+                                                selectedFont,
+                                                ...systemFonts,
+                                                ...FONT_FAMILY_OPTIONS,
+                                              ])
+                                            );
+                                            return (
+                                              <div className="relative">
+                                                <select
+                                                  value={selectedFont}
+                                                  onChange={(e) =>
+                                                    updateElementConfig(row.id, {
+                                                      font: e.target.value,
+                                                    })
+                                                  }
+                                                  className={compactSelectCls}
                                                 >
-                                                  {f}
-                                                </option>
-                                              ))}
-                                            </select>
-                                            <ChevronDown className="w-3 h-3 text-neutral-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
-                                          </div>
-                                        ) : null}
-                                      </td>
+                                                  {availableFontOptions.map((f) => (
+                                                    <option key={f} value={f}>
+                                                      {f}
+                                                    </option>
+                                                  ))}
+                                                </select>
+                                                <ChevronDown className="w-3 h-3 text-neutral-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+                                              </div>
+                                            );
+                                          })() : null}
+                                        </td>
 
-                                      {/* Style Dropdown */}
-                                      <td className="py-1 pl-1.5">
-                                        {row.hasStyle ? (
-                                          <div className="relative">
-                                            <select
-                                              value={cfg.fontStyle || 'Normal'}
-                                              onChange={(e) =>
-                                                updateElementConfig(row.id, {
-                                                  fontStyle: e.target.value,
-                                                })
-                                              }
-                                              className={compactSelectCls}
-                                            >
-                                              {FONT_STYLE_OPTIONS.map((st) => (
-                                                <option key={st} value={st}>
-                                                  {st}
-                                                </option>
-                                              ))}
-                                            </select>
-                                            <ChevronDown className="w-3 h-3 text-neutral-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
-                                          </div>
-                                        ) : null}
-                                      </td>
-                                    </tr>
+                                        {/* Style Dropdown */}
+                                        <td className="py-1 pl-1.5">
+                                          {row.hasStyle ? (
+                                            <div className="relative">
+                                              <select
+                                                value={cfg.fontStyle || 'Normal'}
+                                                onChange={(e) =>
+                                                  updateElementConfig(row.id, {
+                                                    fontStyle: e.target.value,
+                                                  })
+                                                }
+                                                className={compactSelectCls}
+                                              >
+                                                {FONT_STYLE_OPTIONS.map((st) => (
+                                                  <option key={st} value={st}>
+                                                    {st}
+                                                  </option>
+                                                ))}
+                                              </select>
+                                              <ChevronDown className="w-3 h-3 text-neutral-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+                                            </div>
+                                          ) : null}
+                                        </td>
+                                      </tr>
+
+                                      {/* Dedicated HH:MM:SS Spacing sub-row right under Colon (applies to all displays) */}
+                                      {row.id === 'colon' && (
+                                        <tr
+                                          className={`transition-colors ${
+                                            isDark ? 'bg-[#0e1522]/90' : 'bg-cyan-50/50'
+                                          }`}
+                                        >
+                                          <td
+                                            className={`py-1.5 pr-2 pl-3.5 font-normal ${
+                                              isDark ? 'text-neutral-200' : 'text-slate-800'
+                                            }`}
+                                          >
+                                            <div className="flex items-center gap-1.5">
+                                              <span>Spacing</span>
+                                              <span
+                                                className={`text-[10px] font-mono ${
+                                                  isDark ? 'text-cyan-400/80' : 'text-cyan-700'
+                                                }`}
+                                              >
+                                                HH:MM:SS
+                                              </span>
+                                            </div>
+                                          </td>
+                                          <td colSpan={4} className="py-1.5 px-1.5">
+                                            <div className="flex items-center gap-2.5">
+                                              <input
+                                                type="range"
+                                                min={-15}
+                                                max={60}
+                                                step={1}
+                                                value={currentDigitSpacing}
+                                                onChange={(e) =>
+                                                  updateElementConfig('countdown', {
+                                                    spacing: parseInt(e.target.value, 10) || 0,
+                                                  })
+                                                }
+                                                title="Space HH:MM:SS countdown digits across all displays"
+                                                className="flex-1 min-w-[90px] accent-cyan-500 cursor-pointer h-1.5"
+                                              />
+                                              <NumericStepper
+                                                value={currentDigitSpacing}
+                                                min={-15}
+                                                max={60}
+                                                isDark={isDark}
+                                                onChange={(val) =>
+                                                  updateElementConfig('countdown', {
+                                                    spacing: val,
+                                                  })
+                                                }
+                                              />
+                                              {(currentDigitSpacing !== 0 ||
+                                                currentColonHoriz !== 0) && (
+                                                <button
+                                                  type="button"
+                                                  onClick={() => {
+                                                    const allTargetKeys: SizesPositionTargetTab[] = [
+                                                      'fullscreen_ndi_preview',
+                                                      'presenter_window',
+                                                      'multitimer',
+                                                      'web_display_lan',
+                                                    ];
+                                                    const resetTargets = { ...allTargets };
+                                                    for (const t of allTargetKeys) {
+                                                      const targetMap = {
+                                                        ...DEFAULT_TARGET_ELEMENTS_CONFIG,
+                                                        ...(allTargets[t] || {}),
+                                                      };
+                                                      resetTargets[t] = {
+                                                        ...targetMap,
+                                                        countdown: {
+                                                          ...DEFAULT_TARGET_ELEMENTS_CONFIG.countdown,
+                                                          ...(targetMap.countdown || {}),
+                                                          spacing: 0,
+                                                        },
+                                                        colon: {
+                                                          ...DEFAULT_TARGET_ELEMENTS_CONFIG.colon,
+                                                          ...(targetMap.colon || {}),
+                                                          horiz: 0,
+                                                        },
+                                                      };
+                                                    }
+                                                    stagePreferences({
+                                                      ...prefs,
+                                                      countdownSpacing: 0,
+                                                      countdownColonSpacing: 0,
+                                                      sizesAndPositionsByTarget: resetTargets,
+                                                    });
+                                                  }}
+                                                  title="Reset HH:MM:SS and colon spacing to 0"
+                                                  className={`px-1.5 py-0.5 rounded text-[10px] border transition-colors cursor-pointer shrink-0 ${
+                                                    isDark
+                                                      ? 'border-[#2a364b] bg-[#121722] hover:bg-[#1a2232] text-neutral-300 hover:text-white'
+                                                      : 'border-slate-300 bg-white hover:bg-slate-100 text-slate-600 hover:text-slate-900'
+                                                  }`}
+                                                >
+                                                  Reset
+                                                </button>
+                                              )}
+                                            </div>
+                                          </td>
+                                          <td colSpan={3} className="py-1.5 pl-1.5">
+                                            <div className="flex items-center justify-between gap-2">
+                                              <div
+                                                className={`flex-1 h-[26px] px-2 rounded border flex items-center justify-center overflow-hidden ${
+                                                  isDark
+                                                    ? 'bg-black border-[#232f44] text-white'
+                                                    : 'bg-slate-900 border-slate-400 text-white'
+                                                }`}
+                                                title="Live HH:MM:SS spacing preview"
+                                              >
+                                                <span
+                                                  className="tabular-nums leading-none text-[17px] whitespace-nowrap"
+                                                  style={{
+                                                    fontFamily: resolveFontFamily(
+                                                      countdownRowCfg.font || 'Bebas Neue'
+                                                    ),
+                                                    ...resolveFontStyleCss(
+                                                      countdownRowCfg.fontStyle || 'Bold'
+                                                    ),
+                                                  }}
+                                                >
+                                                  {renderTimeWithColonOffset(
+                                                    '00:09:00',
+                                                    colonRowCfg.vert ?? 0,
+                                                    currentDigitSpacing,
+                                                    currentColonHoriz
+                                                  )}
+                                                </span>
+                                              </div>
+                                              <span
+                                                className={`text-[10px] whitespace-nowrap shrink-0 ${
+                                                  isDark ? 'text-neutral-400' : 'text-slate-500'
+                                                }`}
+                                              >
+                                                All displays
+                                              </span>
+                                            </div>
+                                          </td>
+                                        </tr>
+                                      )}
+                                    </React.Fragment>
                                   );
                                 })}
                               </tbody>
@@ -2510,21 +2684,31 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <div className="max-w-[460px] space-y-4">
                       <div>
                         <label className="block text-[13px] mb-1.5">
-                          NDI Source Name ({currentActiveListObj?.name || 'Active List'})
+                          NDI Source Prefix (auto-appends each tab name in brackets)
                         </label>
                         <input
                           type="text"
-                          value={formatListNdiSourceName(
-                            currentActiveListObj?.name || 'List 1',
-                            prefs.ndiSourceName
-                          )}
+                          value={
+                            prefs.ndiSourceName !== undefined
+                              ? prefs.ndiSourceName.includes('(')
+                                ? extractNdiSourcePrefix(prefs.ndiSourceName)
+                                : prefs.ndiSourceName
+                              : 'ProTimer'
+                          }
+                          placeholder="ProTimer"
                           onChange={(e) => updatePref('ndiSourceName', e.target.value)}
                           className={inputCls}
                         />
                         <p className="text-[11px] text-neutral-400 mt-1">
-                          Each list tab automatically displays its tab name in brackets:{' '}
+                          Each list tab automatically broadcasts under its own NDI source name:{' '}
                           <span className="font-mono text-cyan-400">
-                            {availableLists.map((l) => formatListNdiSourceName(l.name, prefs.ndiSourceName)).join(', ')}
+                            {availableLists
+                              .map(
+                                (l) =>
+                                  ndiStatus.sourceNamesByList?.[l.id] ||
+                                  formatListNdiSourceName(l.name, prefs.ndiSourceName)
+                              )
+                              .join(', ')}
                           </span>
                         </p>
                       </div>
@@ -2574,10 +2758,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             }
                             ndiStreamService.toggleStream('single', currentActiveListId);
                           }}
-                          className={`px-3 py-1 rounded text-[11px] font-bold tracking-wide transition-colors cursor-pointer ${
+                          className={`glass-btn glass-btn-subtle px-3.5 py-1 text-[11px] font-bold tracking-wide cursor-pointer ${
                             ndiStatus.activeByList?.[currentActiveListId]
-                              ? 'bg-red-600 hover:bg-red-500 text-white'
-                              : 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                              ? 'glass-btn-red-active'
+                              : 'glass-btn-emerald-active'
                           }`}
                         >
                           {ndiStatus.activeByList?.[currentActiveListId]
@@ -2588,10 +2772,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </div>
 
                     <div
-                      className={`p-3.5 rounded border text-[12px] space-y-2.5 ${
-                        isDark
-                          ? 'bg-[#0b0f17] border-[#1e2636] text-neutral-300'
-                          : 'bg-slate-50 border-slate-200 text-slate-700'
+                      className={`glass-subcard p-3.5 rounded-2xl text-[12px] space-y-2.5 ${
+                        isDark ? 'text-neutral-300' : 'text-slate-700'
                       }`}
                     >
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
@@ -2637,61 +2819,116 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                       {/* Per-List Independent NDI Sources Overview */}
                       <div
-                        className={`p-2.5 rounded border text-[11px] space-y-1.5 ${
-                          isDark ? 'bg-[#101622] border-[#1e283a]' : 'bg-white border-slate-200'
+                        className={`p-2.5 rounded-xl border text-[11px] space-y-2 ${
+                          isDark ? 'bg-black/25 border-white/[0.08]' : 'bg-white/60 border-slate-200'
                         }`}
                       >
-                        <div className="flex items-center justify-between">
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
                           <span className="font-semibold text-neutral-400 uppercase tracking-wider text-[10px]">
                             Per-List Independent NDI Outputs ({availableLists.length})
                           </span>
-                          <button
-                            type="button"
-                            onClick={() => ndiStreamService.toggleStream('multi')}
-                            className={`px-2 py-0.5 rounded text-[10px] font-semibold border cursor-pointer ${
-                              ndiStatus.multiActive
-                                ? 'bg-emerald-600 text-white border-emerald-500'
-                                : isDark
-                                ? 'bg-[#161f30] text-neutral-300 border-[#28354d] hover:text-white'
-                                : 'bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200'
-                            }`}
-                          >
-                            {ndiStatus.multiActive ? 'NDI Multi: ON (All Lists Live)' : 'Enable NDI Multi'}
-                          </button>
+                          <div className="flex items-center gap-1.5">
+                            {ndiStatus.active && (
+                              <button
+                                type="button"
+                                onClick={() => ndiStreamService.stopStream(undefined, true)}
+                                className="glass-btn glass-btn-subtle glass-btn-red-active px-2.5 py-0.5 text-[10px] font-semibold cursor-pointer"
+                              >
+                                Stop All NDI
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => ndiStreamService.toggleStream('multi')}
+                              className={`glass-btn glass-btn-subtle px-2.5 py-0.5 text-[10px] font-semibold cursor-pointer ${
+                                ndiStatus.multiActive ? 'glass-btn-emerald-active' : ''
+                              }`}
+                            >
+                              {ndiStatus.multiActive ? 'NDI Multi: ON (All Lists Live)' : 'Enable NDI Multi'}
+                            </button>
+                          </div>
                         </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                        <div className="grid grid-cols-1 gap-1.5">
                           {availableLists.map((list) => {
-                            const listSource = formatListNdiSourceName(list.name, prefs.ndiSourceName);
-                            const isListLive = Boolean(
-                              ndiStatus.activeByList?.[list.id] || ndiStatus.multiActive
-                            );
+                            const listSource =
+                              ndiStatus.sourceNamesByList?.[list.id] ||
+                              formatListNdiSourceName(list.name, prefs.ndiSourceName);
+                            const isExplicitOn = Boolean(ndiStatus.activeByList?.[list.id]);
+                            const isListLive = Boolean(isExplicitOn || ndiStatus.multiActive);
+                            const baseHost =
+                              ndiStatus.ips && ndiStatus.ips.length > 0
+                                ? `http://${ndiStatus.ips[0]}:${ndiStatus.port || 3000}`
+                                : typeof window !== 'undefined'
+                                ? window.location.origin
+                                : 'http://localhost:3000';
+                            const encodedId = encodeURIComponent(list.id);
+                            const listMjpegUrl = `${baseHost}/api/lan/ndi/mjpeg?listId=${encodedId}`;
+                            const listBrowserUrl = `${baseHost}/?display=ndi&listId=${encodedId}`;
                             return (
                               <div
                                 key={list.id}
-                                className={`flex items-center justify-between px-2.5 py-1.5 rounded border ${
+                                className={`flex flex-col gap-1.5 px-2.5 py-2 rounded-xl border ${
                                   isListLive
                                     ? isDark
-                                      ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-200'
+                                      ? 'bg-emerald-950/35 border-emerald-500/40 text-emerald-200'
                                       : 'bg-emerald-50 border-emerald-300 text-emerald-900'
                                     : isDark
-                                    ? 'bg-[#0b0f17] border-[#1b2333] text-neutral-400'
+                                    ? 'bg-white/[0.03] border-white/[0.08] text-neutral-400'
                                     : 'bg-slate-50 border-slate-200 text-slate-600'
                                 }`}
                               >
-                                <span className="font-mono truncate">{listSource}</span>
-                                <button
-                                  type="button"
-                                  onClick={() => ndiStreamService.toggleStream('single', list.id)}
-                                  className={`px-2 py-0.5 rounded text-[10px] font-semibold cursor-pointer ${
-                                    ndiStatus.activeByList?.[list.id]
-                                      ? 'bg-emerald-600 text-white'
-                                      : isDark
-                                      ? 'bg-[#1a2334] text-neutral-300 hover:text-white'
-                                      : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
-                                  }`}
-                                >
-                                  {ndiStatus.activeByList?.[list.id] ? 'ON' : 'OFF'}
-                                </button>
+                                <div className="flex items-center justify-between gap-2">
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <span
+                                      className={`w-2 h-2 rounded-full shrink-0 ${
+                                        isListLive ? 'bg-emerald-400 animate-pulse' : 'bg-neutral-500/50'
+                                      }`}
+                                    />
+                                    <span className="font-mono font-semibold truncate">{listSource}</span>
+                                    {ndiStatus.multiActive && !isExplicitOn && (
+                                      <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300">
+                                        via Multi
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="flex items-center gap-1.5 shrink-0">
+                                    <button
+                                      type="button"
+                                      onClick={() => copyNdiUrl(`browser:${list.id}`, listBrowserUrl)}
+                                      title={`Copy independent Browser Source URL for ${list.name}: ${listBrowserUrl}`}
+                                      className="glass-btn glass-btn-subtle px-2 py-0.5 text-[10px] font-medium flex items-center gap-1 cursor-pointer"
+                                    >
+                                      {copiedNdiKey === `browser:${list.id}` ? (
+                                        <Check className="w-3 h-3 text-emerald-400" />
+                                      ) : (
+                                        <Copy className="w-3 h-3 opacity-75" />
+                                      )}
+                                      Browser URL
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => copyNdiUrl(`mjpeg:${list.id}`, listMjpegUrl)}
+                                      title={`Copy independent MJPEG video stream URL for ${list.name}: ${listMjpegUrl}`}
+                                      className="glass-btn glass-btn-subtle px-2 py-0.5 text-[10px] font-medium flex items-center gap-1 cursor-pointer"
+                                    >
+                                      {copiedNdiKey === `mjpeg:${list.id}` ? (
+                                        <Check className="w-3 h-3 text-emerald-400" />
+                                      ) : (
+                                        <Copy className="w-3 h-3 opacity-75" />
+                                      )}
+                                      MJPEG
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => ndiStreamService.toggleStream('single', list.id)}
+                                      className={`glass-btn glass-btn-subtle px-2.5 py-0.5 text-[10px] font-semibold cursor-pointer ${
+                                        isExplicitOn ? 'glass-btn-emerald-active' : ''
+                                      }`}
+                                    >
+                                      {isExplicitOn ? 'ON' : 'OFF'}
+                                    </button>
+                                  </div>
+                                </div>
                               </div>
                             );
                           })}
@@ -2700,7 +2937,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                       {/* Native NDI® Runtime (Processing.NDI.Lib.x64.dll) Diagnostic Banner */}
                       <div
-                        className={`p-2.5 rounded border text-[11px] space-y-1.5 ${
+                        className={`p-2.5 rounded-xl border text-[11px] space-y-1.5 ${
                           ndiStatus.nativeNdi?.nativeNdiAvailable
                             ? isDark
                               ? 'bg-emerald-950/30 border-emerald-500/40 text-emerald-200'
@@ -2728,11 +2965,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           <button
                             type="button"
                             onClick={() => ndiStreamService.refreshDiagnostics()}
-                            className={`px-2 py-0.5 rounded text-[10px] font-semibold border cursor-pointer ${
-                              isDark
-                                ? 'bg-[#141c2b] hover:bg-[#1d283d] border-[#2b3a55] text-cyan-300'
-                                : 'bg-white hover:bg-slate-100 border-slate-300 text-cyan-700'
-                            }`}
+                            className="glass-btn glass-btn-cyan glass-btn-subtle px-2.5 py-0.5 text-[10px] font-semibold cursor-pointer"
                           >
                             Re-Scan Runtime
                           </button>
@@ -2818,7 +3051,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <p className="text-[13px]">
                         ProTimer Desktop{' '}
                         <span className={`font-mono font-semibold ${isDark ? 'text-white' : 'text-slate-900'}`}>
-                          v2.5.3
+                          {APP_VERSION_TAG}
                         </span>{' '}
                         (64-bit)
                       </p>
@@ -2842,7 +3075,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                ================================================================= */}
             <div
               className={`px-4 py-2.5 border-t flex items-center justify-between gap-3 shrink-0 ${
-                isDark ? 'bg-[#0b0e14] border-[#1b2333]' : 'bg-slate-100 border-slate-200'
+                isDark ? 'bg-white/[0.025] border-white/[0.08]' : 'bg-white/35 border-slate-200/80'
               }`}
             >
               <div className="flex items-center gap-2 min-w-0">
@@ -2879,14 +3112,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <button
                   type="button"
                   onClick={handleApply}
-                  className={`px-4 py-1.5 rounded text-[13px] font-semibold border transition-all flex items-center gap-1.5 cursor-pointer ${
-                    hasUnappliedChanges
-                      ? isDark
-                        ? 'bg-[#0078e7] hover:bg-[#1888f2] border-[#2b8cff] text-white shadow-sm'
-                        : 'bg-cyan-600 hover:bg-cyan-700 border-cyan-600 text-white shadow-sm'
-                      : isDark
-                      ? 'bg-[#152033] hover:bg-[#1c2b44] border-[#2b8cff]/60 text-[#4ea8ff] hover:text-white'
-                      : 'bg-cyan-50 hover:bg-cyan-600 border-cyan-500 text-cyan-800 hover:text-white'
+                  className={`glass-btn glass-btn-subtle px-5 py-1.5 text-[13px] font-semibold flex items-center gap-1.5 cursor-pointer ${
+                    hasUnappliedChanges ? 'glass-btn-cyan-active' : 'glass-btn-cyan'
                   }`}
                 >
                   <Check className="w-3.5 h-3.5 stroke-[2.5]" />

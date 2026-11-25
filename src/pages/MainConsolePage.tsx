@@ -4,8 +4,9 @@
  * with full multiple timer-list management, live concurrent execution, and independent timers.
  */
 
-import React, { useState, useMemo, useEffect } from 'react';
-import { ListOrdered, History } from 'lucide-react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
+import { ListOrdered, History, Keyboard, Check } from 'lucide-react';
 import { MainLayout } from '../layouts';
 import {
   TopMenuBar,
@@ -17,18 +18,22 @@ import {
   FloatingMultiPreviewWindow,
   FloatingPresenterWindow,
   TimerHistoryLogView,
+  KeyboardShortcutsModal,
+  SaveListAsTemplateModal,
 } from '../components';
 import { TimerTable, TimerEditorModal } from '../timers';
 import { MessageEditorModal } from '../messages';
 import { SettingsModal } from '../settings';
 import { FullscreenDisplay, MultiFullscreenDisplay } from '../displays';
-import { useTimerManager, useDisplaySync, useHotkeys, useMonitorDetection, useWindowManager, useTheme } from '../hooks';
+import { useTimerManager, useDisplaySync, useGlobalShortcuts, useMonitorDetection, useWindowManager, useTheme } from '../hooks';
 import { formatSeconds } from '../utilities/timeFormatters';
 import { TimerItem, DisplayTarget, AppPreferences, formatListNdiSourceName } from '../types';
 import { storageService } from '../services/storageService';
 import { displaySyncService } from '../services/displaySyncService';
 import { timerManagerService } from '../services/timerManager';
 import { ndiStreamService, NdiStreamStatus } from '../services/ndiStreamService';
+import { shortcutsManager, formatShortcutTokens, ShortcutBinding } from '../services/shortcutsManager';
+import { ListTemplate, TemplateLoadMode } from '../services/listTemplatesService';
 
 export const MainConsolePage: React.FC = () => {
   const {
@@ -68,6 +73,9 @@ export const MainConsolePage: React.FC = () => {
     moveList,
     setListColor,
     copyListCuesToList,
+    getListTimers,
+    saveListAsTemplate,
+    loadTemplate,
     downloadListJson,
     downloadListCsv,
     importCsv,
@@ -112,7 +120,18 @@ export const MainConsolePage: React.FC = () => {
   const [editingTimer, setEditingTimer] = useState<TimerItem | null>(null);
   const [isMessageModalOpen, setIsMessageModalOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isShortcutsModalOpen, setIsShortcutsModalOpen] = useState(false);
   const [isListManagerOpen, setIsListManagerOpen] = useState(false);
+  const [saveTemplateListId, setSaveTemplateListId] = useState<string | null>(null);
+  const [templateNotice, setTemplateNotice] = useState<{ id: number; message: string } | null>(null);
+  const templateNoticeTimerRef = useRef<number | null>(null);
+  const [shortcutFeedback, setShortcutFeedback] = useState<{
+    id: number;
+    label: string;
+    combo: string;
+    detail?: string;
+  } | null>(null);
+  const shortcutFeedbackTimerRef = useRef<number | null>(null);
   const [isLanModalOpen, setIsLanModalOpen] = useState(false);
   const [lanModalMode, setLanModalMode] = useState<'lan_control' | 'lan_display'>('lan_control');
   const [isPreviewPopoutOpen, setIsPreviewPopoutOpen] = useState(false);
@@ -206,8 +225,9 @@ export const MainConsolePage: React.FC = () => {
     [activeFullscreenByList]
   );
 
-  // Keep NDI source names reconciled ONLY when lists are added, deleted, renamed, or switched
+  // Keep NDI source names and active per-list senders reconciled whenever lists are added, deleted, renamed, or switched
   useEffect(() => {
+    ndiStreamService.reconcileLists();
     ndiStreamService.notifySubscribers();
     if (ndiStreamService.getStatus().active) {
       ndiStreamService.syncConfigToServer();
@@ -279,11 +299,105 @@ export const MainConsolePage: React.FC = () => {
     toggleMultiFullscreen,
   ]);
 
-  // Keyboard Hotkeys
-  useHotkeys(
+  const showShortcutFeedback = useCallback((binding: ShortcutBinding, detail?: string) => {
+    if (shortcutFeedbackTimerRef.current !== null) {
+      window.clearTimeout(shortcutFeedbackTimerRef.current);
+    }
+    setShortcutFeedback({
+      id: Date.now(),
+      label: binding.label,
+      combo: binding.combo,
+      detail,
+    });
+    shortcutFeedbackTimerRef.current = window.setTimeout(() => {
+      setShortcutFeedback(null);
+      shortcutFeedbackTimerRef.current = null;
+    }, 1150);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (shortcutFeedbackTimerRef.current !== null) {
+        window.clearTimeout(shortcutFeedbackTimerRef.current);
+      }
+    };
+  }, []);
+
+  const switchToRelativeTab = useCallback(
+    (delta: 1 | -1): boolean => {
+      if (lists.length <= 1) return false;
+      const currentIdx = lists.findIndex((l) => l.id === snapshot.activeListId);
+      const baseIdx = currentIdx >= 0 ? currentIdx : 0;
+      const nextIdx = (baseIdx + delta + lists.length) % lists.length;
+      const target = lists[nextIdx];
+      if (!target) return false;
+      switchList(target.id);
+      setActiveConsoleTab('cues');
+      return true;
+    },
+    [lists, snapshot.activeListId, switchList]
+  );
+
+  const switchToTabIndex = useCallback(
+    (index: number): boolean => {
+      const target = lists[index];
+      if (!target) return false;
+      switchList(target.id);
+      setActiveConsoleTab('cues');
+      return true;
+    },
+    [lists, switchList]
+  );
+
+  const showTemplateNotice = useCallback((message: string) => {
+    if (templateNoticeTimerRef.current !== null) {
+      window.clearTimeout(templateNoticeTimerRef.current);
+    }
+    setTemplateNotice({ id: Date.now(), message });
+    templateNoticeTimerRef.current = window.setTimeout(() => {
+      setTemplateNotice(null);
+      templateNoticeTimerRef.current = null;
+    }, 2600);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (templateNoticeTimerRef.current !== null) {
+        window.clearTimeout(templateNoticeTimerRef.current);
+      }
+    };
+  }, []);
+
+  const handleLoadTemplate = useCallback(
+    (template: ListTemplate, mode: TemplateLoadMode) => {
+      const res = loadTemplate(template, mode);
+      setActiveConsoleTab('cues');
+      const actionText =
+        mode === 'new_tab'
+          ? `Loaded "${template.name}" into new tab "${res.listName}" (${res.cueCount} cues)`
+          : mode === 'replace'
+          ? `Replaced "${res.listName}" with "${template.name}" (${res.cueCount} cues)`
+          : `Appended "${template.name}" to "${res.listName}" (+${res.cueCount} cues)`;
+      showTemplateNotice(actionText);
+    },
+    [loadTemplate, showTemplateNotice]
+  );
+
+  const isAnyModalOpen =
+    isEditorOpen ||
+    isMessageModalOpen ||
+    isSettingsOpen ||
+    isListManagerOpen ||
+    isLanModalOpen ||
+    isShortcutsModalOpen ||
+    Boolean(saveTemplateListId);
+
+  // Global Keyboard Shortcuts Manager
+  useGlobalShortcuts(
     {
-      Space: () => togglePlayPause(),
-      Escape: () => {
+      'timer.togglePlayPause': () => togglePlayPause(),
+      'timer.start': () => start(),
+      'timer.stop': () => {
         if (isFullscreenActive) {
           closeFullscreen(snapshot.activeListId);
         } else if (isMultiFullscreenActive) {
@@ -292,21 +406,61 @@ export const MainConsolePage: React.FC = () => {
           stop();
         }
       },
-      r: () => restart(),
-      c: () => cueNext(),
-      'Shift+C': () => cuePrev(),
-      '+': () => adjustDuration(60),
-      '=': () => adjustDuration(60),
-      '-': () => adjustDuration(-60),
-      h: () => toggleBlackout(),
-      m: () => setIsMessageModalOpen(true),
-      l: () => setIsListManagerOpen(true),
-      F11: () => toggleAppFullscreen(),
-      'Ctrl+z': () => undo(),
-      'Ctrl+y': () => redo(),
-      'Ctrl+Shift+z': () => redo(),
+      'timer.reset': () => {
+        const target = activeTimer || cuedTimer || timers[0];
+        if (!target) return false;
+        cue(target.id);
+        return true;
+      },
+      'timer.restart': () => restart(),
+      'timer.cueNext': () => cueNext(),
+      'timer.cuePrev': () => cuePrev(),
+      'timer.addMinute': () => adjustDuration(60),
+      'timer.subMinute': () => adjustDuration(-60),
+      'tabs.next': () => switchToRelativeTab(1),
+      'tabs.prev': () => switchToRelativeTab(-1),
+      'tabs.history': () =>
+        setActiveConsoleTab((prev) => (prev === 'history' ? 'cues' : 'history')),
+      'tabs.tab1': () => switchToTabIndex(0),
+      'tabs.tab2': () => switchToTabIndex(1),
+      'tabs.tab3': () => switchToTabIndex(2),
+      'tabs.tab4': () => switchToTabIndex(3),
+      'tabs.tab5': () => switchToTabIndex(4),
+      'tabs.tab6': () => switchToTabIndex(5),
+      'tabs.tab7': () => switchToTabIndex(6),
+      'tabs.tab8': () => switchToTabIndex(7),
+      'tabs.tab9': () => switchToTabIndex(8),
+      'display.blackout': () => toggleBlackout(),
+      'display.message': () => setIsMessageModalOpen(true),
+      'display.listManager': () => setIsListManagerOpen(true),
+      'display.fullscreen': () => {
+        void toggleAppFullscreen();
+      },
+      'app.undo': () => undo(),
+      'app.redo': () => redo(),
+      'app.shortcuts': () => setIsShortcutsModalOpen((prev) => !prev),
     },
-    preferences.hotkeysEnabled
+    {
+      enabled: preferences.hotkeysEnabled,
+      isModalOpen: isAnyModalOpen,
+      onTriggered: (binding) => {
+        if (binding.id === 'app.shortcuts') return;
+        let detail: string | undefined;
+        if (binding.id === 'tabs.next' || binding.id === 'tabs.prev') {
+          const delta = binding.id === 'tabs.next' ? 1 : -1;
+          const idx = lists.findIndex((l) => l.id === snapshot.activeListId);
+          const target = lists[(Math.max(0, idx) + delta + lists.length) % lists.length];
+          if (target) detail = target.name;
+        } else if (binding.id.startsWith('tabs.tab')) {
+          const tabIdx = Number(binding.id.replace('tabs.tab', '')) - 1;
+          const target = lists[tabIdx];
+          if (target) detail = target.name;
+        } else if (binding.id === 'tabs.history') {
+          detail = activeConsoleTab === 'history' ? 'Timer List' : 'History Log';
+        }
+        showShortcutFeedback(binding, detail);
+      },
+    }
   );
 
   const handleSaveTimer = (data: Partial<TimerItem>) => {
@@ -483,6 +637,7 @@ export const MainConsolePage: React.FC = () => {
         isDark={isDark}
         onToggleTheme={toggleTheme}
         onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenShortcuts={() => setIsShortcutsModalOpen(true)}
         onOpenLanModal={() => setIsLanModalOpen(true)}
         onNewTimer={handleAddNewTimer}
         onAddTimerType={handleAddTimerType}
@@ -552,8 +707,8 @@ export const MainConsolePage: React.FC = () => {
 
       {/* 3. MAIN CONSOLE VIEW TABS (Cue List | History) */}
       <div
-        className={`h-8 px-3 flex items-center gap-1 border-b select-none transition-colors ${
-          isDark ? 'bg-[#090c13] border-[#1b2333]' : 'bg-slate-200/70 border-slate-300'
+        className={`h-10 px-3 flex items-center gap-2 border-b select-none transition-colors ${
+          isDark ? 'bg-[#151518]/80 border-white/[0.07]' : 'bg-slate-200/70 border-slate-300'
         }`}
       >
         <button
@@ -563,34 +718,27 @@ export const MainConsolePage: React.FC = () => {
             currentList.color
               ? activeConsoleTab === 'cues'
                 ? {
-                    borderBottom: `2px solid ${currentList.color}`,
-                    borderTop: `1px solid ${currentList.color}cc`,
-                    borderLeft: `1px solid ${currentList.color}99`,
-                    borderRight: `1px solid ${currentList.color}99`,
+                    borderColor: `${currentList.color}bb`,
                     background: isDark
-                      ? `linear-gradient(180deg, ${currentList.color}80 0%, ${currentList.color}50 100%)`
-                      : `linear-gradient(180deg, ${currentList.color}60 0%, ${currentList.color}3d 100%)`,
-                    boxShadow: `0 0 10px ${currentList.color}40`,
+                      ? `linear-gradient(180deg, ${currentList.color}70 0%, ${currentList.color}3d 100%)`
+                      : `linear-gradient(180deg, ${currentList.color}60 0%, ${currentList.color}38 100%)`,
+                    boxShadow: `inset 0 1px 0 rgba(255,255,255,0.32), 0 4px 12px ${currentList.color}33`,
                   }
                 : {
-                    borderBottom: `2px solid ${currentList.color}`,
-                    borderTop: `1px solid ${currentList.color}66`,
-                    backgroundColor: isDark ? `${currentList.color}45` : `${currentList.color}33`,
+                    borderColor: `${currentList.color}66`,
+                    background: isDark
+                      ? `linear-gradient(180deg, ${currentList.color}3d 0%, ${currentList.color}20 100%)`
+                      : `linear-gradient(180deg, ${currentList.color}33 0%, ${currentList.color}1a 100%)`,
+                    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.16)',
                   }
               : undefined
           }
-          className={`px-3 py-1 rounded-t text-xs font-semibold tracking-wide flex items-center gap-1.5 transition-all cursor-pointer ${
-            activeConsoleTab === 'cues'
-              ? isDark
-                ? 'bg-[#0c1017] text-white border-b-2 border-cyan-400'
-                : 'bg-slate-100 text-slate-950 border-b-2 border-cyan-600'
-              : currentList.color
-              ? isDark
-                ? 'text-white hover:brightness-110'
-                : 'text-slate-950 hover:brightness-105'
-              : isDark
-              ? 'text-neutral-400 hover:text-neutral-200 hover:bg-[#111622]'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
+          className={`px-3.5 py-1 rounded-full text-xs font-semibold tracking-wide flex items-center gap-1.5 transition-all cursor-pointer ${
+            currentList.color
+              ? `border ${isDark ? 'text-white hover:brightness-110' : 'text-slate-950 hover:brightness-105'}`
+              : activeConsoleTab === 'cues'
+              ? 'glass-btn glass-btn-cyan-active glass-btn-subtle'
+              : 'glass-btn glass-btn-subtle'
           }`}
         >
           {currentList.color ? (
@@ -599,12 +747,12 @@ export const MainConsolePage: React.FC = () => {
               style={{ backgroundColor: currentList.color }}
             />
           ) : (
-            <ListOrdered className="w-3.5 h-3.5 text-cyan-500" />
+            <ListOrdered className="w-3.5 h-3.5 text-cyan-400" />
           )}
           <span>{currentList.name}</span>
           <span
             className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
-              isDark ? 'bg-[#172030] text-neutral-300' : 'bg-slate-200 text-slate-700'
+              isDark ? 'bg-black/35 text-neutral-200' : 'bg-white/60 text-slate-700'
             }`}
           >
             {timers.length}
@@ -614,26 +762,20 @@ export const MainConsolePage: React.FC = () => {
         <button
           type="button"
           onClick={() => setActiveConsoleTab('history')}
-          className={`px-3 py-1 rounded-t text-xs font-semibold tracking-wide flex items-center gap-1.5 transition-all cursor-pointer ${
-            activeConsoleTab === 'history'
-              ? isDark
-                ? 'bg-[#0c1017] text-cyan-300 border-b-2 border-cyan-400'
-                : 'bg-slate-100 text-cyan-800 border-b-2 border-cyan-600'
-              : isDark
-              ? 'text-neutral-400 hover:text-neutral-200 hover:bg-[#111622]'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
+          className={`glass-btn glass-btn-subtle px-3.5 py-1 rounded-full text-xs font-semibold tracking-wide flex items-center gap-1.5 cursor-pointer ${
+            activeConsoleTab === 'history' ? 'glass-btn-cyan-active' : ''
           }`}
         >
-          <History className="w-3.5 h-3.5 text-cyan-500" />
+          <History className="w-3.5 h-3.5 text-cyan-400" />
           <span>History</span>
           <span
             className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
               activeConsoleTab === 'history'
                 ? isDark
-                  ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
-                  : 'bg-cyan-100 text-cyan-800 border border-cyan-300'
+                  ? 'bg-cyan-400/20 text-cyan-200 border border-cyan-400/35'
+                  : 'bg-white/30 text-white border border-white/40'
                 : isDark
-                ? 'bg-[#172030] text-neutral-300'
+                ? 'bg-black/35 text-neutral-300'
                 : 'bg-slate-200 text-slate-700'
             }`}
           >
@@ -697,6 +839,7 @@ export const MainConsolePage: React.FC = () => {
         onExportList={(id) => downloadListJson(id)}
         onSetListColor={(id, color) => setListColor(id, color)}
         onCopyListCuesToList={(srcId, destId, mode) => copyListCuesToList(srcId, destId, mode)}
+        onSaveListAsTemplate={(id) => setSaveTemplateListId(id)}
         onOpenListManager={() => setIsListManagerOpen(true)}
         getRunningTimerCount={(id) => getRunningTimerCount(id)}
         isHistoryTabActive={activeConsoleTab === 'history'}
@@ -921,8 +1064,28 @@ export const MainConsolePage: React.FC = () => {
       <TimerEditorModal
         isOpen={isEditorOpen}
         timer={editingTimer}
+        activeListName={currentList.name}
         onClose={() => setIsEditorOpen(false)}
         onSave={handleSaveTimer}
+        onLoadTemplate={handleLoadTemplate}
+        onSaveCurrentListAsTemplate={() => setSaveTemplateListId(currentList.id)}
+      />
+
+      <SaveListAsTemplateModal
+        isOpen={Boolean(saveTemplateListId)}
+        list={saveTemplateListId ? lists.find((l) => l.id === saveTemplateListId) || null : null}
+        timers={saveTemplateListId ? getListTimers(saveTemplateListId) : []}
+        onClose={() => setSaveTemplateListId(null)}
+        onSave={({ listId, name, description, category }) => {
+          const saved = saveListAsTemplate(listId, { name, description, category });
+          if (saved) {
+            showTemplateNotice(
+              `Saved "${saved.name}" as template (${saved.cues.length} cue${
+                saved.cues.length === 1 ? '' : 's'
+              })`
+            );
+          }
+        }}
       />
 
       <ListManagerModal
@@ -938,6 +1101,7 @@ export const MainConsolePage: React.FC = () => {
         onReorderLists={(src, dest) => reorderLists(src, dest)}
         onSetListColor={(id, color) => setListColor(id, color)}
         onCopyListCuesToList={(srcId, destId, mode) => copyListCuesToList(srcId, destId, mode)}
+        onSaveListAsTemplate={(id) => setSaveTemplateListId(id)}
         onExportList={(id) => downloadListJson(id)}
         onExportAll={downloadAllListsBackup}
         onImportList={importList}
@@ -968,10 +1132,22 @@ export const MainConsolePage: React.FC = () => {
         onClose={() => setIsSettingsOpen(false)}
         onSave={(newPrefs) => {
           setPreferences(newPrefs);
+          shortcutsManager.setGlobalEnabled(newPrefs.hotkeysEnabled);
           if (newPrefs.theme && newPrefs.theme !== theme) {
             setTheme(newPrefs.theme);
           }
           storageService.savePreferences(newPrefs);
+          displaySyncService.notifyPreferencesUpdated();
+        }}
+      />
+
+      <KeyboardShortcutsModal
+        isOpen={isShortcutsModalOpen}
+        onClose={() => setIsShortcutsModalOpen(false)}
+        onGlobalToggleSync={(enabled) => {
+          const updated = { ...preferences, hotkeysEnabled: enabled };
+          setPreferences(updated);
+          storageService.savePreferences(updated);
           displaySyncService.notifyPreferencesUpdated();
         }}
       />
@@ -983,6 +1159,52 @@ export const MainConsolePage: React.FC = () => {
         activeListName={currentList.name}
         mode={lanModalMode}
       />
+
+      {/* TRANSIENT KEYBOARD SHORTCUT FEEDBACK TOAST */}
+      {shortcutFeedback &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            key={shortcutFeedback.id}
+            className="fixed bottom-16 right-4 z-[9200] pointer-events-none select-none animate-in fade-in slide-in-from-bottom-2 duration-150"
+          >
+            <div className="glass-card rounded-full px-3.5 py-2 flex items-center gap-2.5 text-xs text-slate-900 dark:text-slate-100">
+              <Keyboard className="w-3.5 h-3.5 text-cyan-500 dark:text-cyan-400 shrink-0" />
+              <span className="font-semibold whitespace-nowrap">
+                {shortcutFeedback.detail
+                  ? `${shortcutFeedback.label}: ${shortcutFeedback.detail}`
+                  : shortcutFeedback.label}
+              </span>
+              <span className="inline-flex items-center gap-1 shrink-0">
+                {formatShortcutTokens(shortcutFeedback.combo).map((tok, i) => (
+                  <kbd
+                    key={`${tok}-${i}`}
+                    className="px-1.5 py-0.5 rounded bg-slate-900/10 dark:bg-white/10 border border-slate-900/10 dark:border-white/15 font-mono text-[10px] leading-none"
+                  >
+                    {tok}
+                  </kbd>
+                ))}
+              </span>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {/* TRANSIENT TEMPLATE ACTION CONFIRMATION TOAST */}
+      {templateNotice &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            key={templateNotice.id}
+            className="fixed bottom-16 left-1/2 -translate-x-1/2 z-[9210] pointer-events-none select-none animate-in fade-in slide-in-from-bottom-2 duration-150"
+          >
+            <div className="glass-card rounded-full px-4 py-2 flex items-center gap-2 text-xs text-slate-900 dark:text-slate-100">
+              <Check className="w-3.5 h-3.5 text-emerald-500 dark:text-emerald-400 shrink-0" />
+              <span className="font-semibold whitespace-nowrap">{templateNotice.message}</span>
+            </div>
+          </div>,
+          document.body
+        )}
 
       {/* FULLSCREEN OUTPUT WINDOW OVERLAY (Web / Preview Window) */}
       {isFullscreenActive && !(typeof window !== 'undefined' && window.electronAPI?.isElectron) && (

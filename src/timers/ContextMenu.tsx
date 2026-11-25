@@ -97,20 +97,20 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   const adjustedX = Math.min(x, window.innerWidth - 220);
   const adjustedY = Math.min(y, Math.max(12, window.innerHeight - 360));
 
-  const itemHover = isDark ? 'hover:bg-[#1a2333]' : 'hover:bg-slate-100';
-  const dividerBorder = isDark ? 'border-[#1b2434]' : 'border-slate-200';
+  const itemHover = isDark ? 'hover:bg-white/[0.08]' : 'hover:bg-slate-200/70';
+  const dividerBorder = isDark ? 'border-white/[0.08]' : 'border-slate-200';
 
   return (
     <div
       ref={menuRef}
       style={{ left: `${adjustedX}px`, top: `${adjustedY}px` }}
-      className={`fixed z-50 w-52 rounded-md shadow-2xl py-1 text-xs select-none animate-in fade-in zoom-in-95 duration-100 border ${
-        isDark ? 'bg-[#0f141f] border-[#222e42] text-neutral-200' : 'bg-white border-slate-300 text-slate-800'
+      className={`glass-card fixed z-50 w-52 rounded-2xl py-1.5 text-xs select-none animate-in fade-in zoom-in-95 duration-100 ${
+        isDark ? 'text-neutral-200' : 'text-slate-800'
       }`}
       onClick={(e) => e.stopPropagation()}
     >
       <div className={`px-3 py-1.5 text-[10px] font-semibold border-b flex items-center gap-1.5 truncate ${
-        isDark ? 'text-neutral-400 border-[#1b2434]' : 'text-slate-500 border-slate-200'
+        isDark ? 'text-neutral-400 border-white/[0.08]' : 'text-slate-500 border-slate-200'
       }`}>
         {timer.colorTag && (
           <span

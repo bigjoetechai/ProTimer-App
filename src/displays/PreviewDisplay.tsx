@@ -26,6 +26,7 @@ import {
   sanitizeImageUrl,
   useLivePreferences,
 } from '../utilities/displayStyleHelper';
+import { savePopoutWindowBounds } from '../utilities/windowBoundsStorage';
 
 type ResizeDirection = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
 
@@ -54,12 +55,32 @@ export const PreviewDisplay: React.FC = () => {
     startBounds: { x: number; y: number; width: number; height: number };
   } | null>(null);
 
+  const persistBrowserPopoutBounds = () => {
+    if (typeof window === 'undefined' || window.electronAPI?.setCurrentWindowBounds) return;
+    savePopoutWindowBounds('preview', {
+      x: window.screenX,
+      y: window.screenY,
+      width: window.outerWidth || window.innerWidth,
+      height: window.outerHeight || window.innerHeight,
+    });
+  };
+
   useEffect(() => {
     const onResize = () => {
       setViewport({ width: window.innerWidth, height: window.innerHeight });
+      persistBrowserPopoutBounds();
+    };
+    const onBeforeUnload = () => {
+      persistBrowserPopoutBounds();
     };
     window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
+    window.addEventListener('beforeunload', onBeforeUnload);
+    window.addEventListener('pagehide', onBeforeUnload);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      window.removeEventListener('beforeunload', onBeforeUnload);
+      window.removeEventListener('pagehide', onBeforeUnload);
+    };
   }, []);
 
   useEffect(() => {
@@ -130,6 +151,9 @@ export const PreviewDisplay: React.FC = () => {
     };
 
     const handleMouseUp = () => {
+      if (dragStateRef.current) {
+        persistBrowserPopoutBounds();
+      }
       dragStateRef.current = null;
     };
 
@@ -553,7 +577,12 @@ export const PreviewDisplay: React.FC = () => {
                     : ''
                 }`}
               >
-                {renderTimeWithColonOffset(displayTime, fsElements.colon?.vert)}
+                {renderTimeWithColonOffset(
+                  displayTime,
+                  fsElements.colon?.vert,
+                  fsElements.countdown?.spacing,
+                  fsElements.colon?.horiz
+                )}
               </div>
             )}
 

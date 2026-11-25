@@ -37,7 +37,8 @@ import {
   Redo2,
   Palette,
   FolderInput,
-  ArrowRight
+  ArrowRight,
+  BookmarkPlus
 } from 'lucide-react';
 import { TimerList, TimerItem } from '../types';
 import { useTheme } from '../hooks';
@@ -56,6 +57,7 @@ interface ListManagerModalProps {
   onReorderLists: (sourceIndex: number, destinationIndex: number) => void;
   onSetListColor?: (id: string, color?: string) => void;
   onCopyListCuesToList?: (sourceListId: string, targetListId: string, mode?: 'append' | 'replace') => number;
+  onSaveListAsTemplate?: (id: string) => void;
   onExportList: (id: string) => void;
   onExportAll: () => void;
   onImportList: (data: string | object, mode?: 'add' | 'replace') => Promise<{ success: boolean; message: string; listId?: string }>;
@@ -83,6 +85,7 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
   onReorderLists,
   onSetListColor,
   onCopyListCuesToList,
+  onSaveListAsTemplate,
   onExportList,
   onExportAll,
   onImportList,
@@ -199,19 +202,19 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
   const runningTimers = getAllRunningTimers();
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150 select-none">
+    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150 select-none">
       <div 
-        className={`border w-full max-w-3xl rounded-xl shadow-2xl flex flex-col max-h-[85vh] overflow-hidden transition-colors ${
-          isDark ? 'bg-[#0f131a] border-[#222d3d] text-neutral-200' : 'bg-white border-slate-300 text-slate-800'
+        className={`glass-card w-full max-w-3xl rounded-[28px] flex flex-col max-h-[85vh] overflow-hidden transition-colors ${
+          isDark ? 'text-neutral-200' : 'text-slate-800'
         }`}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className={`px-5 py-3.5 border-b flex items-center justify-between ${
-          isDark ? 'border-[#1b2330] bg-[#131922]' : 'border-slate-200 bg-slate-50'
+          isDark ? 'border-white/[0.08] bg-white/[0.02]' : 'border-slate-200/80 bg-white/30'
         }`}>
           <div className="flex items-center gap-2.5">
-            <div className="w-7 h-7 rounded-lg bg-cyan-500/15 border border-cyan-500/30 flex items-center justify-center text-cyan-500">
+            <div className="glass-btn glass-btn-cyan glass-btn-subtle w-8 h-8 flex items-center justify-center pointer-events-none">
               <Folder className="w-4 h-4" />
             </div>
             <div>
@@ -223,22 +226,14 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
           <div className="flex items-center gap-2">
             {/* Undo / Redo List Actions */}
             {(onUndo || onRedo) && (
-              <div className={`flex items-center gap-1 p-0.5 rounded-lg border ${
-                isDark ? 'bg-[#090b0f] border-[#1e2736]' : 'bg-slate-100 border-slate-300'
-              }`}>
+              <div className="flex items-center gap-1">
                 {onUndo && (
                   <button
                     type="button"
                     disabled={!canUndo}
                     onClick={onUndo}
                     title={undoLabel ? `Undo: ${undoLabel} (Ctrl+Z)` : 'Undo last list action (Ctrl+Z)'}
-                    className={`px-2 py-1 rounded text-[11px] font-medium flex items-center gap-1 transition-colors ${
-                      !canUndo
-                        ? 'opacity-35 cursor-not-allowed text-neutral-500'
-                        : isDark
-                          ? 'text-neutral-300 hover:text-white hover:bg-[#1e293b] cursor-pointer'
-                          : 'text-slate-700 hover:text-slate-900 hover:bg-white cursor-pointer'
-                    }`}
+                    className="glass-btn glass-btn-subtle px-2.5 py-1 text-[11px] font-medium flex items-center gap-1 cursor-pointer"
                   >
                     <Undo2 className="w-3.5 h-3.5" />
                     <span>Undo</span>
@@ -250,13 +245,7 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
                     disabled={!canRedo}
                     onClick={onRedo}
                     title={redoLabel ? `Redo: ${redoLabel} (Ctrl+Y)` : 'Redo last list action (Ctrl+Y)'}
-                    className={`px-2 py-1 rounded text-[11px] font-medium flex items-center gap-1 transition-colors ${
-                      !canRedo
-                        ? 'opacity-35 cursor-not-allowed text-neutral-500'
-                        : isDark
-                          ? 'text-neutral-300 hover:text-white hover:bg-[#1e293b] cursor-pointer'
-                          : 'text-slate-700 hover:text-slate-900 hover:bg-white cursor-pointer'
-                    }`}
+                    className="glass-btn glass-btn-subtle px-2.5 py-1 text-[11px] font-medium flex items-center gap-1 cursor-pointer"
                   >
                     <Redo2 className="w-3.5 h-3.5" />
                     <span>Redo</span>
@@ -266,15 +255,13 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
             )}
 
             {/* Nav Tabs */}
-            <div className={`flex items-center p-0.5 rounded-lg border text-xs ${
-              isDark ? 'bg-[#090b0f] border-[#1e2736]' : 'bg-slate-100 border-slate-300'
-            }`}>
+            <div className="glass-subcard flex items-center gap-0.5 p-0.5 rounded-full text-xs">
               <button
                 type="button"
                 onClick={() => setActiveTab('lists')}
-                className={`px-3 py-1 rounded-md transition-all font-medium cursor-pointer ${
+                className={`px-3 py-1 rounded-full transition-all font-medium cursor-pointer ${
                   activeTab === 'lists' 
-                    ? isDark ? 'bg-[#1e293b] text-white shadow-xs' : 'bg-white text-slate-900 shadow-xs'
+                    ? 'glass-btn glass-btn-cyan-active glass-btn-subtle'
                     : isDark ? 'text-neutral-400 hover:text-white' : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
@@ -283,25 +270,25 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
               <button
                 type="button"
                 onClick={() => setActiveTab('import')}
-                className={`px-3 py-1 rounded-md transition-all font-medium flex items-center gap-1.5 cursor-pointer ${
+                className={`px-3 py-1 rounded-full transition-all font-medium flex items-center gap-1.5 cursor-pointer ${
                   activeTab === 'import' 
-                    ? isDark ? 'bg-[#1e293b] text-white shadow-xs' : 'bg-white text-slate-900 shadow-xs'
+                    ? 'glass-btn glass-btn-cyan-active glass-btn-subtle'
                     : isDark ? 'text-neutral-400 hover:text-white' : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                <Upload className="w-3 h-3 text-cyan-500" />
+                <Upload className="w-3 h-3" />
                 <span>Import / Restore</span>
               </button>
               <button
                 type="button"
                 onClick={() => setActiveTab('test')}
-                className={`px-3 py-1 rounded-md transition-all font-medium flex items-center gap-1.5 cursor-pointer ${
+                className={`px-3 py-1 rounded-full transition-all font-medium flex items-center gap-1.5 cursor-pointer ${
                   activeTab === 'test' 
-                    ? isDark ? 'bg-[#1e293b] text-cyan-300 shadow-xs' : 'bg-white text-cyan-700 shadow-xs'
+                    ? 'glass-btn glass-btn-cyan-active glass-btn-subtle'
                     : isDark ? 'text-neutral-400 hover:text-white' : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                <Sparkles className="w-3 h-3 text-cyan-500" />
+                <Sparkles className="w-3 h-3" />
                 <span>Independence Test</span>
               </button>
             </div>
@@ -309,9 +296,8 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className={`p-1.5 rounded-md transition-colors cursor-pointer ${
-                isDark ? 'text-neutral-400 hover:text-white hover:bg-[#1a2230]' : 'text-slate-400 hover:text-slate-700 hover:bg-slate-200'
-              }`}
+              aria-label="Close Timer Lists Manager"
+              className="glass-btn glass-btn-subtle w-8 h-8 flex items-center justify-center cursor-pointer"
             >
               <X className="w-4 h-4" />
             </button>
@@ -320,7 +306,7 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
 
         {/* Global Live Running Timers Banner */}
         {runningTimers.length > 0 && (
-          <div className="px-5 py-2 bg-emerald-950/40 border-b border-emerald-800/40 flex items-center justify-between text-xs text-emerald-300">
+          <div className="px-5 py-2 bg-emerald-950/40 border-b border-emerald-500/25 flex items-center justify-between text-xs text-emerald-300">
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
               <span className="font-semibold">{runningTimers.length} timer{runningTimers.length > 1 ? 's' : ''} currently ticking:</span>
@@ -344,7 +330,7 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
                     <button
                       type="button"
                       onClick={() => setIsCreating(true)}
-                      className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-xs"
+                      className="glass-btn glass-btn-cyan-active glass-btn-subtle px-3.5 py-1.5 text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
                     >
                       <Plus className="w-3.5 h-3.5" />
                       <span>New List</span>
@@ -357,11 +343,11 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
                         value={newListName}
                         onChange={(e) => setNewListName(e.target.value)}
                         placeholder="List name (e.g., Rehearsal)..."
-                        className="bg-[#151c27] border border-cyan-500 rounded-lg px-3 py-1 text-xs text-white placeholder-neutral-500 focus:outline-hidden w-64"
+                        className="glass-input rounded-full px-3.5 py-1 text-xs placeholder-neutral-500 focus:outline-hidden w-64"
                       />
                       <button
                         type="submit"
-                        className="px-2.5 py-1 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg text-xs font-semibold"
+                        className="glass-btn glass-btn-cyan-active glass-btn-subtle px-3 py-1 text-xs font-semibold cursor-pointer"
                       >
                         Create
                       </button>
@@ -371,7 +357,7 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
                           setIsCreating(false);
                           setNewListName('');
                         }}
-                        className="px-2 py-1 text-neutral-400 hover:text-white text-xs"
+                        className="glass-btn glass-btn-subtle px-3 py-1 text-xs cursor-pointer"
                       >
                         Cancel
                       </button>
@@ -384,7 +370,7 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
                     type="button"
                     onClick={onExportAll}
                     title="Export All Lists Backup"
-                    className="px-2.5 py-1.5 bg-[#171f2b] hover:bg-[#202b3c] border border-[#263346] text-neutral-300 hover:text-white rounded-lg text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                    className="glass-btn glass-btn-subtle px-3.5 py-1.5 text-xs flex items-center gap-1.5 cursor-pointer"
                   >
                     <Download className="w-3.5 h-3.5 text-cyan-400" />
                     <span>Backup All Lists</span>
@@ -405,16 +391,16 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
                 const targetListObj = lists.find((l) => l.id === effectiveTargetId);
 
                 return (
-                  <div className="p-3.5 rounded-xl border border-[#1e2736] bg-[#111722] space-y-2.5">
+                  <div className="glass-subcard p-3.5 rounded-2xl space-y-2.5">
                     <div className="flex items-center justify-between gap-2 flex-wrap">
                       <div className="flex items-center gap-2">
                         <FolderInput className="w-4 h-4 text-cyan-400" />
-                        <span className="text-xs font-semibold text-white">
+                        <span className={`text-xs font-semibold ${isDark ? 'text-white' : 'text-slate-900'}`}>
                           Copy Cue List From One List Tab to Another
                         </span>
                       </div>
                       {copyListFeedback && (
-                        <span className="px-2 py-0.5 rounded bg-emerald-950/70 border border-emerald-500/40 text-emerald-300 text-[11px] font-medium flex items-center gap-1">
+                        <span className="px-2.5 py-0.5 rounded-full bg-emerald-950/70 border border-emerald-500/40 text-emerald-300 text-[11px] font-medium flex items-center gap-1">
                           <Check className="w-3 h-3 text-emerald-400" />
                           <span>{copyListFeedback}</span>
                         </span>
@@ -423,11 +409,11 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
 
                     <div className="flex items-center gap-2 flex-wrap text-xs">
                       <div className="flex items-center gap-1.5">
-                        <span className="text-neutral-400 text-[11px]">From:</span>
+                        <span className={`text-[11px] ${isDark ? 'text-neutral-400' : 'text-slate-500'}`}>From:</span>
                         <select
                           value={effectiveSourceId}
                           onChange={(e) => setCopySourceId(e.target.value)}
-                          className="bg-[#0b0e14] border border-[#243044] rounded-lg px-2.5 py-1 text-xs text-white focus:outline-hidden focus:border-cyan-500 cursor-pointer"
+                          className="glass-input rounded-full px-3 py-1 text-xs focus:outline-hidden cursor-pointer"
                         >
                           {lists.map((l) => (
                             <option key={l.id} value={l.id}>
@@ -440,11 +426,11 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
                       <ArrowRight className="w-3.5 h-3.5 text-neutral-500 shrink-0" />
 
                       <div className="flex items-center gap-1.5">
-                        <span className="text-neutral-400 text-[11px]">To:</span>
+                        <span className={`text-[11px] ${isDark ? 'text-neutral-400' : 'text-slate-500'}`}>To:</span>
                         <select
                           value={effectiveTargetId}
                           onChange={(e) => setCopyTargetId(e.target.value)}
-                          className="bg-[#0b0e14] border border-[#243044] rounded-lg px-2.5 py-1 text-xs text-white focus:outline-hidden focus:border-cyan-500 cursor-pointer"
+                          className="glass-input rounded-full px-3 py-1 text-xs focus:outline-hidden cursor-pointer"
                         >
                           {availableTargetLists.map((l) => (
                             <option key={l.id} value={l.id}>
@@ -454,14 +440,14 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
                         </select>
                       </div>
 
-                      <div className="flex items-center p-0.5 rounded-lg border border-[#243044] bg-[#0b0e14] text-[11px]">
+                      <div className="glass-subcard flex items-center gap-0.5 p-0.5 rounded-full text-[11px]">
                         <button
                           type="button"
                           onClick={() => setCopyListMode('append')}
-                          className={`px-2 py-0.5 rounded font-medium cursor-pointer transition-colors ${
+                          className={`px-2.5 py-0.5 rounded-full font-medium cursor-pointer transition-all ${
                             copyListMode === 'append'
-                              ? 'bg-cyan-600 text-white'
-                              : 'text-neutral-400 hover:text-white'
+                              ? 'glass-btn glass-btn-cyan-active glass-btn-subtle'
+                              : isDark ? 'text-neutral-400 hover:text-white' : 'text-slate-600 hover:text-slate-900'
                           }`}
                         >
                           Append
@@ -469,10 +455,10 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
                         <button
                           type="button"
                           onClick={() => setCopyListMode('replace')}
-                          className={`px-2 py-0.5 rounded font-medium cursor-pointer transition-colors ${
+                          className={`px-2.5 py-0.5 rounded-full font-medium cursor-pointer transition-all ${
                             copyListMode === 'replace'
-                              ? 'bg-amber-600 text-white'
-                              : 'text-neutral-400 hover:text-white'
+                              ? 'glass-btn glass-btn-amber-active glass-btn-subtle'
+                              : isDark ? 'text-neutral-400 hover:text-white' : 'text-slate-600 hover:text-slate-900'
                           }`}
                         >
                           Replace
@@ -496,7 +482,7 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
                           );
                           setTimeout(() => setCopyListFeedback(null), 3500);
                         }}
-                        className="px-3 py-1 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ml-auto"
+                        className="glass-btn glass-btn-cyan-active glass-btn-subtle px-3.5 py-1 text-xs font-semibold flex items-center gap-1.5 cursor-pointer ml-auto"
                       >
                         <Copy className="w-3.5 h-3.5" />
                         <span>Copy Cue List</span>
@@ -507,9 +493,11 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
               })()}
 
               {/* Lists Table */}
-              <div className="border border-[#1e2736] rounded-xl overflow-hidden bg-[#0c1017]">
+              <div className="glass-subcard rounded-2xl overflow-hidden">
                 <table className="w-full text-left text-xs">
-                  <thead className="bg-[#121822] text-neutral-400 border-b border-[#1c2432] font-semibold">
+                  <thead className={`border-b font-semibold ${
+                    isDark ? 'bg-white/[0.04] text-neutral-400 border-white/[0.08]' : 'bg-slate-200/60 text-slate-600 border-slate-300/70'
+                  }`}>
                     <tr>
                       <th className="py-2.5 px-3 w-12 text-center">#</th>
                       <th className="py-2.5 px-3">List Name</th>
@@ -519,7 +507,7 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
                       <th className="py-2.5 px-3 w-44 text-right">Actions</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-[#161d28]">
+                  <tbody className={`divide-y ${isDark ? 'divide-white/[0.06]' : 'divide-slate-200/80'}`}>
                     {lists.map((list, idx) => {
                       const isActive = list.id === activeListId;
                       const runningCount = getRunningTimerCount(list.id);
@@ -537,7 +525,9 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
                               : undefined
                           }
                           className={`group transition-colors ${
-                            isActive ? 'bg-cyan-950/20' : 'hover:bg-[#111722]'
+                            isActive
+                              ? isDark ? 'bg-cyan-500/12' : 'bg-cyan-500/10'
+                              : isDark ? 'hover:bg-white/[0.04]' : 'hover:bg-white/50'
                           }`}
                         >
                           {/* Order / Reorder */}
@@ -549,7 +539,7 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
                                   type="button"
                                   disabled={idx === 0}
                                   onClick={() => onReorderLists(idx, idx - 1)}
-                                  className="text-neutral-400 hover:text-cyan-400 disabled:opacity-20 p-0.5"
+                                  className="text-neutral-400 hover:text-cyan-400 disabled:opacity-20 p-0.5 cursor-pointer"
                                   title="Move Up"
                                 >
                                   <ArrowUp className="w-3 h-3" />
@@ -558,7 +548,7 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
                                   type="button"
                                   disabled={idx === lists.length - 1}
                                   onClick={() => onReorderLists(idx, idx + 1)}
-                                  className="text-neutral-400 hover:text-cyan-400 disabled:opacity-20 p-0.5"
+                                  className="text-neutral-400 hover:text-cyan-400 disabled:opacity-20 p-0.5 cursor-pointer"
                                   title="Move Down"
                                 >
                                   <ArrowDown className="w-3 h-3" />
@@ -580,19 +570,19 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
                                     if (e.key === 'Enter') handleSaveRename(list.id);
                                     if (e.key === 'Escape') setEditingListId(null);
                                   }}
-                                  className="bg-[#151c27] border border-cyan-500 rounded px-2 py-0.5 text-xs text-white focus:outline-hidden w-48"
+                                  className="glass-input rounded-full px-3 py-0.5 text-xs focus:outline-hidden w-48"
                                 />
                                 <button
                                   type="button"
                                   onClick={() => handleSaveRename(list.id)}
-                                  className="p-1 text-emerald-400 hover:text-emerald-300"
+                                  className="p-1 text-emerald-400 hover:text-emerald-300 cursor-pointer"
                                 >
                                   <Check className="w-3.5 h-3.5" />
                                 </button>
                                 <button
                                   type="button"
                                   onClick={() => setEditingListId(null)}
-                                  className="p-1 text-neutral-400 hover:text-white"
+                                  className="p-1 text-neutral-400 hover:text-white cursor-pointer"
                                 >
                                   <X className="w-3.5 h-3.5" />
                                 </button>
@@ -605,11 +595,11 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
                                     style={{ backgroundColor: list.color }}
                                   />
                                 )}
-                                <span className={`font-medium ${isActive ? 'text-cyan-300 font-semibold' : 'text-neutral-200'}`}>
+                                <span className={`font-medium ${isActive ? (isDark ? 'text-cyan-300 font-semibold' : 'text-cyan-700 font-semibold') : (isDark ? 'text-neutral-200' : 'text-slate-800')}`}>
                                   {list.name}
                                 </span>
                                 {isActive && (
-                                  <span className="px-1.5 py-0.2 bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 rounded text-[10px] font-semibold uppercase tracking-wider">
+                                  <span className="px-2 py-0.2 bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 rounded-full text-[10px] font-semibold uppercase tracking-wider">
                                     Current
                                   </span>
                                 )}
@@ -632,10 +622,10 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
                                     className={`w-3.5 h-3.5 rounded-full border transition-transform hover:scale-115 flex items-center justify-center cursor-pointer ${
                                       isSelected
                                         ? 'ring-2 ring-cyan-400 border-white scale-110'
-                                        : 'border-neutral-700'
+                                        : 'border-white/20'
                                     }`}
                                     style={{
-                                      backgroundColor: swatch.value || '#1a2232',
+                                      backgroundColor: swatch.value || '#24242a',
                                     }}
                                   >
                                     {!swatch.value && (
@@ -649,7 +639,9 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
 
                           {/* Timer count */}
                           <td className="py-2.5 px-3 text-center text-neutral-400">
-                            <span className="font-mono bg-[#161c27] px-2 py-0.5 rounded text-[11px] border border-[#222c3c]">
+                            <span className={`font-mono px-2.5 py-0.5 rounded-full text-[11px] border ${
+                              isDark ? 'bg-white/[0.04] border-white/[0.08] text-neutral-300' : 'bg-white/60 border-slate-300 text-slate-700'
+                            }`}>
                               {list.timerIds.length} timer{list.timerIds.length !== 1 ? 's' : ''}
                             </span>
                           </td>
@@ -657,7 +649,7 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
                           {/* Live Running status */}
                           <td className="py-2.5 px-3 text-center">
                             {runningCount > 0 ? (
-                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded-full text-[10px] font-semibold animate-pulse">
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded-full text-[10px] font-semibold animate-pulse">
                                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
                                 <span>{runningCount} Running</span>
                               </span>
@@ -673,7 +665,7 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
                                 <button
                                   type="button"
                                   onClick={() => onSelectList(list.id)}
-                                  className="px-2 py-1 bg-[#192230] hover:bg-cyan-600 hover:text-white text-neutral-300 rounded text-[11px] font-medium transition-colors border border-[#263346] cursor-pointer"
+                                  className="glass-btn glass-btn-cyan glass-btn-subtle px-2.5 py-1 text-[11px] font-medium cursor-pointer"
                                   title="Switch to this list"
                                 >
                                   Switch
@@ -688,7 +680,7 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
                                 type="button"
                                 onClick={() => handleStartRename(list)}
                                 title="Rename list"
-                                className="p-1.5 text-neutral-400 hover:text-white hover:bg-[#1c2432] rounded cursor-pointer"
+                                className="p-1.5 text-neutral-400 hover:text-white hover:bg-white/[0.09] rounded-full transition-colors cursor-pointer"
                               >
                                 <Edit3 className="w-3.5 h-3.5" />
                               </button>
@@ -697,37 +689,48 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
                                 type="button"
                                 onClick={() => onDuplicateList(list.id)}
                                 title="Duplicate list"
-                                className="p-1.5 text-neutral-400 hover:text-white hover:bg-[#1c2432] rounded cursor-pointer"
+                                className="p-1.5 text-neutral-400 hover:text-white hover:bg-white/[0.09] rounded-full transition-colors cursor-pointer"
                               >
                                 <Copy className="w-3.5 h-3.5" />
                               </button>
+
+                              {onSaveListAsTemplate && (
+                                <button
+                                  type="button"
+                                  onClick={() => onSaveListAsTemplate(list.id)}
+                                  title="Save list as template"
+                                  className="p-1.5 text-neutral-400 hover:text-cyan-400 hover:bg-white/[0.09] rounded-full transition-colors cursor-pointer"
+                                >
+                                  <BookmarkPlus className="w-3.5 h-3.5" />
+                                </button>
+                              )}
 
                               <button
                                 type="button"
                                 onClick={() => onExportList(list.id)}
                                 title="Export single list (.json)"
-                                className="p-1.5 text-neutral-400 hover:text-cyan-400 hover:bg-[#1c2432] rounded cursor-pointer"
+                                className="p-1.5 text-neutral-400 hover:text-cyan-400 hover:bg-white/[0.09] rounded-full transition-colors cursor-pointer"
                               >
                                 <Download className="w-3.5 h-3.5" />
                               </button>
 
                               {/* Delete confirmation */}
                               {deleteConfirmId === list.id ? (
-                                <div className="inline-flex items-center gap-1 bg-red-950/80 p-0.5 rounded border border-red-800">
+                                <div className="inline-flex items-center gap-1 bg-red-950/75 p-0.5 rounded-full border border-red-500/40">
                                   <button
                                     type="button"
                                     onClick={() => {
                                       onDeleteList(list.id);
                                       setDeleteConfirmId(null);
                                     }}
-                                    className="px-1.5 py-0.5 bg-red-600 hover:bg-red-500 text-white rounded text-[10px] font-bold"
+                                    className="glass-btn glass-btn-red-active glass-btn-subtle px-2 py-0.5 text-[10px] font-bold cursor-pointer"
                                   >
                                     Confirm
                                   </button>
                                   <button
                                     type="button"
                                     onClick={() => setDeleteConfirmId(null)}
-                                    className="px-1 text-neutral-400 hover:text-white text-[10px]"
+                                    className="px-1.5 text-neutral-300 hover:text-white text-[10px] cursor-pointer"
                                   >
                                     Cancel
                                   </button>
@@ -738,7 +741,7 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
                                   disabled={lists.length <= 1}
                                   onClick={() => setDeleteConfirmId(list.id)}
                                   title={lists.length <= 1 ? 'Cannot delete the sole list' : 'Delete list'}
-                                  className="p-1.5 text-neutral-400 hover:text-red-400 hover:bg-[#1c2432] rounded disabled:opacity-20 cursor-pointer"
+                                  className="p-1.5 text-neutral-400 hover:text-red-400 hover:bg-white/[0.09] rounded-full disabled:opacity-20 transition-colors cursor-pointer"
                                 >
                                   <Trash2 className="w-3.5 h-3.5" />
                                 </button>
@@ -757,18 +760,18 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
           {/* TAB 2: IMPORT / RESTORE */}
           {activeTab === 'import' && (
             <div className="space-y-4">
-              <div className="bg-[#121822] p-4 rounded-xl border border-[#1e2736]">
-                <h3 className="text-xs font-semibold text-white mb-1 flex items-center gap-1.5">
+              <div className="glass-subcard p-4 rounded-2xl">
+                <h3 className={`text-xs font-semibold mb-1 flex items-center gap-1.5 ${isDark ? 'text-white' : 'text-slate-900'}`}>
                   <Upload className="w-4 h-4 text-cyan-400" />
                   <span>Import Timer List or System Backup</span>
                 </h3>
-                <p className="text-[11px] text-neutral-400 mb-3">
+                <p className={`text-[11px] mb-3 ${isDark ? 'text-neutral-400' : 'text-slate-500'}`}>
                   Upload an exported JSON file (`protimer-*.json`) or paste raw JSON. Supports single list exports or full backups.
                 </p>
 
                 {/* Import Mode Radio */}
                 <div className="flex items-center gap-4 mb-4 text-xs">
-                  <label className="flex items-center gap-2 cursor-pointer text-neutral-300">
+                  <label className={`flex items-center gap-2 cursor-pointer ${isDark ? 'text-neutral-300' : 'text-slate-700'}`}>
                     <input
                       type="radio"
                       name="importMode"
@@ -779,7 +782,7 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
                     />
                     <span>Add as New List(s) (Keep existing lists)</span>
                   </label>
-                  <label className="flex items-center gap-2 cursor-pointer text-neutral-300">
+                  <label className={`flex items-center gap-2 cursor-pointer ${isDark ? 'text-neutral-300' : 'text-slate-700'}`}>
                     <input
                       type="radio"
                       name="importMode"
@@ -804,7 +807,7 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
                   <button
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
-                    className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg text-xs font-semibold flex items-center gap-2 transition-colors shadow-xs"
+                    className="glass-btn glass-btn-cyan-active glass-btn-subtle px-4 py-2 text-xs font-semibold flex items-center gap-2 cursor-pointer"
                   >
                     <Upload className="w-4 h-4" />
                     <span>Choose JSON File...</span>
@@ -818,7 +821,7 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
                   onChange={(e) => setImportJsonText(e.target.value)}
                   placeholder="Paste JSON content here..."
                   rows={6}
-                  className="w-full bg-[#0a0d13] border border-[#1f2838] rounded-lg p-3 text-xs font-mono text-neutral-300 placeholder-neutral-600 focus:outline-hidden focus:border-cyan-500"
+                  className="glass-input w-full rounded-2xl p-3 text-xs font-mono placeholder-neutral-500 focus:outline-hidden"
                 />
 
                 <div className="mt-3 flex items-center justify-between">
@@ -826,7 +829,7 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
                     type="button"
                     disabled={!importJsonText.trim()}
                     onClick={handleManualImport}
-                    className="px-4 py-1.5 bg-[#1a2332] hover:bg-cyan-600 hover:text-white disabled:opacity-40 text-neutral-200 rounded-lg text-xs font-semibold transition-colors"
+                    className="glass-btn glass-btn-cyan glass-btn-subtle px-4 py-1.5 text-xs font-semibold cursor-pointer"
                   >
                     Process JSON Import
                   </button>
@@ -845,14 +848,14 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
           {/* TAB 3: INDEPENDENCE & CONCURRENCY TEST */}
           {activeTab === 'test' && (
             <div className="space-y-4">
-              <div className="bg-[#121822] p-4 rounded-xl border border-[#1e2736]">
+              <div className="glass-subcard p-4 rounded-2xl">
                 <div className="flex items-start justify-between gap-4 mb-3">
                   <div>
-                    <h3 className="text-xs font-semibold text-white mb-1 flex items-center gap-1.5">
+                    <h3 className={`text-xs font-semibold mb-1 flex items-center gap-1.5 ${isDark ? 'text-white' : 'text-slate-900'}`}>
                       <Sparkles className="w-4 h-4 text-cyan-400" />
                       <span>Multi-List Concurrency & Independence Verification</span>
                     </h3>
-                    <p className="text-[11px] text-neutral-400 leading-relaxed">
+                    <p className={`text-[11px] leading-relaxed ${isDark ? 'text-neutral-400' : 'text-slate-600'}`}>
                       Verifies the core architectural invariant: <strong>Switching between lists must not stop timers already running</strong>, and <strong>timers in different lists run concurrently and drift-free</strong>.
                     </p>
                   </div>
@@ -861,7 +864,7 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
                     type="button"
                     disabled={testRunning}
                     onClick={handleExecuteTest}
-                    className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white rounded-lg text-xs font-semibold flex items-center gap-2 transition-colors shadow-xs shrink-0"
+                    className="glass-btn glass-btn-cyan-active glass-btn-subtle px-4 py-2 text-xs font-semibold flex items-center gap-2 shrink-0 cursor-pointer"
                   >
                     {testRunning ? (
                       <>
@@ -880,16 +883,16 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
                 {/* Test Output Logs */}
                 {testResult ? (
                   <div className="mt-4 space-y-3">
-                    <div className={`p-3 rounded-lg border text-xs flex items-center gap-2 ${
+                    <div className={`p-3 rounded-2xl border text-xs flex items-center gap-2 ${
                       testResult.success 
-                        ? 'bg-emerald-950/40 border-emerald-700/60 text-emerald-300' 
-                        : 'bg-red-950/40 border-red-700/60 text-red-300'
+                        ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300' 
+                        : 'bg-red-950/40 border-red-500/40 text-red-300'
                     }`}>
                       {testResult.success ? <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" /> : <AlertTriangle className="w-4 h-4 shrink-0 text-red-400" />}
                       <span className="font-semibold">{testResult.message}</span>
                     </div>
 
-                    <div className="bg-[#090c12] border border-[#1c2432] rounded-lg p-3 max-h-56 overflow-y-auto font-mono text-[11px] space-y-1 text-neutral-300">
+                    <div className="glass-input rounded-2xl p-3 max-h-56 overflow-y-auto font-mono text-[11px] space-y-1">
                       {testResult.logs.map((line, idx) => (
                         <div key={idx} className={line.includes('SUCCESS') ? 'text-emerald-400 font-bold' : line.includes('FAIL') ? 'text-red-400 font-bold' : ''}>
                           {line}
@@ -898,7 +901,7 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
                     </div>
                   </div>
                 ) : (
-                  <div className="mt-4 p-4 border border-dashed border-[#1f2838] rounded-lg text-center text-xs text-neutral-500">
+                  <div className="mt-4 p-4 border border-dashed border-white/[0.12] rounded-2xl text-center text-xs text-neutral-500">
                     Click &quot;Run Sanity Test&quot; to execute real-time automated verification of multi-list timer concurrency.
                   </div>
                 )}
@@ -908,7 +911,9 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="px-5 py-3 border-t border-[#1b2330] bg-[#10151e] flex items-center justify-between text-xs text-neutral-400">
+        <div className={`px-5 py-3 border-t flex items-center justify-between text-xs ${
+          isDark ? 'border-white/[0.08] bg-white/[0.02] text-neutral-400' : 'border-slate-200/80 bg-white/30 text-slate-500'
+        }`}>
           <div className="flex items-center gap-2">
             <span>Lists: <strong>{lists.length}</strong></span>
             <span>•</span>
@@ -918,7 +923,7 @@ export const ListManagerModal: React.FC<ListManagerModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-1.5 bg-[#1b2433] hover:bg-[#232e40] text-white rounded-lg text-xs font-semibold transition-colors"
+            className="glass-btn glass-btn-subtle px-5 py-1.5 text-xs font-semibold cursor-pointer"
           >
             Done
           </button>

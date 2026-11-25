@@ -23,6 +23,8 @@ import { resolveApiUrl } from '../utils/apiUrl';
 import { displaySyncService } from './displaySyncService';
 import { timerManagerService } from './timerManager';
 import {
+  COUNTDOWN_COLON_OFFSET_EM_STEP,
+  COUNTDOWN_DIGIT_SPACING_EM_STEP,
   getTargetElements,
   getTargetExtras,
   resolveDisplayDigitColor,
@@ -93,6 +95,7 @@ class NdiStreamService {
   private latestPayload: DisplaySyncPayload | null = null;
   private cachedImages: Map<string, HTMLImageElement> = new Map();
   private isSendingFrame = false;
+  private activeFrameAbortController: AbortController | null = null;
   private receiversCount = 0;
   private frameCount = 0;
   private ips: string[] = [];
@@ -129,19 +132,28 @@ class NdiStreamService {
   }
 
   private getCurrentLists(): Array<{ id: string; name: string }> {
-    if (this.latestPayload?.lists && this.latestPayload.lists.length > 0) {
-      return this.latestPayload.lists;
-    }
     const all = timerManagerService.getAllLists();
     if (all && all.length > 0) {
       return all.map((l) => ({ id: l.id, name: l.name }));
     }
+    if (this.latestPayload?.lists && this.latestPayload.lists.length > 0) {
+      return this.latestPayload.lists;
+    }
     return [{ id: 'list_1', name: 'List 1' }];
   }
 
+  public reconcileLists(): void {
+    this.reconcileListsAndNames();
+  }
+
   private reconcileListsAndNames(payload?: DisplaySyncPayload | null): void {
+    const liveLists = this.getCurrentLists();
     const lists =
-      payload?.lists && payload.lists.length > 0 ? payload.lists : this.getCurrentLists();
+      liveLists.length > 0
+        ? liveLists
+        : payload?.lists && payload.lists.length > 0
+        ? payload.lists
+        : [{ id: 'list_1', name: 'List 1' }];
     const validIds = new Set(lists.map((l) => l.id));
 
     let activeMapChanged = false;
@@ -160,7 +172,11 @@ class NdiStreamService {
     if (sig !== this.lastKnownNamesSig || activeMapChanged) {
       const hadPrevSig = Boolean(this.lastKnownNamesSig);
       this.lastKnownNamesSig = sig;
-      if (hadPrevSig) {
+      if (activeMapChanged) {
+        // An active NDI list tab was deleted: properly reconcile timers & server senders
+        // (including stopping NDI completely if no active list tabs remain).
+        this.applyStreamStateChange();
+      } else if (hadPrevSig) {
         if (this.isAnyStreamActive()) {
           this.syncConfigToServer();
         }
@@ -225,8 +241,17 @@ class NdiStreamService {
     };
 
     const sourceNamesByList: Record<string, string> = {};
+    const usedSourceCounts = new Map<string, number>();
     for (const l of lists) {
-      sourceNamesByList[l.id] = formatListNdiSourceName(l.name, prefs.ndiSourceName);
+      const baseFormatted = formatListNdiSourceName(l.name, prefs.ndiSourceName);
+      const key = baseFormatted.toLowerCase();
+      const count = (usedSourceCounts.get(key) || 0) + 1;
+      usedSourceCounts.set(key, count);
+      // Disambiguate duplicate list tab names so each tab always gets its own independent NDI sender
+      sourceNamesByList[l.id] =
+        count === 1
+          ? baseFormatted
+          : formatListNdiSourceName(`${l.name} #${count}`, prefs.ndiSourceName);
     }
     if (!sourceNamesByList[activeListId]) {
       sourceNamesByList[activeListId] = formatListNdiSourceName(
@@ -384,6 +409,18 @@ class NdiStreamService {
   }
 
   private applyStreamStateChange(): void {
+    // Abort any in-flight frame POST immediately so stale frames from a deactivated
+    // list tab cannot race with the upcoming /api/lan/ndi/config update.
+    if (this.activeFrameAbortController) {
+      try {
+        this.activeFrameAbortController.abort();
+      } catch {
+        // Ignore abort error
+      }
+      this.activeFrameAbortController = null;
+      this.isSendingFrame = false;
+    }
+
     const anyActive = this.isAnyStreamActive();
     if (anyActive) {
       this.syncConfigToServer(true);
@@ -474,8 +511,8 @@ class NdiStreamService {
       }
     }, 16);
 
-    // 4 FPS (250ms) is crisp for digital countdown timers and keeps CPU usage minimal
-    const intervalMs = 250;
+    // 10 FPS (100ms) keeps all NDI countdown displays in tight real-time sync with Fullscreen/Console
+    const intervalMs = 100;
 
     this.renderTimer = setInterval(() => {
       if (!this.isAnyStreamActive()) return;
@@ -499,17 +536,38 @@ class NdiStreamService {
   }
 
   private renderAndTransmitFrame(): void {
-    if (!this.isAnyStreamActive() || typeof document === 'undefined' || !this.latestPayload) return;
+    if (!this.isAnyStreamActive() || typeof document === 'undefined') return;
     if (this.isSendingFrame) return;
 
     const status = this.getStatus();
     const prefs = storageService.getPreferences();
     const payload = this.latestPayload;
 
+    // Always pull live per-list active/cued timer state directly from timerManagerService
+    // so every list tab (List 1, List 2, etc.) counts down accurately in real time
+    // regardless of which list tab is currently focused on the main console.
+    const freshListCues = timerManagerService.getAllListsActiveCues();
+    const listCueMap = new Map<string, ListActiveCueSummary>();
+    if (payload?.listActiveCues) {
+      for (const c of payload.listActiveCues) {
+        listCueMap.set(c.listId, c);
+      }
+    }
+    for (const c of freshListCues) {
+      listCueMap.set(c.listId, c);
+    }
+    const resolvedListCues =
+      freshListCues.length > 0 ? freshListCues : payload?.listActiveCues || [];
+
     const lists = this.getCurrentLists();
     const targetListIds = this.multiActive
       ? lists.map((l) => l.id)
-      : lists.filter((l) => this.activeByList[l.id]).map((l) => l.id);
+      : Array.from(
+          new Set([
+            ...lists.filter((l) => this.activeByList[l.id]).map((l) => l.id),
+            ...Object.keys(this.activeByList).filter((id) => this.activeByList[id]),
+          ])
+        );
 
     // Use a fast, crisp broadcast resolution (1280x720 for single stream, 960x540 when encoding multiple concurrent lists)
     const maxW = targetListIds.length > 1 || this.multiActive ? 960 : 1280;
@@ -525,16 +583,20 @@ class NdiStreamService {
       this.canvas.height = ch;
     }
 
-    const ctx = this.canvas.getContext('2d');
+    const ctx = this.canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) return;
 
-    const listCueMap = new Map<string, ListActiveCueSummary>(
-      (payload.listActiveCues || []).map((c) => [c.listId, c])
-    );
+    const isBlackout = Boolean(payload?.isBlackout);
+    // In standalone Node.js mode (non-Electron), nativeImage isn't available on the server,
+    // so attach raw RGBA pixels whenever the native NDI runtime DLL is loaded.
+    const isElectronEnv =
+      typeof window !== 'undefined' &&
+      Boolean((window as unknown as { electronAPI?: { isElectron?: boolean } }).electronAPI?.isElectron);
+    const includeRawRgba = !isElectronEnv && Boolean(this.nativeNdi?.nativeNdiAvailable);
 
     const perListFrames: Record<
       string,
-      { sourceName: string; frameDataUrl: string }
+      { sourceName: string; frameDataUrl: string; rawRgbaBase64?: string }
     > = {};
 
     for (const lid of targetListIds) {
@@ -545,45 +607,67 @@ class NdiStreamService {
       const sourceName =
         status.sourceNamesByList[lid] || formatListNdiSourceName(listName, prefs.ndiSourceName);
 
-      if (payload.isBlackout) {
+      if (isBlackout) {
         if (!status.alphaChannel) {
           ctx.fillStyle = '#000000';
           ctx.fillRect(0, 0, cw, ch);
         }
       } else {
-        this.drawSingleListFrame(ctx, cw, ch, lid, cueSummary, payload, prefs, status.alphaChannel);
+        this.drawSingleListFrame(
+          ctx,
+          cw,
+          ch,
+          lid,
+          cueSummary,
+          payload,
+          prefs,
+          status.alphaChannel
+        );
       }
 
-      const encoded = this.extractCanvasFrame(status.alphaChannel);
+      const encoded = this.extractCanvasFrame(ctx, cw, ch, status.alphaChannel, includeRawRgba);
       if (encoded) {
         perListFrames[lid] = {
           sourceName,
           frameDataUrl: encoded.frameDataUrl,
+          ...(encoded.rawRgbaBase64 ? { rawRgbaBase64: encoded.rawRgbaBase64 } : {}),
         };
       }
     }
 
     // Also render the primary / Multi frame
-    let primaryFrame: { frameDataUrl: string } | null = null;
+    let primaryFrame: { frameDataUrl: string; rawRgbaBase64?: string } | null = null;
     if (this.multiActive) {
       ctx.clearRect(0, 0, cw, ch);
-      if (payload.isBlackout) {
+      if (isBlackout) {
         if (!status.alphaChannel) {
           ctx.fillStyle = '#000000';
           ctx.fillRect(0, 0, cw, ch);
         }
       } else {
-        this.drawMultiFrame(ctx, cw, ch, payload, prefs, status.alphaChannel);
+        this.drawMultiFrame(
+          ctx,
+          cw,
+          ch,
+          resolvedListCues,
+          payload,
+          prefs,
+          status.alphaChannel
+        );
       }
-      primaryFrame = this.extractCanvasFrame(status.alphaChannel);
+      primaryFrame = this.extractCanvasFrame(ctx, cw, ch, status.alphaChannel, includeRawRgba);
     } else {
-      const activeLid = payload.activeListId || targetListIds[0];
+      const activeLid =
+        payload?.activeListId ||
+        timerManagerService.getSnapshot().activeListId ||
+        targetListIds[0];
       const chosen =
         (activeLid && perListFrames[activeLid]) ||
         (targetListIds[0] ? perListFrames[targetListIds[0]] : null);
       if (chosen) {
         primaryFrame = {
           frameDataUrl: chosen.frameDataUrl,
+          ...(chosen.rawRgbaBase64 ? { rawRgbaBase64: chosen.rawRgbaBase64 } : {}),
         };
       }
     }
@@ -593,14 +677,37 @@ class NdiStreamService {
     }
   }
 
+  private uint8ArrayToBase64(bytes: Uint8Array | Uint8ClampedArray): string {
+    const chunkSize = 0x8000;
+    const chunks: string[] = [];
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      const sub = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
+      chunks.push(String.fromCharCode.apply(null, sub as unknown as number[]));
+    }
+    return btoa(chunks.join(''));
+  }
+
   private extractCanvasFrame(
-    alphaChannel: boolean
-  ): { frameDataUrl: string } | null {
+    ctx: CanvasRenderingContext2D,
+    cw: number,
+    ch: number,
+    alphaChannel: boolean,
+    includeRawRgba: boolean
+  ): { frameDataUrl: string; rawRgbaBase64?: string } | null {
     if (!this.canvas) return null;
     // Fast hardware-accelerated JPEG when opaque (~2ms); PNG only when transparent alpha is explicitly enabled
     const mime = alphaChannel ? 'image/png' : 'image/jpeg';
-    const frameDataUrl = this.canvas.toDataURL(mime, alphaChannel ? undefined : 0.8);
-    return { frameDataUrl };
+    const frameDataUrl = this.canvas.toDataURL(mime, alphaChannel ? undefined : 0.85);
+    let rawRgbaBase64: string | undefined;
+    if (includeRawRgba) {
+      try {
+        const imgData = ctx.getImageData(0, 0, cw, ch);
+        rawRgbaBase64 = this.uint8ArrayToBase64(imgData.data);
+      } catch {
+        // Ignore getImageData errors
+      }
+    }
+    return rawRgbaBase64 ? { frameDataUrl, rawRgbaBase64 } : { frameDataUrl };
   }
 
   private drawSingleListFrame(
@@ -609,20 +716,63 @@ class NdiStreamService {
     ch: number,
     listId: string,
     cueSummary: ListActiveCueSummary | undefined,
-    payload: DisplaySyncPayload,
+    payload: DisplaySyncPayload | null,
     prefs: AppPreferences,
     alphaChannel: boolean
   ): void {
     const fsElements = getTargetElements(prefs, 'fullscreen_ndi_preview');
     const fsExtras = getTargetExtras(prefs, 'fullscreen_ndi_preview');
 
-    const activeTimer = cueSummary ? cueSummary.activeTimer : payload.activeTimer;
-    const secondsRemaining = cueSummary ? cueSummary.secondsRemaining : payload.secondsRemaining;
-    const isOvertime = cueSummary ? cueSummary.isOvertime : payload.isOvertime;
-    const status = cueSummary ? cueSummary.status : payload.status;
-    const activeAlertLevel = cueSummary ? cueSummary.activeAlertLevel : payload.activeAlertLevel;
-    const alertColor = cueSummary ? cueSummary.alertColor : payload.alertColor;
-    const progressPercent = cueSummary ? cueSummary.progressPercent : payload.progressPercent;
+    // Strictly isolate per-list state: only fall back to top-level payload if this listId IS the active payload list
+    const canFallbackToPayload = Boolean(!cueSummary && payload && listId === payload.activeListId);
+    const activeTimer = cueSummary
+      ? cueSummary.activeTimer
+      : canFallbackToPayload
+      ? payload?.activeTimer || null
+      : null;
+    const secondsRemaining = cueSummary
+      ? cueSummary.secondsRemaining
+      : canFallbackToPayload
+      ? payload?.secondsRemaining ?? 0
+      : 0;
+    const isOvertime = cueSummary
+      ? cueSummary.isOvertime
+      : canFallbackToPayload
+      ? Boolean(payload?.isOvertime)
+      : false;
+    const status = cueSummary
+      ? cueSummary.status
+      : canFallbackToPayload
+      ? payload?.status || 'idle'
+      : 'idle';
+    const activeAlertLevel = cueSummary
+      ? cueSummary.activeAlertLevel
+      : canFallbackToPayload
+      ? payload?.activeAlertLevel || 'none'
+      : 'none';
+    const alertColor = cueSummary
+      ? cueSummary.alertColor
+      : canFallbackToPayload
+      ? payload?.alertColor
+      : undefined;
+    const alertFlash = cueSummary
+      ? Boolean(cueSummary.alertFlash)
+      : canFallbackToPayload
+      ? Boolean(payload?.alertFlash)
+      : false;
+    const alertOnOff = cueSummary
+      ? cueSummary.alertOnOff
+      : canFallbackToPayload
+      ? Boolean(payload?.alertOnOff)
+      : false;
+    const progressPercent = cueSummary
+      ? cueSummary.progressPercent
+      : canFallbackToPayload
+      ? payload?.progressPercent ?? 0
+      : 0;
+    const isClockMode = Boolean(payload?.isClockMode);
+    const isDigitalClockCue = activeTimer?.type === 'digital_clock';
+    const isEmptyCue = activeTimer?.type === 'empty';
 
     // 1. Background (transparent when alphaChannel is true)
     if (!alphaChannel) {
@@ -632,7 +782,7 @@ class NdiStreamService {
       const bgUrl =
         resolveBackgroundImageForList(prefs, listId) ||
         cueSummary?.backgroundImageUrl ||
-        (listId === payload.activeListId ? payload.backgroundImageUrl : '') ||
+        (listId === payload?.activeListId ? payload?.backgroundImageUrl : '') ||
         '';
       const bgImg = this.getImageElement(bgUrl);
       if (bgImg) {
@@ -650,7 +800,7 @@ class NdiStreamService {
     const logoUrl =
       resolveLogoImageForList(prefs, listId) ||
       cueSummary?.logoImageUrl ||
-      (listId === payload.activeListId ? payload.logoImageUrl : '') ||
+      (listId === payload?.activeListId ? payload?.logoImageUrl : '') ||
       '';
     const logoImg = this.getImageElement(logoUrl);
     if (logoImg && fsElements.logo?.visible !== false) {
@@ -677,7 +827,7 @@ class NdiStreamService {
 
     // 4. Cue Name
     const nameCfg = fsElements.name;
-    if (nameCfg?.visible !== false && !payload.isClockMode) {
+    if (nameCfg?.visible !== false && !isClockMode) {
       const nameScale = Math.max(0.2, (nameCfg?.sizePercent ?? 33) / 33);
       const nameFontPx = Math.round(ch * 0.05 * nameScale);
       const nameFont = resolveFontFamily(nameCfg?.font);
@@ -693,6 +843,17 @@ class NdiStreamService {
           ? Math.round(ch * 0.14)
           : Math.round(ch * 0.82);
       ctx.fillText(cueTitle, cw / 2, nameY);
+
+      if (activeTimer?.endTime) {
+        const endFontPx = Math.max(12, Math.round(nameFontPx * 0.42));
+        ctx.font = `600 ${endFontPx}px ${nameFont}`;
+        ctx.fillStyle = '#d4d4d8';
+        ctx.fillText(
+          `Ends at: ${activeTimer.endTime}`,
+          cw / 2,
+          nameY + Math.round(nameFontPx * 0.78)
+        );
+      }
     }
 
     // 5. Main Countdown / Clock Digits
@@ -712,30 +873,56 @@ class NdiStreamService {
         prefs
       );
       const formattedClock = formatClock(new Date(), undefined, prefs);
-      const displayTime = payload.isClockMode
-        ? formattedClock
-        : isOvertime
-        ? `+${formattedCountdown.replace(/^[+-]/, '')}`
-        : formattedCountdown.replace(/^-/, '+');
+      const displayTime =
+        isClockMode || isDigitalClockCue
+          ? formattedClock
+          : isEmptyCue
+          ? '--:--:--'
+          : isOvertime
+          ? `+${formattedCountdown.replace(/^[+-]/, '')}`
+          : formattedCountdown.replace(/^-/, '+');
 
-      const digitColor = payload.isClockMode
-        ? '#ffffff'
-        : resolveDisplayDigitColor({
-            isOvertime,
-            isPaused: status === 'paused',
-            activeAlertLevel,
-            alertColor,
-            prefs,
-          });
+      const digitColor =
+        isClockMode || isDigitalClockCue
+          ? '#ffffff'
+          : resolveDisplayDigitColor({
+              isOvertime,
+              isPaused: status === 'paused',
+              activeAlertLevel,
+              alertColor,
+              prefs,
+            });
 
-      ctx.fillStyle = digitColor;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(displayTime, cw / 2, ch * 0.48);
+      const shouldBlinkOff = Boolean(alertOnOff && (status === 'running' || status === 'overtime'));
+      const blinkVisible = !shouldBlinkOff || Math.floor(Date.now() / 500) % 2 === 0;
+      const shouldPulse = Boolean(
+        alertFlash && prefs.flashAlertsEnabled !== false && (status === 'running' || status === 'overtime')
+      );
+
+      if (blinkVisible) {
+        const prevAlpha = ctx.globalAlpha;
+        if (shouldPulse) {
+          ctx.globalAlpha = 0.55 + 0.45 * Math.abs(Math.sin(Date.now() / 260));
+        }
+        ctx.fillStyle = digitColor;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        this.drawSpacedCountdownText(
+          ctx,
+          displayTime,
+          cw / 2,
+          ch * 0.48,
+          digitFontPx,
+          fsElements.colon?.vert ?? 0,
+          fsElements.countdown?.spacing ?? 0,
+          fsElements.colon?.horiz ?? 0
+        );
+        ctx.globalAlpha = prevAlpha;
+      }
     }
 
     // 6. Optional Clock & Date
-    if (fsElements.clock?.visible && !payload.isClockMode) {
+    if (fsElements.clock?.visible && !isClockMode) {
       const clockScale = Math.max(0.2, (fsElements.clock?.sizePercent ?? 33) / 33);
       const clockPx = Math.round(ch * 0.042 * clockScale);
       ctx.font = `600 ${clockPx}px ${resolveFontFamily(fsElements.clock?.font)}`;
@@ -750,7 +937,7 @@ class NdiStreamService {
       ctx.fillStyle = '#cbd5e1';
       ctx.textAlign = 'left';
       ctx.fillText(
-        payload.dateFormatted || formatDate(new Date(), prefs),
+        payload?.dateFormatted || formatDate(new Date(), prefs),
         cw * 0.04,
         ch * 0.07
       );
@@ -758,9 +945,9 @@ class NdiStreamService {
 
     ctx.restore();
 
-    // 7. Progress Bar
+    // 7. Progress Bar (matches NdiDisplay: elapsed progressPercent 0 -> 100%, full 100% in overtime)
     const showProgress = Boolean(prefs.showProgressBar || fsElements.progress_bar?.visible);
-    if (showProgress && !payload.isClockMode) {
+    if (showProgress && !isClockMode && !isDigitalClockCue) {
       const barH = Math.max(6, Math.round((prefs.progressBarHeightPx ?? 12) * (ch / 1080)));
       const barY =
         (fsElements.progress_bar?.location || 'Bottom').toLowerCase() === 'top'
@@ -771,7 +958,7 @@ class NdiStreamService {
 
       const pct = isOvertime
         ? 100
-        : Math.min(100, Math.max(0, 100 - progressPercent));
+        : Math.min(100, Math.max(0, progressPercent));
       ctx.fillStyle =
         isOvertime || activeAlertLevel === 'danger'
           ? prefs.dangerDigitsColor || '#ef4444'
@@ -782,7 +969,7 @@ class NdiStreamService {
     }
 
     // 8. Stage Message Overlay
-    if (payload.activeMessage && payload.activeMessage.visible && payload.activeMessage.text) {
+    if (payload?.activeMessage && payload.activeMessage.visible && payload.activeMessage.text) {
       const msgH = Math.round(ch * 0.14);
       ctx.fillStyle = 'rgba(10, 14, 22, 0.92)';
       ctx.fillRect(0, 0, cw, msgH);
@@ -799,7 +986,8 @@ class NdiStreamService {
     ctx: CanvasRenderingContext2D,
     cw: number,
     ch: number,
-    payload: DisplaySyncPayload,
+    listActiveCues: ListActiveCueSummary[],
+    payload: DisplaySyncPayload | null,
     prefs: AppPreferences,
     alphaChannel: boolean
   ): void {
@@ -808,30 +996,30 @@ class NdiStreamService {
       ctx.fillRect(0, 0, cw, ch);
     }
 
-    const items =
-      payload.listActiveCues && payload.listActiveCues.length > 0
-        ? payload.listActiveCues
+    const items: ListActiveCueSummary[] =
+      listActiveCues && listActiveCues.length > 0
+        ? listActiveCues
         : [
             {
-              listId: payload.activeListId || 'list_1',
-              listName: payload.activeListName || 'List 1',
+              listId: payload?.activeListId || 'list_1',
+              listName: payload?.activeListName || 'List 1',
               isCurrentOperatorList: true,
-              activeTimer: payload.activeTimer,
-              nextTimer: payload.nextTimer,
-              status: payload.status,
-              secondsRemaining: payload.secondsRemaining,
-              totalDurationSeconds: payload.totalDurationSeconds,
-              formattedTime: payload.formattedTime,
-              isOvertime: payload.isOvertime,
-              progressPercent: payload.progressPercent,
-              alertColor: payload.alertColor,
-              alertFlash: payload.alertFlash,
-              alertOnOff: payload.alertOnOff,
-              activeAlertLevel: payload.activeAlertLevel,
+              activeTimer: payload?.activeTimer || null,
+              nextTimer: payload?.nextTimer || null,
+              status: payload?.status || 'idle',
+              secondsRemaining: payload?.secondsRemaining ?? 0,
+              totalDurationSeconds: payload?.totalDurationSeconds ?? 0,
+              formattedTime: payload?.formattedTime || '00:00:00',
+              isOvertime: Boolean(payload?.isOvertime),
+              progressPercent: payload?.progressPercent ?? 0,
+              alertColor: payload?.alertColor,
+              alertFlash: Boolean(payload?.alertFlash),
+              alertOnOff: Boolean(payload?.alertOnOff),
+              activeAlertLevel: payload?.activeAlertLevel || 'none',
               totalCuesCount: 1,
               runningCuesCount: 0,
-              backgroundImageUrl: payload.backgroundImageUrl,
-              logoImageUrl: payload.logoImageUrl,
+              backgroundImageUrl: payload?.backgroundImageUrl || '',
+              logoImageUrl: payload?.logoImageUrl || '',
             },
           ];
 
@@ -888,10 +1076,17 @@ class NdiStreamService {
       );
 
       // Time Digits
+      const isDigitalClockCue = item.activeTimer?.type === 'digital_clock';
+      const isEmptyCue = item.activeTimer?.type === 'empty';
       const formatted = formatSeconds(item.secondsRemaining, true, item.isOvertime, prefs);
-      const displayTime = item.isOvertime
-        ? `+${formatted.replace(/^[+-]/, '')}`
-        : formatted.replace(/^-/, '+');
+      const displayTime =
+        payload?.isClockMode || isDigitalClockCue
+          ? formatClock(new Date(), undefined, prefs)
+          : isEmptyCue
+          ? '--:--:--'
+          : item.isOvertime
+          ? `+${formatted.replace(/^[+-]/, '')}`
+          : formatted.replace(/^-/, '+');
       ctx.fillStyle = resolveDisplayDigitColor({
         isOvertime: item.isOvertime,
         isPaused: item.status === 'paused',
@@ -899,11 +1094,25 @@ class NdiStreamService {
         alertColor: item.alertColor,
         prefs,
       });
-      ctx.font = `bold ${Math.round(cellH * 0.28)}px monospace`;
-      ctx.fillText(displayTime, x + cellW / 2, y + cellH * 0.64);
+      const mtElements = getTargetElements(prefs, 'multitimer');
+      const mtCountdownFont = resolveFontFamily(mtElements.countdown?.font);
+      const mtIsBold = (mtElements.countdown?.fontStyle || 'Bold').toLowerCase().includes('bold');
+      const mtIsItalic = (mtElements.countdown?.fontStyle || '').toLowerCase().includes('italic');
+      const tileFontPx = Math.round(cellH * 0.28);
+      ctx.font = `${mtIsItalic ? 'italic ' : ''}${mtIsBold ? 'bold ' : ''}${tileFontPx}px ${mtCountdownFont}`;
+      this.drawSpacedCountdownText(
+        ctx,
+        displayTime,
+        x + cellW / 2,
+        y + cellH * 0.64,
+        tileFontPx,
+        mtElements.colon?.vert ?? 0,
+        mtElements.countdown?.spacing ?? 0,
+        mtElements.colon?.horiz ?? 0
+      );
     });
 
-    if (payload.activeMessage && payload.activeMessage.visible && payload.activeMessage.text) {
+    if (payload?.activeMessage && payload.activeMessage.visible && payload.activeMessage.text) {
       const msgH = Math.round(ch * 0.12);
       ctx.fillStyle = 'rgba(10, 14, 22, 0.92)';
       ctx.fillRect(0, 0, cw, msgH);
@@ -914,6 +1123,61 @@ class NdiStreamService {
       ctx.textBaseline = 'middle';
       ctx.fillText(payload.activeMessage.text, cw / 2, msgH / 2);
     }
+  }
+
+  private drawSpacedCountdownText(
+    ctx: CanvasRenderingContext2D,
+    text: string,
+    centerX: number,
+    centerY: number,
+    fontPx: number,
+    colonVert: number,
+    digitSpacing: number,
+    colonHoriz: number
+  ): void {
+    if (!colonVert && !digitSpacing && !colonHoriz) {
+      ctx.fillText(text, centerX, centerY);
+      return;
+    }
+
+    const chars = Array.from(text);
+    const digitGapPx = digitSpacing * COUNTDOWN_DIGIT_SPACING_EM_STEP * fontPx;
+    const colonGapPx = colonHoriz * COUNTDOWN_DIGIT_SPACING_EM_STEP * fontPx;
+    const colonOffsetYPx = -colonVert * COUNTDOWN_COLON_OFFSET_EM_STEP * fontPx;
+
+    const widths = chars.map((ch) => ctx.measureText(ch).width);
+    let totalWidth = 0;
+    for (let i = 0; i < chars.length; i++) {
+      const isColon = chars[i] === ':';
+      if (isColon) totalWidth += colonGapPx;
+      totalWidth += widths[i];
+      if (i < chars.length - 1) {
+        totalWidth += digitGapPx;
+        if (isColon) totalWidth += colonGapPx;
+      }
+    }
+
+    const prevAlign = ctx.textAlign;
+    ctx.textAlign = 'left';
+    let cursorX = centerX - totalWidth / 2;
+
+    for (let i = 0; i < chars.length; i++) {
+      const ch = chars[i];
+      const isColon = ch === ':';
+      if (isColon) {
+        cursorX += colonGapPx;
+      }
+      ctx.fillText(ch, cursorX, centerY + (isColon ? colonOffsetYPx : 0));
+      cursorX += widths[i];
+      if (i < chars.length - 1) {
+        cursorX += digitGapPx;
+        if (isColon) {
+          cursorX += colonGapPx;
+        }
+      }
+    }
+
+    ctx.textAlign = prevAlign;
   }
 
   private async transmitEncodedFrames(
@@ -927,10 +1191,19 @@ class NdiStreamService {
     >
   ): Promise<void> {
     this.isSendingFrame = true;
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    this.activeFrameAbortController = controller;
+    const timeoutId = controller
+      ? setTimeout(() => {
+          controller.abort();
+        }, 1500)
+      : null;
+
     try {
       const res = await fetch(resolveApiUrl('/api/lan/ndi/frame'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller?.signal,
         body: JSON.stringify({
           frameDataUrl: primaryFrame?.frameDataUrl,
           rawRgbaBase64: primaryFrame?.rawRgbaBase64,
@@ -950,8 +1223,14 @@ class NdiStreamService {
         }
       }
     } catch {
-      // Ignore transient network errors
+      // Ignore transient network errors or aborts
     } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      if (this.activeFrameAbortController === controller) {
+        this.activeFrameAbortController = null;
+      }
       this.isSendingFrame = false;
     }
   }

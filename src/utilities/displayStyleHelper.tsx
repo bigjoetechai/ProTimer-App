@@ -17,8 +17,18 @@ import {
   SizesPositionElementId,
   SizesPositionTargetExtras,
   SizesPositionTargetTab,
+  ensureBebasCountdownDefault,
 } from '../types';
 import { storageService } from '../services/storageService';
+
+if (typeof document !== 'undefined' && (document as any).fonts?.load) {
+  try {
+    (document as any).fonts.load('700 48px "Bebas Neue"').catch(() => {});
+    (document as any).fonts.load('400 48px "Bebas Neue"').catch(() => {});
+  } catch {
+    // Ignore font preload errors
+  }
+}
 
 export function sanitizeImageUrl(url?: string | null): string {
   if (!url || url === '__CACHED__') return '';
@@ -54,7 +64,7 @@ export function useLivePreferences(payloadPrefs?: AppPreferences): AppPreference
       payloadPrefs.listLogoImages &&
       Object.keys(payloadPrefs.listLogoImages).length > 0;
 
-    return {
+    return ensureBebasCountdownDefault({
       ...DEFAULT_PREFERENCES,
       ...localPrefs,
       ...payloadPrefs,
@@ -70,13 +80,14 @@ export function useLivePreferences(payloadPrefs?: AppPreferences): AppPreference
       listLogoImages: hasPayloadListLogo
         ? payloadPrefs.listLogoImages
         : localPrefs.listLogoImages || {},
-    };
+    });
   }
 
-  return localPrefs;
+  return ensureBebasCountdownDefault(localPrefs);
 }
 
 export const COMMON_SYSTEM_FONTS: string[] = [
+  'Bebas Neue',
   'Verdana',
   'Arial',
   'Arial Black',
@@ -185,7 +196,13 @@ function detectCanvasInstalledFonts(candidates: string[]): string[] {
 
     const available: string[] = [];
     for (const font of candidates) {
-      if (font === 'System UI' || font === 'Verdana' || font === 'Arial' || font === 'Segoe UI') {
+      if (
+        font === 'System UI' ||
+        font === 'Verdana' ||
+        font === 'Arial' ||
+        font === 'Segoe UI' ||
+        font === 'Bebas Neue'
+      ) {
         available.push(font);
         continue;
       }
@@ -253,9 +270,11 @@ export async function loadAllSystemFonts(): Promise<string[]> {
       }
     }
 
-    const sorted = Array.from(fontSet).sort((a, b) =>
-      a.localeCompare(b, undefined, { sensitivity: 'base' })
-    );
+    const allUnique = new Set<string>(['Bebas Neue', 'Verdana', ...Array.from(fontSet)]);
+    const remaining = Array.from(allUnique)
+      .filter((f) => f !== 'Bebas Neue')
+      .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+    const sorted = ['Bebas Neue', ...remaining];
     cachedDetectedFonts = sorted;
     return sorted;
   })();
@@ -264,22 +283,31 @@ export async function loadAllSystemFonts(): Promise<string[]> {
 }
 
 /**
- * Hook that returns all available system fonts (common + OS installed fonts).
+ * Hook that returns all available system fonts (common + OS installed fonts),
+ * always keeping 'Bebas Neue' at the top of the list.
  */
 export function useSystemFonts(): string[] {
-  const [fonts, setFonts] = useState<string[]>(() =>
-    cachedDetectedFonts && cachedDetectedFonts.length > 0
-      ? cachedDetectedFonts
-      : [...COMMON_SYSTEM_FONTS].sort((a, b) =>
-          a.localeCompare(b, undefined, { sensitivity: 'base' })
-        )
-  );
+  const [fonts, setFonts] = useState<string[]>(() => {
+    const base =
+      cachedDetectedFonts && cachedDetectedFonts.length > 0
+        ? cachedDetectedFonts
+        : COMMON_SYSTEM_FONTS;
+    const unique = Array.from(new Set(['Bebas Neue', ...base]));
+    const rest = unique
+      .filter((f) => f !== 'Bebas Neue')
+      .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+    return ['Bebas Neue', ...rest];
+  });
 
   useEffect(() => {
     let mounted = true;
     loadAllSystemFonts().then((resolved) => {
       if (mounted && resolved.length > 0) {
-        setFonts(resolved);
+        const unique = Array.from(new Set(['Bebas Neue', ...resolved]));
+        const rest = unique
+          .filter((f) => f !== 'Bebas Neue')
+          .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+        setFonts(['Bebas Neue', ...rest]);
       }
     });
     return () => {
@@ -327,6 +355,8 @@ export function resolveFontFamily(fontName?: string): string {
     case 'Garamond':
     case 'Palatino Linotype':
       return `"${clean.replace(/"/g, '')}", Georgia, Cambria, "Times New Roman", Times, serif`;
+    case 'Bebas Neue':
+      return '"Bebas Neue", Impact, Haettenschweiler, "Franklin Gothic Bold", "Arial Narrow", sans-serif';
     case 'Impact':
       return 'Impact, Haettenschweiler, "Franklin Gothic Bold", Charcoal, sans-serif';
     default: {
@@ -356,7 +386,7 @@ export function getTargetElements(
   prefs: AppPreferences | null | undefined,
   target: SizesPositionTargetTab
 ): Record<SizesPositionElementId, SizesPositionElementConfig> {
-  const effectivePrefs = prefs || DEFAULT_PREFERENCES;
+  const effectivePrefs = ensureBebasCountdownDefault(prefs || DEFAULT_PREFERENCES);
   const targetMap = effectivePrefs.sizesAndPositionsByTarget?.[target];
   const fallbackMap = effectivePrefs.sizesAndPositionsByTarget?.fullscreen_ndi_preview;
 
@@ -368,6 +398,20 @@ export function getTargetElements(
       ...(targetMap?.[key] || {}),
     };
   });
+
+  if (typeof effectivePrefs.countdownSpacing === 'number') {
+    result.countdown = {
+      ...result.countdown,
+      spacing: effectivePrefs.countdownSpacing,
+    };
+  }
+  if (typeof effectivePrefs.countdownColonSpacing === 'number') {
+    result.colon = {
+      ...result.colon,
+      horiz: effectivePrefs.countdownColonSpacing,
+    };
+  }
+
   return result;
 }
 
@@ -529,34 +573,121 @@ export function resolveDisplayDigitColor(params: {
   return p.normalDigitsColor || '#ffffff';
 }
 
+export const COUNTDOWN_DIGIT_SPACING_EM_STEP = 0.015;
+export const COUNTDOWN_COLON_OFFSET_EM_STEP = 0.035;
+
 /**
- * Renders formatted time string while applying the vertical colon offset (`colon.vert`)
- * from Sizes & Positions.
+ * Resolves effective countdown spacing values (vertical colon offset,
+ * HH:MM:SS character spacing, and horizontal colon gap) from preferences and target elements.
+ */
+export function getCountdownSpacingValues(
+  prefs: AppPreferences | null | undefined,
+  elements?: Record<SizesPositionElementId, SizesPositionElementConfig>
+): {
+  colonVert: number;
+  digitSpacing: number;
+  colonHoriz: number;
+} {
+  const elemSpacing = elements?.countdown?.spacing;
+  const elemColonHoriz = elements?.colon?.horiz;
+  return {
+    colonVert: elements?.colon?.vert ?? 0,
+    digitSpacing:
+      typeof prefs?.countdownSpacing === 'number' && (elemSpacing === undefined || elemSpacing === 0)
+        ? prefs.countdownSpacing
+        : elemSpacing ?? prefs?.countdownSpacing ?? 0,
+    colonHoriz:
+      typeof prefs?.countdownColonSpacing === 'number' && (elemColonHoriz === undefined || elemColonHoriz === 0)
+        ? prefs.countdownColonSpacing
+        : elemColonHoriz ?? prefs?.countdownColonSpacing ?? 0,
+  };
+}
+
+/**
+ * Renders formatted time string (`HH:MM:SS`) while applying:
+ * - Vertical colon offset (`colon.vert`)
+ * - Digit / character spacing (`countdown.spacing`)
+ * - Horizontal colon spacing (`colon.horiz`)
+ * Ensures centered text stays optically centered with zero trailing spacing shift.
  */
 export function renderTimeWithColonOffset(
   displayTime: string,
-  colonVert?: number
+  colonVert?: number,
+  digitSpacing?: number,
+  colonHoriz?: number
 ): React.ReactNode {
   const offset = colonVert ?? 0;
-  if (!offset || !displayTime.includes(':')) {
+  const charGap = digitSpacing ?? 0;
+  const colonGap = colonHoriz ?? 0;
+
+  if (!offset && !charGap && !colonGap) {
     return displayTime;
   }
-  const parts = displayTime.split(':');
-  return parts.map((part, idx) => (
-    <React.Fragment key={idx}>
-      <span>{part}</span>
-      {idx < parts.length - 1 && (
-        <span
-          style={{
-            display: 'inline-block',
-            transform: `translateY(${-offset * 0.035}em)`,
-          }}
-        >
-          :
-        </span>
-      )}
-    </React.Fragment>
-  ));
+
+  // Fast path when only vertical colon offset is active
+  if (!charGap && !colonGap) {
+    if (!displayTime.includes(':')) {
+      return displayTime;
+    }
+    const parts = displayTime.split(':');
+    return parts.map((part, idx) => (
+      <React.Fragment key={idx}>
+        <span>{part}</span>
+        {idx < parts.length - 1 && (
+          <span
+            style={{
+              display: 'inline-block',
+              transform: `translateY(${(-offset * COUNTDOWN_COLON_OFFSET_EM_STEP).toFixed(4)}em)`,
+            }}
+          >
+            :
+          </span>
+        )}
+      </React.Fragment>
+    ));
+  }
+
+  const chars = Array.from(displayTime);
+  const lastIdx = chars.length - 1;
+  const digitEm = charGap * COUNTDOWN_DIGIT_SPACING_EM_STEP;
+  const colonEm = colonGap * COUNTDOWN_DIGIT_SPACING_EM_STEP;
+
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'baseline',
+        justifyContent: 'center',
+        letterSpacing: charGap !== 0 ? '0em' : undefined,
+      }}
+    >
+      {chars.map((ch, idx) => {
+        const isColon = ch === ':';
+        const isLast = idx === lastIdx;
+        const marginLeftEm = isColon && colonEm !== 0 ? colonEm : 0;
+        const marginRightEm =
+          (isLast ? 0 : digitEm) + (isColon && !isLast ? colonEm : 0);
+
+        const charStyle: React.CSSProperties = {};
+        if (isColon && offset !== 0) {
+          charStyle.display = 'inline-block';
+          charStyle.transform = `translateY(${(-offset * COUNTDOWN_COLON_OFFSET_EM_STEP).toFixed(4)}em)`;
+        }
+        if (marginLeftEm !== 0) {
+          charStyle.marginLeft = `${marginLeftEm.toFixed(4)}em`;
+        }
+        if (marginRightEm !== 0) {
+          charStyle.marginRight = `${marginRightEm.toFixed(4)}em`;
+        }
+
+        return (
+          <span key={idx} style={charStyle}>
+            {ch}
+          </span>
+        );
+      })}
+    </span>
+  );
 }
 
 /**

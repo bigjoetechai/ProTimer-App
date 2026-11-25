@@ -637,7 +637,12 @@ export const MultiPreviewDisplay: React.FC = () => {
                         : ''
                     }`}
                   >
-                    {renderTimeWithColonOffset(displayTime, mtElements.colon?.vert)}
+                    {renderTimeWithColonOffset(
+                      displayTime,
+                      mtElements.colon?.vert,
+                      mtElements.countdown?.spacing,
+                      mtElements.colon?.horiz
+                    )}
                   </div>
                 </div>
 

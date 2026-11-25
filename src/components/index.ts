@@ -8,4 +8,6 @@ export * from './FloatingPreviewWindow';
 export * from './FloatingMultiPreviewWindow';
 export * from './FloatingPresenterWindow';
 export * from './TimerHistoryLogView';
+export * from './KeyboardShortcutsModal';
+export * from './SaveListAsTemplateModal';
 

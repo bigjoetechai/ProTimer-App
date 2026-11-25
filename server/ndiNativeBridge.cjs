@@ -704,21 +704,27 @@ class NdiNativeBridge {
     port,
   }) {
     const cleanName = (sourceName && String(sourceName).trim()) || 'ProTimer (List 1)';
-    const allNames = Array.from(
-      new Set(
-        (Array.isArray(activeSourceNames) && activeSourceNames.length > 0
-          ? activeSourceNames
-          : [cleanName]
+    const explicitNames = Array.isArray(activeSourceNames)
+      ? Array.from(
+          new Set(
+            activeSourceNames
+              .map((s) => (s ? String(s).trim() : ''))
+              .filter(Boolean)
+          )
         )
-          .map((s) => (s ? String(s).trim() : ''))
-          .filter(Boolean)
-      )
-    );
-    if (!allNames.includes(cleanName) && cleanName) {
-      allNames.unshift(cleanName);
+      : null;
+
+    // If an explicit empty activeSourceNames array was passed, stop all senders cleanly.
+    if (explicitNames !== null && explicitNames.length === 0) {
+      return this.stopSender();
     }
 
-    this.activeSourceName = cleanName;
+    // When activeSourceNames is explicitly provided, treat it as the authoritative
+    // list of active per-list NDI senders — never force-inject an inactive tab's cleanName.
+    const allNames =
+      explicitNames && explicitNames.length > 0 ? explicitNames : [cleanName];
+
+    this.activeSourceName = allNames.includes(cleanName) ? cleanName : allNames[0];
     this.activeSourceNames = allNames;
 
     const cleanGroups =
@@ -832,9 +838,13 @@ class NdiNativeBridge {
     }
     if (!this.ndiLib) return false;
 
+    // Copy into an isolated Node Buffer so Koffi's background C++ worker thread
+    // always reads stable memory independent of Electron NativeImage lifetime.
     const buf = Buffer.isBuffer(rawBuffer)
-      ? rawBuffer
-      : Buffer.from(rawBuffer.buffer, rawBuffer.byteOffset, expectedLen);
+      ? Buffer.from(rawBuffer.subarray(0, expectedLen))
+      : Buffer.from(
+          new Uint8Array(rawBuffer.buffer, rawBuffer.byteOffset, expectedLen)
+        );
 
     this.lastWidth = width;
     this.lastHeight = height;
@@ -855,15 +865,33 @@ class NdiNativeBridge {
       (targetSourceName && String(targetSourceName).trim()) ||
       this.activeSourceName ||
       this.activeSourceNames[0] ||
-      'ProTimer (List 1)';
+      '';
 
-    const entry = this.ensureNamedSender(resolvedName, this.activeGroups);
+    // CRITICAL: Never resurrect a stopped or unauthorized NDI sender from a late
+    // in-flight frame POST arriving after a list tab (or all NDI) was toggled OFF.
+    if (
+      !resolvedName ||
+      !Array.isArray(this.activeSourceNames) ||
+      this.activeSourceNames.length === 0 ||
+      !this.activeSourceNames.includes(resolvedName)
+    ) {
+      return false;
+    }
+
+    const entry =
+      this.sendersByName.get(resolvedName) ||
+      this.ensureNamedSender(resolvedName, this.activeGroups);
     if (!entry) return false;
 
     entry.lastBuffer = buf;
     entry.width = width;
     entry.height = height;
     entry.fourCC = fourCC;
+
+    if (this.inFlightInstances.has(entry.instance)) {
+      entry.pendingImmediatePush = true;
+      return true;
+    }
 
     return this.pushBufferToSenderEntry(entry);
   }
@@ -905,6 +933,7 @@ class NdiNativeBridge {
       };
 
       if (typeof this.fnSendVideoV2.async === 'function') {
+        entry.pendingImmediatePush = false;
         this.inFlightInstances.add(instance);
         this.inFlightBuffers.set(instance, buffer);
         this.fnSendVideoV2.async(instance, frameStruct, (err) => {
@@ -912,6 +941,13 @@ class NdiNativeBridge {
           this.inFlightBuffers.delete(instance);
           if (err) {
             this.loadError = `NDI async frame error: ${err.message || String(err)}`;
+          }
+          if (
+            entry.pendingImmediatePush &&
+            !this.pendingDestroyInstances.has(instance)
+          ) {
+            entry.pendingImmediatePush = false;
+            this.pushBufferToSenderEntry(entry);
           }
         });
       } else {

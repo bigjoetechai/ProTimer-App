@@ -23,6 +23,7 @@ import { timerManagerService, computeActiveAlert } from './timerManager';
 import { storageService } from './storageService';
 import { generateId } from '../utilities/idGenerator';
 import { resolveApiUrl } from '../utils/apiUrl';
+import { loadPopoutWindowBounds } from '../utilities/windowBoundsStorage';
 
 export type DisplaySyncListener = (payload: DisplaySyncPayload) => void;
 
@@ -1374,10 +1375,27 @@ class DisplaySyncService {
     const url = `${window.location.origin}${window.location.pathname}?display=${target}${listQuery}`;
     const windowName = listId ? `ProTimer_${target}_${listId}_Window` : `ProTimer_${target}_Window`;
     const isCompactPopout = target === 'preview' || target === 'presenter';
-    const width = bounds?.width || (isCompactPopout ? 360 : 1280);
-    const height = bounds?.height || (isCompactPopout ? 240 : 720);
-    const left = bounds?.x ?? (target === 'preview' ? Math.max(20, window.screen.availWidth - 390) : 28);
-    const top = bounds?.y ?? (isCompactPopout ? 60 : 0);
+    const defaultWidth = isCompactPopout ? 360 : 1280;
+    const defaultHeight = isCompactPopout ? 240 : 720;
+    const defaultLeft =
+      target === 'preview' ? Math.max(20, window.screen.availWidth - 390) : isCompactPopout ? 28 : 0;
+    const defaultTop = isCompactPopout ? 60 : 0;
+
+    const resolvedBounds =
+      bounds ||
+      (target === 'preview' || target === 'presenter'
+        ? loadPopoutWindowBounds(
+            target,
+            { x: defaultLeft, y: defaultTop, width: defaultWidth, height: defaultHeight },
+            150,
+            90
+          )
+        : { x: defaultLeft, y: defaultTop, width: defaultWidth, height: defaultHeight });
+
+    const width = resolvedBounds.width;
+    const height = resolvedBounds.height;
+    const left = resolvedBounds.x;
+    const top = resolvedBounds.y;
     const features = `width=${width},height=${height},left=${left},top=${top},resizable=yes,menubar=no,toolbar=no,location=no,status=no`;
     const win = window.open(url, windowName, features);
     // Broadcast current state multiple times as the child window boots so it never misses initial sync

@@ -474,7 +474,12 @@ export const MultiFullscreenDisplay: React.FC<MultiFullscreenDisplayProps> = ({
                       transform: getElementOffsetTransform(countdownCfg, 2.5),
                     }}
                   >
-                    {renderTimeWithColonOffset(displayTime, mtElements.colon?.vert)}
+                    {renderTimeWithColonOffset(
+                      displayTime,
+                      mtElements.colon?.vert,
+                      mtElements.countdown?.spacing,
+                      mtElements.colon?.horiz
+                    )}
                   </div>
                 )}
               </div>

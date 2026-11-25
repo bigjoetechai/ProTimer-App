@@ -73,14 +73,14 @@ export const DigitDisplay: React.FC<DigitDisplayProps> = ({
     <div
       onClick={onClick}
       title={title}
-      className={`relative inline-flex items-center justify-center bg-black rounded-sm border select-none tabular-nums shadow-inner ${
-        localPrefs.smoothTransitions !== false ? 'transition-colors duration-200' : ''
-      } ${onClick ? 'cursor-pointer hover:border-cyan-500 transition-colors' : ''} ${sizeClasses[size]}`}
+      className={`relative inline-flex items-center justify-center bg-[#09090b] rounded-2xl border select-none tabular-nums ${
+        localPrefs.smoothTransitions !== false ? 'transition-all duration-200' : ''
+      } ${onClick ? 'cursor-pointer hover:border-cyan-500/80' : ''} ${sizeClasses[size]}`}
       style={{
-        borderColor: borderGlowColor ? `${borderGlowColor}99` : '#2b2f38',
+        borderColor: borderGlowColor ? `${borderGlowColor}aa` : 'rgba(255, 255, 255, 0.14)',
         boxShadow: borderGlowColor
-          ? `inset 0 0 16px ${borderGlowColor}25, 0 0 12px ${borderGlowColor}33`
-          : undefined,
+          ? `inset 0 1px 0 rgba(255,255,255,0.18), inset 0 0 18px ${borderGlowColor}26, 0 8px 20px rgba(0,0,0,0.48)`
+          : 'inset 0 1px 0 rgba(255,255,255,0.14), inset 0 -6px 14px rgba(0,0,0,0.65), 0 8px 20px rgba(0,0,0,0.45)',
       }}
     >
       <span
@@ -97,7 +97,12 @@ export const DigitDisplay: React.FC<DigitDisplayProps> = ({
           ...resolveFontStyleCss(countdownCfg?.fontStyle),
         }}
       >
-        {renderTimeWithColonOffset(displayTime, fsElements.colon?.vert)}
+        {renderTimeWithColonOffset(
+          displayTime,
+          fsElements.colon?.vert,
+          fsElements.countdown?.spacing,
+          fsElements.colon?.horiz
+        )}
       </span>
     </div>
   );

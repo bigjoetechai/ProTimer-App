@@ -240,46 +240,42 @@ export const TimerTable: React.FC<TimerTableProps> = ({
     );
   };
 
-  const headerBorder = isDark ? 'border-r border-[#1a2130] hover:bg-[#151c2b]' : 'border-r border-slate-200 hover:bg-slate-200';
+  const headerBorder = isDark ? 'border-r border-white/[0.06] hover:bg-white/[0.05]' : 'border-r border-slate-200 hover:bg-slate-200';
 
   return (
     <div className={`flex-1 flex flex-col min-h-0 select-none relative transition-colors duration-150 ${
-      isDark ? 'bg-[#080a0f]' : 'bg-slate-50'
+      isDark ? 'bg-[#121215]' : 'bg-slate-50'
     }`}>
       {/* Search and Table Control Bar */}
       <div
         style={
           activeListColor
             ? {
-                borderBottomColor: `${activeListColor}99`,
+                borderBottomColor: `${activeListColor}88`,
                 background: isDark
-                  ? `linear-gradient(90deg, ${activeListColor}45 0%, ${activeListColor}1f 40%, #0c1017 85%)`
+                  ? `linear-gradient(90deg, ${activeListColor}36 0%, ${activeListColor}18 40%, rgba(28,28,32,0.88) 85%)`
                   : `linear-gradient(90deg, ${activeListColor}38 0%, ${activeListColor}18 40%, #f1f5f9 85%)`,
               }
             : undefined
         }
-        className={`h-8 border-b px-3 flex items-center justify-between gap-3 text-xs transition-colors ${
-          isDark ? 'bg-[#0c1017] border-[#1b2333]' : 'bg-slate-100 border-slate-200'
+        className={`h-10 border-b px-3 flex items-center justify-between gap-3 text-xs transition-colors ${
+          isDark ? 'bg-[#1a1a1e]/90 border-white/[0.08]' : 'bg-slate-100 border-slate-200'
         }`}
       >
         {/* Search Input */}
         <div className="relative flex items-center max-w-xs w-full">
-          <Search className={`w-3.5 h-3.5 absolute left-2 pointer-events-none ${isDark ? 'text-neutral-500' : 'text-slate-400'}`} />
+          <Search className={`w-3.5 h-3.5 absolute left-3 pointer-events-none ${isDark ? 'text-neutral-500' : 'text-slate-400'}`} />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search cues by name or type..."
-            className={`w-full rounded pl-7 pr-6 py-0.5 text-xs transition-colors focus:outline-hidden focus:border-cyan-500 border ${
-              isDark 
-                ? 'bg-[#121722] border-[#222e42] text-white placeholder-neutral-500' 
-                : 'bg-white border-slate-300 text-slate-900 placeholder-slate-400'
-            }`}
+            className="glass-input w-full rounded-full pl-8 pr-7 py-1 text-xs focus:outline-hidden focus:border-cyan-400"
           />
           {searchQuery && (
             <button
               onClick={() => setSearchQuery('')}
-              className={`absolute right-2 cursor-pointer ${isDark ? 'text-neutral-400 hover:text-white' : 'text-slate-500 hover:text-slate-900'}`}
+              className={`absolute right-2.5 cursor-pointer ${isDark ? 'text-neutral-400 hover:text-white' : 'text-slate-500 hover:text-slate-900'}`}
             >
               <X className="w-3 h-3" />
             </button>
@@ -290,7 +286,7 @@ export const TimerTable: React.FC<TimerTableProps> = ({
         <div className="flex items-center gap-2.5">
           {copyNotice && (
             <span
-              className={`px-2 py-0.5 rounded text-[11px] font-medium flex items-center gap-1 border animate-in fade-in ${
+              className={`px-2.5 py-0.5 rounded-full text-[11px] font-medium flex items-center gap-1 border animate-in fade-in ${
                 isDark
                   ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300'
                   : 'bg-emerald-50 border-emerald-300 text-emerald-800'
@@ -308,11 +304,7 @@ export const TimerTable: React.FC<TimerTableProps> = ({
                 type="button"
                 onClick={() => setIsListColorOpen((prev) => !prev)}
                 title="Change color of this cue list & list tab"
-                className={`px-2 py-0.5 rounded border text-[11px] font-medium flex items-center gap-1.5 transition-colors cursor-pointer ${
-                  isDark
-                    ? 'bg-[#121722] hover:bg-[#192131] border-[#232f44] text-neutral-300 hover:text-white'
-                    : 'bg-white hover:bg-slate-200 border-slate-300 text-slate-700 hover:text-slate-900'
-                }`}
+                className="glass-btn glass-btn-subtle px-3 py-1 rounded-full text-[11px] font-medium flex items-center gap-1.5 cursor-pointer"
               >
                 {activeListColor ? (
                   <span
@@ -320,15 +312,15 @@ export const TimerTable: React.FC<TimerTableProps> = ({
                     style={{ backgroundColor: activeListColor }}
                   />
                 ) : (
-                  <Palette className="w-3 h-3 text-cyan-500" />
+                  <Palette className="w-3 h-3 text-cyan-400" />
                 )}
                 <span>Cue List Color</span>
               </button>
 
               {isListColorOpen && (
                 <div
-                  className={`absolute right-0 top-7 z-50 p-2.5 rounded-lg shadow-2xl border w-52 ${
-                    isDark ? 'bg-[#10141d] border-[#263145] text-neutral-200' : 'bg-white border-slate-300 text-slate-800'
+                  className={`glass-card absolute right-0 top-8 z-50 p-3 rounded-2xl w-52 ${
+                    isDark ? 'text-neutral-200' : 'text-slate-800'
                   }`}
                 >
                   <div className={`text-[10px] font-semibold uppercase tracking-wider mb-2 ${
@@ -379,20 +371,16 @@ export const TimerTable: React.FC<TimerTableProps> = ({
                 type="button"
                 onClick={() => setIsCopyListOpen((prev) => !prev)}
                 title="Copy all cues in this cue list to another list tab"
-                className={`px-2 py-0.5 rounded border text-[11px] font-medium flex items-center gap-1.5 transition-colors cursor-pointer ${
-                  isDark
-                    ? 'bg-[#121722] hover:bg-[#192131] border-[#232f44] text-neutral-300 hover:text-white'
-                    : 'bg-white hover:bg-slate-200 border-slate-300 text-slate-700 hover:text-slate-900'
-                }`}
+                className="glass-btn glass-btn-subtle px-3 py-1 rounded-full text-[11px] font-medium flex items-center gap-1.5 cursor-pointer"
               >
-                <FolderInput className="w-3 h-3 text-cyan-500" />
+                <FolderInput className="w-3 h-3 text-cyan-400" />
                 <span>Copy Cue List To...</span>
               </button>
 
               {isCopyListOpen && (
                 <div
-                  className={`absolute right-0 top-7 z-50 p-2.5 rounded-lg shadow-2xl border w-64 ${
-                    isDark ? 'bg-[#10141d] border-[#263145] text-neutral-200' : 'bg-white border-slate-300 text-slate-800'
+                  className={`glass-card absolute right-0 top-8 z-50 p-3 rounded-2xl w-64 ${
+                    isDark ? 'text-neutral-200' : 'text-slate-800'
                   }`}
                 >
                   <div className={`text-[10px] font-semibold uppercase tracking-wider mb-1.5 ${
@@ -496,7 +484,7 @@ export const TimerTable: React.FC<TimerTableProps> = ({
             }
             className={`sticky top-0 z-10 text-[11px] font-semibold uppercase tracking-wider border-b shadow-2xs ${
               isDark 
-                ? 'bg-[#0f141f] text-neutral-300 border-[#1f2838]' 
+                ? 'bg-[#1b1b20]/95 backdrop-blur-md text-neutral-300 border-white/[0.08]' 
                 : 'bg-slate-100 text-slate-700 border-slate-200'
             }`}
           >
@@ -624,17 +612,13 @@ export const TimerTable: React.FC<TimerTableProps> = ({
         {/* Empty state / Click to add timer footer */}
         <div
           onClick={onAddNew}
-          className={`py-3.5 px-4 flex flex-col items-center justify-center cursor-pointer transition-colors group border-t border-dashed ${
+          className={`py-4 px-4 flex flex-col items-center justify-center cursor-pointer transition-colors group border-t border-dashed ${
             isDark 
-              ? 'hover:bg-[#111722]/50 border-[#1a2233]' 
+              ? 'hover:bg-white/[0.03] border-white/[0.09]' 
               : 'hover:bg-slate-100/70 border-slate-300'
           }`}
         >
-          <div className={`w-8 h-8 rounded-full border flex items-center justify-center transition-all mb-1.5 ${
-            isDark 
-              ? 'bg-[#0c1018] border-neutral-700/80 text-neutral-400 group-hover:border-cyan-500 group-hover:text-cyan-400 group-hover:scale-105' 
-              : 'bg-white border-slate-300 text-slate-500 group-hover:border-cyan-600 group-hover:text-cyan-600 group-hover:scale-105 shadow-2xs'
-          }`}>
+          <div className="glass-btn glass-btn-subtle w-9 h-9 rounded-full flex items-center justify-center mb-1.5 group-hover:text-cyan-400">
             <Plus className="w-4 h-4" />
           </div>
           <span className={`text-xs font-medium transition-colors ${

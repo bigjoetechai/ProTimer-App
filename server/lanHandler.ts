@@ -159,8 +159,11 @@ function getControlPagesCountByList(): {
   return { mobileByList, desktopByList, totalByList };
 }
 
-// Live NDI MJPEG / Multipart stream clients on the network
-const ndiStreamClients: Set<ServerResponse> = new Set();
+// Live NDI MJPEG / Multipart stream clients on the network, keyed with optional per-list filter
+const ndiStreamClients: Map<
+  ServerResponse,
+  { listId: string | null; mode: 'single' | 'multi' | null }
+> = new Map();
 
 export function getLocalNetworkInterfaces(): Array<{ name: string; address: string }> {
   const interfaces = os.networkInterfaces();
@@ -194,7 +197,24 @@ export function broadcastSse(data: unknown) {
   }
 }
 
-function pushFrameToNdiClients(dataUrl: string) {
+function writeMjpegFrame(res: ServerResponse, dataUrl: string): boolean {
+  const commaIdx = dataUrl.indexOf(',');
+  if (commaIdx === -1) return false;
+  const headerPart = dataUrl.slice(0, commaIdx);
+  const base64Part = dataUrl.slice(commaIdx + 1);
+  const mimeMatch = headerPart.match(/^data:([^;]+);base64$/);
+  const contentType = mimeMatch ? mimeMatch[1] : 'image/png';
+  const buffer = Buffer.from(base64Part, 'base64');
+
+  res.write(`--ndi_frame\r\n`);
+  res.write(`Content-Type: ${contentType}\r\n`);
+  res.write(`Content-Length: ${buffer.length}\r\n\r\n`);
+  res.write(buffer);
+  res.write(`\r\n`);
+  return true;
+}
+
+function pushFrameToNdiClients(dataUrl: string, targetListId: string | null = null) {
   if (ndiStreamClients.size === 0 || !dataUrl) return;
   const commaIdx = dataUrl.indexOf(',');
   if (commaIdx === -1) return;
@@ -204,7 +224,15 @@ function pushFrameToNdiClients(dataUrl: string) {
   const contentType = mimeMatch ? mimeMatch[1] : 'image/png';
   const buffer = Buffer.from(base64Part, 'base64');
 
-  for (const res of ndiStreamClients) {
+  for (const [res, meta] of ndiStreamClients.entries()) {
+    // Clients pinned to a specific listId only receive frames for that exact listId.
+    // Clients with listId === null receive the primary / multi stream frame.
+    if (targetListId !== null) {
+      if (meta.listId !== targetListId) continue;
+    } else {
+      if (meta.listId !== null) continue;
+    }
+
     try {
       res.write(`--ndi_frame\r\n`);
       res.write(`Content-Type: ${contentType}\r\n`);
@@ -712,6 +740,26 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
     const primaryIp = ips[0] || 'localhost';
     const nativeDiagnostics = ndiNativeBridge.getRuntimeDiagnostics();
     const nativeReceivers = Number(nativeDiagnostics?.connectedReceivers) || 0;
+    const perListCaptureUrls: Record<
+      string,
+      {
+        sourceName: string;
+        active: boolean;
+        browserSourceUrl: string;
+        mjpegStreamUrl: string;
+        liveFrameUrl: string;
+      }
+    > = {};
+    for (const [lid, sName] of Object.entries(state.ndiStream.sourceNamesByList || {})) {
+      const encodedId = encodeURIComponent(lid);
+      perListCaptureUrls[lid] = {
+        sourceName: sName,
+        active: Boolean(state.ndiStream.multiActive || state.ndiStream.activeByList?.[lid]),
+        browserSourceUrl: `http://${primaryIp}:${activeServerPort}/?display=ndi&listId=${encodedId}`,
+        mjpegStreamUrl: `http://${primaryIp}:${activeServerPort}/api/lan/ndi/mjpeg?listId=${encodedId}`,
+        liveFrameUrl: `http://${primaryIp}:${activeServerPort}/api/lan/ndi/frame.png?listId=${encodedId}`,
+      };
+    }
     sendJson(200, {
       ...state.ndiStream,
       ips,
@@ -723,6 +771,7 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
         mjpegStreamUrl: `http://${primaryIp}:${activeServerPort}/api/lan/ndi/mjpeg`,
         liveFrameUrl: `http://${primaryIp}:${activeServerPort}/api/lan/ndi/frame.png`,
       },
+      perListCaptureUrls,
     });
     return true;
   }
@@ -778,6 +827,17 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
 
     let nativeDiagnostics;
     if (nextActive) {
+      // Prune cached frames for any list tab that was deactivated so stale images are never served
+      if (!state.ndiStream.multiActive) {
+        for (const cachedListId of Object.keys(state.latestNdiFramesByList)) {
+          if (!state.ndiStream.activeByList?.[cachedListId]) {
+            delete state.latestNdiFramesByList[cachedListId];
+          }
+        }
+        const remainingFrames = Object.values(state.latestNdiFramesByList);
+        state.latestNdiFrameDataUrl =
+          remainingFrames.length > 0 ? remainingFrames[0].frameDataUrl : null;
+      }
       nativeDiagnostics = ndiNativeBridge.startSender({
         sourceName: state.ndiStream.sourceName,
         activeSourceNames: state.ndiStream.activeSourceNames,
@@ -818,33 +878,42 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
       sendJson(413, { success: false, error: 'Frame payload too large' });
       return true;
     }
+
+    // Ignore late in-flight frame uploads after NDI output has been turned OFF
+    if (!state.ndiStream.active) {
+      const nativeReceivers = ndiNativeBridge.getConnectedReceiversCount();
+      sendJson(200, {
+        success: true,
+        ignored: true,
+        receiversCount: ndiStreamClients.size + nativeReceivers,
+        frameCount: state.ndiStream.frameCount,
+      });
+      return true;
+    }
+
     const primarySourceName =
       (typeof body.sourceName === 'string' && body.sourceName.trim()) ||
       state.ndiStream.sourceName;
+    const authorizedSources = new Set(state.ndiStream.activeSourceNames || []);
     const sentSourcesInBatch = new Set<string>();
+    let updatedAnyFrame = false;
 
-    if (typeof body.frameDataUrl === 'string' && body.frameDataUrl.startsWith('data:image/')) {
-      state.latestNdiFrameDataUrl = body.frameDataUrl;
-      state.ndiStream.lastFrameAt = Date.now();
-      state.ndiStream.frameCount += 1;
-      pushFrameToNdiClients(body.frameDataUrl);
-      if (electronNativeDecoder && primarySourceName) {
-        electronNativeDecoder(
-          body.frameDataUrl,
-          primarySourceName,
-          state.ndiStream.frameRate,
-          state.ndiStream.alphaChannel
-        );
-        sentSourcesInBatch.add(primarySourceName);
-      }
-    }
+    // 1. Process per-list NDI frames FIRST so each active list tab (List 1, List 2, etc.)
+    // always sends its own dedicated countdown frame to its exact NDI source name and MJPEG subscribers.
     if (body.perListFrames && typeof body.perListFrames === 'object') {
       for (const [lid, entry] of Object.entries(body.perListFrames as Record<string, any>)) {
+        // Strictly reject frames for list tabs that are currently deactivated
+        if (!state.ndiStream.multiActive && !state.ndiStream.activeByList?.[lid]) {
+          continue;
+        }
         const listSourceName =
           (entry && typeof entry.sourceName === 'string' && entry.sourceName.trim()) ||
           state.ndiStream.sourceNamesByList?.[lid] ||
           `ProTimer (${lid})`;
-        if (entry && typeof entry.frameDataUrl === 'string') {
+        const isSourceAuthorized =
+          authorizedSources.size === 0 || authorizedSources.has(listSourceName);
+
+        if (entry && typeof entry.frameDataUrl === 'string' && entry.frameDataUrl.startsWith('data:image/')) {
           state.latestNdiFramesByList[lid] = {
             sourceName: listSourceName,
             frameDataUrl: entry.frameDataUrl,
@@ -852,7 +921,15 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
           if (!state.latestNdiFrameDataUrl) {
             state.latestNdiFrameDataUrl = entry.frameDataUrl;
           }
-          if (electronNativeDecoder && listSourceName && !sentSourcesInBatch.has(listSourceName)) {
+          updatedAnyFrame = true;
+          // Push directly to any MJPEG receivers subscribed specifically to this list tab
+          pushFrameToNdiClients(entry.frameDataUrl, lid);
+          if (
+            electronNativeDecoder &&
+            listSourceName &&
+            isSourceAuthorized &&
+            !sentSourcesInBatch.has(listSourceName)
+          ) {
             electronNativeDecoder(
               entry.frameDataUrl,
               listSourceName,
@@ -867,6 +944,8 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
           typeof entry.rawRgbaBase64 === 'string' &&
           typeof body.width === 'number' &&
           typeof body.height === 'number' &&
+          listSourceName &&
+          isSourceAuthorized &&
           !sentSourcesInBatch.has(listSourceName)
         ) {
           try {
@@ -881,10 +960,34 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
               listSourceName
             );
             sentSourcesInBatch.add(listSourceName);
+            updatedAnyFrame = true;
           } catch {
             // Ignore raw buffer decode error
           }
         }
+      }
+    }
+
+    // 2. Process primary / Multi Output frame
+    const isPrimaryAuthorized =
+      authorizedSources.size === 0 || authorizedSources.has(primarySourceName);
+    if (typeof body.frameDataUrl === 'string' && body.frameDataUrl.startsWith('data:image/')) {
+      state.latestNdiFrameDataUrl = body.frameDataUrl;
+      updatedAnyFrame = true;
+      pushFrameToNdiClients(body.frameDataUrl, null);
+      if (
+        electronNativeDecoder &&
+        primarySourceName &&
+        isPrimaryAuthorized &&
+        !sentSourcesInBatch.has(primarySourceName)
+      ) {
+        electronNativeDecoder(
+          body.frameDataUrl,
+          primarySourceName,
+          state.ndiStream.frameRate,
+          state.ndiStream.alphaChannel
+        );
+        sentSourcesInBatch.add(primarySourceName);
       }
     }
     if (
@@ -892,6 +995,7 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
       typeof body.width === 'number' &&
       typeof body.height === 'number' &&
       primarySourceName &&
+      isPrimaryAuthorized &&
       !sentSourcesInBatch.has(primarySourceName)
     ) {
       try {
@@ -905,10 +1009,18 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
           state.ndiStream.alphaChannel,
           primarySourceName
         );
+        sentSourcesInBatch.add(primarySourceName);
+        updatedAnyFrame = true;
       } catch {
         // Ignore raw buffer decode error
       }
     }
+
+    if (updatedAnyFrame) {
+      state.ndiStream.lastFrameAt = Date.now();
+      state.ndiStream.frameCount += 1;
+    }
+
     const nativeReceivers = ndiNativeBridge.getConnectedReceiversCount();
     sendJson(200, {
       success: true,
@@ -923,16 +1035,36 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
     const queryStr = url.includes('?') ? url.split('?')[1] : '';
     const params = new URLSearchParams(queryStr);
     const reqListId = params.get('listId') || '';
-    const listFrameEntry = reqListId ? state.latestNdiFramesByList[reqListId] : null;
-    const chosenDataUrl = listFrameEntry?.frameDataUrl || state.latestNdiFrameDataUrl;
-    const chosenSourceName = listFrameEntry?.sourceName || state.ndiStream.sourceName;
+
+    // When a specific listId is requested, strictly verify that list is active and NEVER fall back to another list
+    let chosenDataUrl: string | null = null;
+    let chosenSourceName = state.ndiStream.sourceName;
+    if (reqListId) {
+      const isReqListActive =
+        state.ndiStream.active &&
+        (state.ndiStream.multiActive || Boolean(state.ndiStream.activeByList?.[reqListId]));
+      const listFrameEntry = isReqListActive ? state.latestNdiFramesByList[reqListId] : null;
+      chosenDataUrl = listFrameEntry?.frameDataUrl || null;
+      chosenSourceName =
+        listFrameEntry?.sourceName ||
+        state.ndiStream.sourceNamesByList?.[reqListId] ||
+        state.ndiStream.sourceName;
+    } else {
+      chosenDataUrl = state.ndiStream.active ? state.latestNdiFrameDataUrl : null;
+    }
 
     if (!state.ndiStream.active || !chosenDataUrl) {
       res.writeHead(404, {
         'Content-Type': 'application/json',
         'Access-Control-Allow-Origin': '*',
       });
-      res.end(JSON.stringify({ error: 'NDI stream is currently inactive or no frame available' }));
+      res.end(
+        JSON.stringify({
+          error: reqListId
+            ? `NDI stream for list "${reqListId}" is currently inactive or no frame available`
+            : 'NDI stream is currently inactive or no frame available',
+        })
+      );
       return true;
     }
     const commaIdx = chosenDataUrl.indexOf(',');
@@ -958,31 +1090,42 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
 
   // 13. GET /api/lan/ndi/mjpeg (Live continuous network video stream for OBS / vMix / VLC / Remote Capture)
   if (pathname === '/api/lan/ndi/mjpeg' && method === 'GET') {
+    const queryStr = url.includes('?') ? url.split('?')[1] : '';
+    const params = new URLSearchParams(queryStr);
+    const reqListId = params.get('listId') || null;
+    const rawMode = params.get('mode');
+    const reqMode: 'single' | 'multi' | null =
+      rawMode === 'multi' ? 'multi' : rawMode === 'single' ? 'single' : null;
+    const headerSourceName = reqListId
+      ? state.ndiStream.sourceNamesByList?.[reqListId] || `ProTimer (${reqListId})`
+      : reqMode === 'multi'
+      ? state.ndiStream.multiSourceName
+      : state.ndiStream.sourceName;
+
     res.writeHead(200, {
       'Content-Type': 'multipart/x-mixed-replace; boundary=ndi_frame',
       'Cache-Control': 'no-store, no-cache, must-revalidate, pre-check=0, post-check=0, max-age=0',
       Pragma: 'no-cache',
       Connection: 'keep-alive',
       'Access-Control-Allow-Origin': '*',
-      'X-NDI-Source-Name': state.ndiStream.sourceName,
+      'X-NDI-Source-Name': headerSourceName,
     });
 
-    ndiStreamClients.add(res);
+    ndiStreamClients.set(res, { listId: reqListId, mode: reqMode });
 
-    // Immediately send the latest frame if available
-    if (state.latestNdiFrameDataUrl) {
+    // Immediately send the matching latest frame if available
+    const initialDataUrl = reqListId
+      ? state.ndiStream.active &&
+        (state.ndiStream.multiActive || Boolean(state.ndiStream.activeByList?.[reqListId]))
+        ? state.latestNdiFramesByList[reqListId]?.frameDataUrl || null
+        : null
+      : state.ndiStream.active
+      ? state.latestNdiFrameDataUrl
+      : null;
+
+    if (initialDataUrl) {
       try {
-        const commaIdx = state.latestNdiFrameDataUrl.indexOf(',');
-        const headerPart = state.latestNdiFrameDataUrl.slice(0, commaIdx);
-        const base64Part = state.latestNdiFrameDataUrl.slice(commaIdx + 1);
-        const mimeMatch = headerPart.match(/^data:([^;]+);base64$/);
-        const contentType = mimeMatch ? mimeMatch[1] : 'image/png';
-        const buffer = Buffer.from(base64Part, 'base64');
-        res.write(`--ndi_frame\r\n`);
-        res.write(`Content-Type: ${contentType}\r\n`);
-        res.write(`Content-Length: ${buffer.length}\r\n\r\n`);
-        res.write(buffer);
-        res.write(`\r\n`);
+        writeMjpegFrame(res, initialDataUrl);
       } catch {
         // ignore write error
       }

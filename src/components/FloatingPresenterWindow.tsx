@@ -8,6 +8,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
+import { X } from 'lucide-react';
 import {
   DisplaySyncPayload,
   StageMessage,
@@ -32,6 +33,11 @@ import {
   sanitizeImageUrl,
   useLivePreferences,
 } from '../utilities/displayStyleHelper';
+import {
+  clampFloatingBounds,
+  loadFloatingWindowBounds,
+  saveFloatingWindowBounds,
+} from '../utilities/windowBoundsStorage';
 
 interface FloatingPresenterWindowProps {
   isOpen: boolean;
@@ -68,6 +74,7 @@ const REFERENCE_HEIGHT = 1080;
 
 export const FloatingPresenterWindow: React.FC<FloatingPresenterWindowProps> = ({
   isOpen,
+  onClose,
   payload,
   activeFullscreenByList,
   timeStr,
@@ -89,13 +96,21 @@ export const FloatingPresenterWindow: React.FC<FloatingPresenterWindowProps> = (
 
   const [bounds, setBounds] = useState<{ x: number; y: number; width: number; height: number }>(() => {
     const winH = typeof window !== 'undefined' ? window.innerHeight : 800;
-    return {
-      x: 28,
-      y: Math.max(48, winH - DEFAULT_HEIGHT - 96),
-      width: DEFAULT_WIDTH,
-      height: DEFAULT_HEIGHT,
-    };
+    return loadFloatingWindowBounds(
+      'presenter',
+      {
+        x: 28,
+        y: Math.max(48, winH - DEFAULT_HEIGHT - 96),
+        width: DEFAULT_WIDTH,
+        height: DEFAULT_HEIGHT,
+      },
+      MIN_WIDTH,
+      MIN_HEIGHT
+    );
   });
+
+  const latestBoundsRef = useRef(bounds);
+  latestBoundsRef.current = bounds;
 
   const dragStateRef = useRef<{
     type: 'move' | 'resize';
@@ -117,11 +132,13 @@ export const FloatingPresenterWindow: React.FC<FloatingPresenterWindowProps> = (
       if (state.type === 'move') {
         const maxX = Math.max(0, window.innerWidth - 80);
         const maxY = Math.max(0, window.innerHeight - 40);
-        setBounds({
+        const next = {
           ...startBounds,
           x: Math.min(maxX, Math.max(0, startBounds.x + dx)),
           y: Math.min(maxY, Math.max(0, startBounds.y + dy)),
-        });
+        };
+        latestBoundsRef.current = next;
+        setBounds(next);
         return;
       }
 
@@ -158,16 +175,21 @@ export const FloatingPresenterWindow: React.FC<FloatingPresenterWindowProps> = (
           }
         }
 
-        setBounds({
+        const next = {
           x: Math.max(0, newX),
           y: Math.max(0, newY),
           width: newW,
           height: newH,
-        });
+        };
+        latestBoundsRef.current = next;
+        setBounds(next);
       }
     };
 
     const handleMouseUp = () => {
+      if (dragStateRef.current) {
+        saveFloatingWindowBounds('presenter', latestBoundsRef.current);
+      }
       dragStateRef.current = null;
     };
 
@@ -178,6 +200,29 @@ export const FloatingPresenterWindow: React.FC<FloatingPresenterWindowProps> = (
       window.removeEventListener('mouseup', handleMouseUp);
     };
   }, []);
+
+  useEffect(() => {
+    const clampToViewport = () => {
+      setBounds((prev) => {
+        const clamped = clampFloatingBounds(prev, MIN_WIDTH, MIN_HEIGHT);
+        if (
+          clamped.x === prev.x &&
+          clamped.y === prev.y &&
+          clamped.width === prev.width &&
+          clamped.height === prev.height
+        ) {
+          return prev;
+        }
+        return clamped;
+      });
+    };
+
+    if (isOpen) {
+      clampToViewport();
+    }
+    window.addEventListener('resize', clampToViewport);
+    return () => window.removeEventListener('resize', clampToViewport);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -241,6 +286,22 @@ export const FloatingPresenterWindow: React.FC<FloatingPresenterWindowProps> = (
     </>
   );
 
+  const topRightHoverCloseButton = (
+    <div className="absolute top-0 right-0 w-14 h-11 z-[60] flex items-start justify-end p-2 group/close">
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onClose();
+        }}
+        title="Close Presenter Display"
+        className="w-5 h-5 rounded-full bg-black/70 hover:bg-red-600/90 border border-white/25 hover:border-red-400 text-neutral-200 hover:text-white flex items-center justify-center opacity-0 group-hover/close:opacity-100 group-hover:opacity-80 hover:!opacity-100 transition-all duration-150 cursor-pointer shadow-md"
+      >
+        <X className="w-3 h-3 stroke-[2.5]" />
+      </button>
+    </div>
+  );
+
   const effectiveBlackout = payload ? payload.isBlackout : isBlackout;
 
   if (effectiveBlackout) {
@@ -253,9 +314,10 @@ export const FloatingPresenterWindow: React.FC<FloatingPresenterWindowProps> = (
           width: `${bounds.width}px`,
           height: `${bounds.height}px`,
         }}
-        className="fixed z-[9999] bg-black rounded-md ring-1 ring-white/15 shadow-[0_18px_50px_rgba(0,0,0,0.85)] select-none cursor-move overflow-hidden"
+        className="group fixed z-[9999] bg-black rounded-xl border border-white/25 shadow-[0_18px_50px_rgba(0,0,0,0.85)] select-none cursor-move overflow-hidden"
       >
         {resizeHandles}
+        {topRightHoverCloseButton}
       </div>
     );
   }
@@ -338,9 +400,10 @@ export const FloatingPresenterWindow: React.FC<FloatingPresenterWindowProps> = (
           width: `${bounds.width}px`,
           height: `${bounds.height}px`,
         }}
-        className="fixed z-[9999] bg-black rounded-md ring-1 ring-white/15 shadow-[0_18px_50px_rgba(0,0,0,0.85)] select-none cursor-move overflow-hidden"
+        className="group fixed z-[9999] bg-black rounded-xl border border-white/25 shadow-[0_18px_50px_rgba(0,0,0,0.85)] select-none cursor-move overflow-hidden"
       >
         {resizeHandles}
+        {topRightHoverCloseButton}
         <div
           style={{
             width: `${virtualWidth}px`,
@@ -471,10 +534,11 @@ export const FloatingPresenterWindow: React.FC<FloatingPresenterWindowProps> = (
     switch (id) {
       case 'countdown': {
         if (countdownCfg?.visible === false) return null;
+        const isBebas = !countdownCfg?.font || countdownCfg.font === 'Bebas Neue';
         return (
           <div
             key="countdown"
-            className={`tracking-tighter tabular-nums leading-none text-center ${
+            className={`${isBebas ? 'tracking-normal' : 'tracking-tighter'} tabular-nums leading-none text-center ${
               localPrefs.smoothTransitions !== false ? 'transition-colors duration-300' : ''
             } ${
               activeBackgroundImageUrl && !textShadowStyle
@@ -493,12 +557,17 @@ export const FloatingPresenterWindow: React.FC<FloatingPresenterWindowProps> = (
               color: resolvedDigitColor,
               fontFamily: resolveFontFamily(countdownCfg?.font),
               ...resolveFontStyleCss(countdownCfg?.fontStyle),
-              fontSize: `calc(clamp(4.5rem, ${vw(18)}, 21rem) * ${countdownScale})`,
+              fontSize: `calc(clamp(4.5rem, ${vw(isBebas ? 22 : 18)}, 24rem) * ${countdownScale})`,
               textShadow: textShadowStyle,
               transform: getElementOffsetTransform(countdownCfg, 4),
             }}
           >
-            {renderTimeWithColonOffset(displayTime, fsElements.colon?.vert)}
+            {renderTimeWithColonOffset(
+              displayTime,
+              fsElements.colon?.vert,
+              fsElements.countdown?.spacing,
+              fsElements.colon?.horiz
+            )}
           </div>
         );
       }
@@ -732,9 +801,10 @@ export const FloatingPresenterWindow: React.FC<FloatingPresenterWindowProps> = (
         width: `${bounds.width}px`,
         height: `${bounds.height}px`,
       }}
-      className="fixed z-[9999] bg-black rounded-md ring-1 ring-white/15 shadow-[0_18px_50px_rgba(0,0,0,0.85)] select-none cursor-move overflow-hidden"
+      className="group fixed z-[9999] bg-black rounded-xl border border-white/25 shadow-[0_18px_50px_rgba(0,0,0,0.85)] select-none cursor-move overflow-hidden"
     >
       {resizeHandles}
+      {topRightHoverCloseButton}
 
       <div
         style={{

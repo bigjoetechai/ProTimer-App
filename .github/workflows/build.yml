@@ -1,4 +1,4 @@
-name: Build & Publish Windows Installer Release
+name: Build & Publish Cross-Platform Releases (Windows, macOS & Linux)
 
 on:
   push:
@@ -13,18 +13,17 @@ permissions:
   contents: write
 
 jobs:
-  build-and-release-windows:
-    runs-on: windows-latest
+  prepare:
+    name: Resolve Release Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.pkg.outputs.version }}
+      tag: ${{ steps.pkg.outputs.tag }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Setup Node.js 20
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
 
       - name: Determine Release Tag from Git Ref or package.json
         id: pkg
@@ -40,49 +39,176 @@ jobs:
           echo "tag=${TAG_NAME}" >> "$GITHUB_OUTPUT"
           echo "Resolved Release Tag: ${TAG_NAME} (package.json v${PKG_VER})"
 
+  build-windows:
+    name: Build Windows (x64)
+    needs: prepare
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
       - name: Install Dependencies
         run: npm install --legacy-peer-deps
 
       - name: Prepare Icons & Bundled NDI Runtime
+        run: node scripts/prepare-build-assets.cjs --win
+
+      - name: Build Frontend Bundle
+        run: npm run build
+
+      - name: Build Windows Installer & Portable (x64)
+        run: npx electron-builder --win --x64 --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Verify Generated Windows Files
+        shell: bash
+        run: |
+          VER="${{ needs.prepare.outputs.version }}"
+          ls -lh release/
+          test -f "release/ProTimer-v${VER}-Setup.exe"
+          test -f "release/ProTimer-v${VER}-Portable.exe"
+          test -f release/latest.yml
+
+      - name: Upload Windows Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ProTimer-Windows-${{ needs.prepare.outputs.tag }}
+          path: |
+            release/ProTimer-v*-Setup.exe
+            release/ProTimer-v*-Setup.exe.blockmap
+            release/ProTimer-v*-Portable.exe
+            release/latest.yml
+
+  build-macos:
+    name: Build macOS (Apple Silicon & Intel)
+    needs: prepare
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Dependencies
+        run: npm install --legacy-peer-deps
+
+      - name: Prepare Icons & Server Bundle
         run: node scripts/prepare-build-assets.cjs
 
       - name: Build Frontend Bundle
         run: npm run build
 
-      - name: Build Windows Installer & Auto-Update Metadata (ProTimer-Setup.exe & latest.yml)
-        run: npx electron-builder --win --x64 --publish never
+      - name: Build macOS Apple Silicon (arm64) & Intel (x64)
+        run: npx electron-builder --mac dmg zip --arm64 --x64 --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
-      - name: Verify Generated Setup Files in release/
+      - name: Verify Generated macOS Files
         shell: bash
         run: |
+          VER="${{ needs.prepare.outputs.version }}"
           ls -lh release/
-          test -f release/ProTimer-Setup.exe
-          test -f release/latest.yml
+          test -f "release/ProTimer-v${VER}-Mac-arm64.dmg"
+          test -f "release/ProTimer-v${VER}-Mac-arm64.zip"
+          test -f "release/ProTimer-v${VER}-Mac-x64.dmg"
+          test -f "release/ProTimer-v${VER}-Mac-x64.zip"
+          test -f release/latest-mac.yml
 
-      - name: Publish Setup Files to GitHub Releases
+      - name: Upload macOS Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ProTimer-macOS-${{ needs.prepare.outputs.tag }}
+          path: |
+            release/ProTimer-v*.dmg
+            release/ProTimer-v*.zip
+            release/ProTimer-v*.blockmap
+            release/latest-mac.yml
+
+  build-linux:
+    name: Build Linux (x64)
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Dependencies
+        run: npm install --legacy-peer-deps
+
+      - name: Prepare Icons & Server Bundle
+        run: node scripts/prepare-build-assets.cjs
+
+      - name: Build Frontend Bundle
+        run: npm run build
+
+      - name: Build Linux AppImage & Debian Package (x64)
+        run: npx electron-builder --linux AppImage deb --x64 --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Verify Generated Linux Files
+        shell: bash
+        run: |
+          VER="${{ needs.prepare.outputs.version }}"
+          ls -lh release/
+          compgen -G "release/ProTimer-v${VER}-Linux-*.AppImage" > /dev/null
+          compgen -G "release/ProTimer-v${VER}-Linux-*.deb" > /dev/null
+          test -f release/latest-linux.yml
+
+      - name: Upload Linux Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ProTimer-Linux-${{ needs.prepare.outputs.tag }}
+          path: |
+            release/ProTimer-v*.AppImage
+            release/ProTimer-v*.deb
+            release/latest-linux.yml
+
+  publish-release:
+    name: Publish GitHub Release (Windows, macOS & Linux)
+    needs: [prepare, build-windows, build-macos, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download All Platform Build Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Verify Collected Release Assets
+        shell: bash
+        run: |
+          ls -lh release-assets/
+
+      - name: Publish All Distributions to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.pkg.outputs.tag }}
-          name: ProTimer ${{ steps.pkg.outputs.tag }}
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: ProTimer ${{ needs.prepare.outputs.tag }}
           draft: false
           prerelease: false
           generate_release_notes: true
           files: |
-            release/ProTimer-Setup.exe
-            release/ProTimer-Setup.exe.blockmap
-            release/ProTimer-Portable.exe
-            release/latest.yml
+            release-assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload Windows .EXE Build Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: ProTimer-Windows-${{ steps.pkg.outputs.tag }}
-          path: |
-            release/ProTimer-Setup.exe
-            release/ProTimer-Setup.exe.blockmap
-            release/ProTimer-Portable.exe
-            release/latest.yml

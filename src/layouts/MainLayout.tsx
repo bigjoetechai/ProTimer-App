@@ -16,7 +16,9 @@ export const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
   return (
     <div 
       className={`h-screen w-screen min-w-[1000px] min-h-[650px] flex flex-col font-sans antialiased overflow-hidden select-none relative transition-colors duration-150 ${
-        isDark ? 'bg-[#0d0e12] text-neutral-100' : 'bg-[#d8dfe9] text-slate-900'
+        isDark
+          ? 'bg-[#111113] bg-[radial-gradient(120%_90%_at_50%_0%,#1e1e22_0%,#131316_58%,#0c0c0e_100%)] text-neutral-100'
+          : 'bg-[#d8dfe9] text-slate-900'
       }`}
     >
       {children}

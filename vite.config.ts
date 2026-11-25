@@ -1,7 +1,11 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
+import fs from 'fs';
 import path from 'path';
 import {defineConfig} from 'vite';
+
+const pkgJson = JSON.parse(fs.readFileSync(path.resolve(__dirname, 'package.json'), 'utf8'));
+const appVersion: string = typeof pkgJson.version === 'string' ? pkgJson.version : '3.0.1';
 
 function lanApiPlugin() {
   return {
@@ -32,6 +36,9 @@ function electronFileProtocolPlugin() {
 export default defineConfig(({ command }) => {
   return {
     base: command === 'build' ? './' : '/',
+    define: {
+      __APP_VERSION__: JSON.stringify(appVersion),
+    },
     plugins: [react(), tailwindcss(), lanApiPlugin(), ...(command === 'build' ? [electronFileProtocolPlugin()] : [])],
     resolve: {
       alias: {

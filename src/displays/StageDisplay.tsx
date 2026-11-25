@@ -220,7 +220,12 @@ export const StageDisplay: React.FC = () => {
               transform: getElementOffsetTransform(countdownCfg, 3.5),
             }}
           >
-            {renderTimeWithColonOffset(displayTime, webElements.colon?.vert)}
+            {renderTimeWithColonOffset(
+              displayTime,
+              webElements.colon?.vert,
+              webElements.countdown?.spacing,
+              webElements.colon?.horiz
+            )}
           </div>
         )}
 

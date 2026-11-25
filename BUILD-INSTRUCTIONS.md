@@ -1,4 +1,4 @@
-# ProTimer v2.0.0 — Windows 11 & macOS Build & Packaging Guide
+# ProTimer v3.0.1 — Windows, macOS & Linux Build & Packaging Guide
 
 ## 1. Application Overview
 
@@ -7,9 +7,10 @@
 | **Application Name** | ProTimer |
 | **Owner / Company** | Bigjoe Technology |
 | **Application ID** | `com.protimer.desktop` |
-| **Version** | `2.0.0` |
-| **Windows Deliverables** | `release/ProTimer-Setup.exe` & `release/ProTimer-Portable.exe` |
-| **macOS Deliverables** | `release/ProTimer-Mac-x64.zip` & `release/ProTimer-Mac-arm64.zip` (`ProTimer.app`) |
+| **Version** | `3.0.1` |
+| **Windows Deliverables** | `release/ProTimer-v3.0.1-Setup.exe` & `release/ProTimer-v3.0.1-Portable.exe` |
+| **macOS Deliverables** | `release/ProTimer-v3.0.1-Mac-arm64.dmg` / `.zip` (Apple Silicon) & `release/ProTimer-v3.0.1-Mac-x64.dmg` / `.zip` (Intel) |
+| **Linux Deliverables** | `release/ProTimer-v3.0.1-Linux-x64.AppImage` & `release/ProTimer-v3.0.1-Linux-amd64.deb` |
 | **User Data Location** | `%APPDATA%\ProTimer` (`C:\Users\<Username>\AppData\Roaming\ProTimer`) |
 
 ---

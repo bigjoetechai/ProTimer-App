@@ -5,6 +5,11 @@
 import { useState, useEffect } from 'react';
 import { TimerItem, TimerList, TimerSnapshot, TimerRunLogEntry } from '../types';
 import { timerManagerService } from '../services/timerManager';
+import {
+  ListTemplate,
+  ListTemplateCategory,
+  TemplateLoadMode,
+} from '../services/listTemplatesService';
 
 export function useTimerManager() {
   const [snapshot, setSnapshot] = useState<TimerSnapshot>(timerManagerService.getSnapshot());
@@ -86,6 +91,13 @@ export function useTimerManager() {
     setListColor: (listId: string, color?: string) => timerManagerService.setListColor(listId, color),
     copyListCuesToList: (sourceListId: string, targetListId: string, mode?: 'append' | 'replace') =>
       timerManagerService.copyListCuesToList(sourceListId, targetListId, mode),
+    getListTimers: (listId: string) => timerManagerService.getListTimers(listId),
+    saveListAsTemplate: (
+      listId: string,
+      options?: { name?: string; description?: string; category?: ListTemplateCategory }
+    ) => timerManagerService.saveListAsTemplate(listId, options),
+    loadTemplate: (template: ListTemplate, mode?: TemplateLoadMode) =>
+      timerManagerService.loadTemplate(template, mode),
     deleteList: (listId: string) => timerManagerService.deleteList(listId),
     duplicateList: (listId: string) => timerManagerService.duplicateList(listId),
     reorderLists: (src: number, dest: number) => timerManagerService.reorderLists(src, dest),
