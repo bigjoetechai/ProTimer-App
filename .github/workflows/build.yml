@@ -25,19 +25,27 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Determine Release Tag from Git Ref or package.json
+      - name: Determine Release Version & Tag from Git Ref or package.json
         id: pkg
         shell: bash
         run: |
           PKG_VER=$(node -p "require('./package.json').version")
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             TAG_NAME="${GITHUB_REF#refs/tags/}"
+            # Strip leading 'v' so pushed tags like v3.0.2 always stamp 3.0.2 into installers & latest*.yml
+            TAG_VER="${TAG_NAME#v}"
+            if [[ "${TAG_VER}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+              RESOLVED_VER="${TAG_VER}"
+            else
+              RESOLVED_VER="${PKG_VER}"
+            fi
           else
+            RESOLVED_VER="${PKG_VER}"
             TAG_NAME="v${PKG_VER}"
           fi
-          echo "version=${PKG_VER}" >> "$GITHUB_OUTPUT"
+          echo "version=${RESOLVED_VER}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG_NAME}" >> "$GITHUB_OUTPUT"
-          echo "Resolved Release Tag: ${TAG_NAME} (package.json v${PKG_VER})"
+          echo "Resolved Release Tag: ${TAG_NAME} (version ${RESOLVED_VER}, repo ${GITHUB_REPOSITORY})"
 
   build-windows:
     name: Build Windows (x64)
@@ -54,6 +62,17 @@ jobs:
         with:
           node-version: 20
 
+      - name: Sync Release Version & Repository Metadata
+        shell: bash
+        run: |
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.version = '${{ needs.prepare.outputs.version }}';
+            pkg.repository = { type: 'git', url: 'https://github.com/${{ github.repository }}.git' };
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
       - name: Install Dependencies
         run: npm install --legacy-peer-deps
 
@@ -64,18 +83,25 @@ jobs:
         run: npm run build
 
       - name: Build Windows Installer & Portable (x64)
-        run: npx electron-builder --win --x64 --publish never
+        run: >-
+          npx electron-builder --win --x64 --publish never
+          -c.publish.provider=github
+          -c.publish.owner=${{ github.repository_owner }}
+          -c.publish.repo=${{ github.event.repository.name }}
+          -c.publish.releaseType=release
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
-      - name: Verify Generated Windows Files
+      - name: Verify Generated Windows Files & Auto-Update Metadata
         shell: bash
         run: |
           VER="${{ needs.prepare.outputs.version }}"
           ls -lh release/
           test -f "release/ProTimer-v${VER}-Setup.exe"
+          test -f "release/ProTimer-v${VER}-Setup.exe.blockmap"
           test -f "release/ProTimer-v${VER}-Portable.exe"
           test -f release/latest.yml
+          cat release/latest.yml
 
       - name: Upload Windows Build Artifacts
         uses: actions/upload-artifact@v4
@@ -102,6 +128,17 @@ jobs:
         with:
           node-version: 20
 
+      - name: Sync Release Version & Repository Metadata
+        shell: bash
+        run: |
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.version = '${{ needs.prepare.outputs.version }}';
+            pkg.repository = { type: 'git', url: 'https://github.com/${{ github.repository }}.git' };
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
       - name: Install Dependencies
         run: npm install --legacy-peer-deps
 
@@ -112,11 +149,16 @@ jobs:
         run: npm run build
 
       - name: Build macOS Apple Silicon (arm64) & Intel (x64)
-        run: npx electron-builder --mac dmg zip --arm64 --x64 --publish never
+        run: >-
+          npx electron-builder --mac dmg zip --arm64 --x64 --publish never
+          -c.publish.provider=github
+          -c.publish.owner=${{ github.repository_owner }}
+          -c.publish.repo=${{ github.event.repository.name }}
+          -c.publish.releaseType=release
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
-      - name: Verify Generated macOS Files
+      - name: Verify Generated macOS Files & Auto-Update Metadata
         shell: bash
         run: |
           VER="${{ needs.prepare.outputs.version }}"
@@ -126,6 +168,7 @@ jobs:
           test -f "release/ProTimer-v${VER}-Mac-x64.dmg"
           test -f "release/ProTimer-v${VER}-Mac-x64.zip"
           test -f release/latest-mac.yml
+          cat release/latest-mac.yml
 
       - name: Upload macOS Build Artifacts
         uses: actions/upload-artifact@v4
@@ -152,6 +195,17 @@ jobs:
         with:
           node-version: 20
 
+      - name: Sync Release Version & Repository Metadata
+        shell: bash
+        run: |
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.version = '${{ needs.prepare.outputs.version }}';
+            pkg.repository = { type: 'git', url: 'https://github.com/${{ github.repository }}.git' };
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
       - name: Install Dependencies
         run: npm install --legacy-peer-deps
 
@@ -162,11 +216,16 @@ jobs:
         run: npm run build
 
       - name: Build Linux AppImage & Debian Package (x64)
-        run: npx electron-builder --linux AppImage deb --x64 --publish never
+        run: >-
+          npx electron-builder --linux AppImage deb --x64 --publish never
+          -c.publish.provider=github
+          -c.publish.owner=${{ github.repository_owner }}
+          -c.publish.repo=${{ github.event.repository.name }}
+          -c.publish.releaseType=release
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
-      - name: Verify Generated Linux Files
+      - name: Verify Generated Linux Files & Auto-Update Metadata
         shell: bash
         run: |
           VER="${{ needs.prepare.outputs.version }}"
@@ -174,6 +233,7 @@ jobs:
           compgen -G "release/ProTimer-v${VER}-Linux-*.AppImage" > /dev/null
           compgen -G "release/ProTimer-v${VER}-Linux-*.deb" > /dev/null
           test -f release/latest-linux.yml
+          cat release/latest-linux.yml
 
       - name: Upload Linux Build Artifacts
         uses: actions/upload-artifact@v4
@@ -181,6 +241,7 @@ jobs:
           name: ProTimer-Linux-${{ needs.prepare.outputs.tag }}
           path: |
             release/ProTimer-v*.AppImage
+            release/ProTimer-v*.AppImage.blockmap
             release/ProTimer-v*.deb
             release/latest-linux.yml
 
@@ -195,10 +256,13 @@ jobs:
           path: release-assets
           merge-multiple: true
 
-      - name: Verify Collected Release Assets
+      - name: Verify Collected Release Assets & Updater Manifests
         shell: bash
         run: |
           ls -lh release-assets/
+          test -f release-assets/latest.yml
+          test -f release-assets/latest-mac.yml
+          test -f release-assets/latest-linux.yml
 
       - name: Publish All Distributions to GitHub Releases
         uses: softprops/action-gh-release@v2
@@ -207,6 +271,8 @@ jobs:
           name: ProTimer ${{ needs.prepare.outputs.tag }}
           draft: false
           prerelease: false
+          make_latest: true
+          fail_on_unmatched_files: true
           generate_release_notes: true
           files: |
             release-assets/*

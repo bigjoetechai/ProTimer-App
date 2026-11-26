@@ -27,13 +27,19 @@
  *    `protimer-user-data.backup.json`) preserved across restarts, updates, and uninstalls.
  */
 
-const { app, BrowserWindow, screen, ipcMain, session, nativeImage, dialog } = require('electron');
+const { app, BrowserWindow, screen, ipcMain, session, nativeImage, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const { exec } = require('child_process');
 const { ndiNativeBridge } = require('../server/ndiNativeBridge.cjs');
+const {
+  resolveGitHubRepo,
+  resolvePackageVersion,
+  fetchLatestGitHubRelease,
+  normalizeVersion,
+} = require('../server/githubUpdateHelper.cjs');
 
 let autoUpdater = null;
 try {
@@ -45,14 +51,18 @@ try {
 const APP_ID = 'com.protimer.desktop';
 const APP_NAME = 'ProTimer';
 const APP_COMPANY = 'Bigjoe Technology';
-let APP_VERSION = '3.0.1';
+const APP_ROOT_DIR = path.resolve(__dirname, '..');
+const GITHUB_RELEASE_REPO = resolveGitHubRepo(APP_ROOT_DIR);
+let APP_VERSION = resolvePackageVersion(APP_ROOT_DIR);
 try {
-  const pkg = require('../package.json');
-  if (pkg && typeof pkg.version === 'string' && pkg.version.trim()) {
-    APP_VERSION = pkg.version.trim();
+  if (app && typeof app.isPackaged === 'boolean' && app.isPackaged && typeof app.getVersion === 'function') {
+    const packagedVer = normalizeVersion(app.getVersion());
+    if (packagedVer && packagedVer !== '0.0.0') {
+      APP_VERSION = packagedVer;
+    }
   }
 } catch {
-  // Fallback to default APP_VERSION
+  // Fallback to package.json version
 }
 
 // Set Windows Application User Model ID for taskbar grouping & notifications
@@ -1070,6 +1080,29 @@ function handleEmbeddedLanApi(req, res) {
       frame: lanState.ndiStream.lastFrameDataUrl,
       nativeNdi: ndiNativeBridge.getRuntimeDiagnostics(),
     });
+    return true;
+  }
+
+  // GET /api/lan/updates/check
+  if (pathname === '/api/lan/updates/check' && method === 'GET') {
+    checkGitHubReleaseFallback()
+      .then((info) => sendJson(200, info))
+      .catch((err) => {
+        sendJson(200, {
+          status: 'error',
+          currentVersion: APP_VERSION,
+          availableVersion: null,
+          percent: 0,
+          message: 'Could not reach GitHub Releases update server.',
+          error: (err && err.message) || 'Update check failed.',
+          releaseUrl: `https://github.com/${GITHUB_RELEASE_REPO.owner}/${GITHUB_RELEASE_REPO.repo}/releases`,
+          downloadUrl: null,
+          releaseNotes: null,
+          canAutoInstall: false,
+          checkedAt: Date.now(),
+          source: 'github-api',
+        });
+      });
     return true;
   }
 
@@ -2762,22 +2795,75 @@ ipcMain.handle('get-system-fonts', async () => {
 });
 
 // =============================================================================
-// AUTO-UPDATER (GitHub Releases via electron-updater)
+// AUTO-UPDATER (GitHub Releases via electron-updater + GitHub Releases API fallback)
 // =============================================================================
 
 const AUTO_UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000; // Check every 1 hour
 let autoUpdateIntervalTimer = null;
+let autoUpdateStartupTimer = null;
+let activeUpdateCheckPromise = null;
+let autoUpdaterInitialized = false;
+
+const IS_WINDOWS_PORTABLE =
+  process.platform === 'win32' && Boolean(process.env.PORTABLE_EXECUTABLE_DIR);
+const IS_LINUX_APPIMAGE =
+  process.platform === 'linux' && Boolean(process.env.APPIMAGE);
+
+function canUseNativeElectronUpdater() {
+  if (!autoUpdater || !app.isPackaged) return false;
+  if (IS_WINDOWS_PORTABLE) return false;
+  if (process.platform === 'linux' && !IS_LINUX_APPIMAGE) return false;
+  return true;
+}
+
+const DEFAULT_RELEASES_URL = `https://github.com/${GITHUB_RELEASE_REPO.owner}/${GITHUB_RELEASE_REPO.repo}/releases`;
+
 let latestUpdateStatus = {
-  state: 'idle', // 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error'
-  version: APP_VERSION,
+  status: 'idle', // 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'up-to-date' | 'error'
+  currentVersion: APP_VERSION,
   availableVersion: null,
-  progressPercent: 0,
+  percent: 0,
+  bytesPerSecond: 0,
+  transferredBytes: 0,
+  totalBytes: 0,
   message: `ProTimer v${APP_VERSION} is up to date.`,
   error: null,
+  releaseUrl: DEFAULT_RELEASES_URL,
+  downloadUrl: null,
+  releaseNotes: null,
+  publishedAt: null,
+  canAutoInstall: canUseNativeElectronUpdater(),
+  checkedAt: null,
+  source: canUseNativeElectronUpdater() ? 'electron-updater' : 'github-api',
 };
 
+function formatReleaseNotesText(rawNotes) {
+  if (!rawNotes) return null;
+  if (typeof rawNotes === 'string') {
+    return rawNotes.replace(/<[^>]+>/g, '').trim() || null;
+  }
+  if (Array.isArray(rawNotes)) {
+    const joined = rawNotes
+      .map((entry) => {
+        if (!entry) return '';
+        if (typeof entry === 'string') return entry;
+        const ver = entry.version ? `v${normalizeVersion(entry.version)}: ` : '';
+        const note = typeof entry.note === 'string' ? entry.note.replace(/<[^>]+>/g, '').trim() : '';
+        return `${ver}${note}`;
+      })
+      .filter(Boolean)
+      .join('\n\n');
+    return joined || null;
+  }
+  return null;
+}
+
 function broadcastUpdateStatus(patch) {
-  latestUpdateStatus = { ...latestUpdateStatus, ...patch };
+  latestUpdateStatus = {
+    ...latestUpdateStatus,
+    currentVersion: APP_VERSION,
+    ...patch,
+  };
   if (mainWindow && !mainWindow.isDestroyed()) {
     try {
       mainWindow.webContents.send('update-status', latestUpdateStatus);
@@ -2787,159 +2873,443 @@ function broadcastUpdateStatus(patch) {
   }
 }
 
-function setupAutoUpdater() {
-  if (!autoUpdater) return;
+function shouldAutoCheckForUpdates() {
+  try {
+    const stored = readPersistentUserData();
+    if (stored && stored.preferences && stored.preferences.checkForUpdatesAutomatically === false) {
+      return false;
+    }
+  } catch {
+    // Default to enabled when user preference isn't explicitly false
+  }
+  return true;
+}
+
+async function checkGitHubReleaseFallback(broadcastResult = false) {
+  const release = await fetchLatestGitHubRelease({
+    owner: GITHUB_RELEASE_REPO.owner,
+    repo: GITHUB_RELEASE_REPO.repo,
+    currentVersion: APP_VERSION,
+    platform: process.platform,
+    arch: process.arch,
+    isPortable: IS_WINDOWS_PORTABLE,
+  });
+
+  const nextStatus = release.isUpdateAvailable
+    ? {
+        status: 'available',
+        currentVersion: release.currentVersion,
+        availableVersion: release.availableVersion,
+        percent: 0,
+        bytesPerSecond: 0,
+        transferredBytes: 0,
+        totalBytes: 0,
+        message: `Update v${release.availableVersion} is available on GitHub Releases.`,
+        error: null,
+        releaseUrl: release.releaseUrl || DEFAULT_RELEASES_URL,
+        downloadUrl: release.downloadUrl || release.releaseUrl || DEFAULT_RELEASES_URL,
+        releaseNotes: release.releaseNotes,
+        publishedAt: release.publishedAt,
+        canAutoInstall: false,
+        checkedAt: Date.now(),
+        source: 'github-api',
+      }
+    : {
+        status: 'up-to-date',
+        currentVersion: release.currentVersion,
+        availableVersion: release.availableVersion,
+        percent: 100,
+        bytesPerSecond: 0,
+        transferredBytes: 0,
+        totalBytes: 0,
+        message: `You are running the latest version (v${release.currentVersion}).`,
+        error: null,
+        releaseUrl: release.releaseUrl || DEFAULT_RELEASES_URL,
+        downloadUrl: null,
+        releaseNotes: release.releaseNotes,
+        publishedAt: release.publishedAt,
+        canAutoInstall: false,
+        checkedAt: Date.now(),
+        source: 'github-api',
+      };
+
+  if (broadcastResult) {
+    broadcastUpdateStatus(nextStatus);
+  }
+  return nextStatus;
+}
+
+function cleanupResourcesBeforeInstall() {
+  try {
+    if (ndiNativeBridge && typeof ndiNativeBridge.stopSender === 'function') {
+      ndiNativeBridge.stopSender();
+    }
+  } catch {
+    // Ignore NDI stop errors
+  }
 
   try {
-    autoUpdater.autoDownload = true;
-    autoUpdater.autoInstallOnAppQuit = true;
+    if (embeddedServer) {
+      embeddedServer.close();
+      embeddedServer = null;
+    }
+  } catch {
+    // Ignore embedded server close errors
+  }
 
-    autoUpdater.on('checking-for-update', () => {
-      broadcastUpdateStatus({
-        state: 'checking',
-        message: 'Checking GitHub Releases for updates...',
-        error: null,
-      });
+  const windowsToClose = [
+    previewWindow,
+    multiPreviewWindow,
+    presenterWindow,
+    outputWindow,
+    multiOutputWindow,
+    ndiOffscreenWindow,
+    ...Array.from(outputWindowsByList.values()),
+    ...Array.from(secondaryWindows),
+  ];
+  for (const win of windowsToClose) {
+    try {
+      if (win && !win.isDestroyed()) {
+        win.destroy();
+      }
+    } catch {
+      // Ignore window destroy errors
+    }
+  }
+}
+
+function performQuitAndInstall() {
+  if (!autoUpdater || latestUpdateStatus.status !== 'downloaded') {
+    return false;
+  }
+  cleanupResourcesBeforeInstall();
+  setImmediate(() => {
+    try {
+      autoUpdater.quitAndInstall(false, true);
+    } catch (err) {
+      console.warn('[AutoUpdater] quitAndInstall failed:', err && err.message);
+    }
+  });
+  return true;
+}
+
+async function performUpdateCheck({ silent = false } = {}) {
+  // Never interrupt an active download or overwrite a ready-to-install downloaded update
+  if (
+    latestUpdateStatus.status === 'downloading' ||
+    latestUpdateStatus.status === 'downloaded'
+  ) {
+    return latestUpdateStatus;
+  }
+
+  if (activeUpdateCheckPromise) {
+    return activeUpdateCheckPromise;
+  }
+
+  activeUpdateCheckPromise = (async () => {
+    broadcastUpdateStatus({
+      status: 'checking',
+      message: 'Checking GitHub Releases for updates...',
+      error: null,
     });
 
-    autoUpdater.on('update-available', (info) => {
-      const nextVer = (info && info.version) || 'new';
-      broadcastUpdateStatus({
-        state: 'available',
-        availableVersion: nextVer,
-        message: `Update v${nextVer} found. Downloading in background...`,
-        error: null,
-      });
-    });
-
-    autoUpdater.on('update-not-available', (info) => {
-      broadcastUpdateStatus({
-        state: 'not-available',
-        availableVersion: (info && info.version) || APP_VERSION,
-        progressPercent: 100,
-        message: `You are running the latest version (v${APP_VERSION}).`,
-        error: null,
-      });
-    });
-
-    autoUpdater.on('download-progress', (progressObj) => {
-      const pct = progressObj && typeof progressObj.percent === 'number'
-        ? Math.round(progressObj.percent)
-        : 0;
-      broadcastUpdateStatus({
-        state: 'downloading',
-        progressPercent: pct,
-        message: `Downloading update... (${pct}%)`,
-      });
-    });
-
-    autoUpdater.on('update-downloaded', async (info) => {
-      const downloadedVersion = (info && info.version) || 'latest';
-      broadcastUpdateStatus({
-        state: 'downloaded',
-        availableVersion: downloadedVersion,
-        progressPercent: 100,
-        message: `Update v${downloadedVersion} has been downloaded and is ready to install.`,
-        error: null,
-      });
-
+    if (canUseNativeElectronUpdater() && autoUpdaterInitialized) {
       try {
-        const dialogOpts = {
-          type: 'info',
-          buttons: ['Restart and Install Now', 'Later'],
-          defaultId: 0,
-          cancelId: 1,
-          title: 'ProTimer Update Ready',
-          message: `ProTimer v${downloadedVersion} has been downloaded.`,
-          detail:
-            'A new version of ProTimer is ready to install. Would you like to restart the application now to apply the update?',
-        };
+        const result = await autoUpdater.checkForUpdates();
+        // If electron-updater resolved with info, wait briefly for events to flush
+        if (result && result.updateInfo) {
+          const remoteVer = normalizeVersion(result.updateInfo.version || '');
+          const tagUrl = remoteVer
+            ? `https://github.com/${GITHUB_RELEASE_REPO.owner}/${GITHUB_RELEASE_REPO.repo}/releases/tag/v${remoteVer}`
+            : DEFAULT_RELEASES_URL;
+          if (latestUpdateStatus.status === 'checking') {
+            broadcastUpdateStatus({
+              status: 'up-to-date',
+              availableVersion: remoteVer || APP_VERSION,
+              percent: 100,
+              message: `You are running the latest version (v${APP_VERSION}).`,
+              releaseUrl: tagUrl,
+              checkedAt: Date.now(),
+              source: 'electron-updater',
+            });
+          }
+        }
+        return latestUpdateStatus;
+      } catch (err) {
+        const errMsg = (err && err.message) || 'Native auto-updater check failed.';
+        console.warn('[AutoUpdater] Native check failed, falling back to GitHub Releases API:', errMsg);
+        try {
+          return await checkGitHubReleaseFallback(true);
+        } catch (fallbackErr) {
+          const finalErr = (fallbackErr && fallbackErr.message) || errMsg;
+          if (!silent) {
+            broadcastUpdateStatus({
+              status: 'error',
+              message: 'Could not reach GitHub Releases update server.',
+              error: finalErr,
+              checkedAt: Date.now(),
+            });
+          } else {
+            broadcastUpdateStatus({
+              status: 'idle',
+              message: `ProTimer v${APP_VERSION} is ready.`,
+              error: null,
+            });
+          }
+          return latestUpdateStatus;
+        }
+      }
+    }
 
-        const result =
-          mainWindow && !mainWindow.isDestroyed()
-            ? await dialog.showMessageBox(mainWindow, dialogOpts)
-            : await dialog.showMessageBox(dialogOpts);
+    // Portable Windows, Linux .deb, Electron dev mode, or environments without electron-updater:
+    // Query GitHub Releases REST API directly so "Check for Updates" ALWAYS works!
+    try {
+      return await checkGitHubReleaseFallback(true);
+    } catch (err) {
+      const msg = (err && err.message) || 'Could not reach GitHub Releases update server.';
+      if (!silent) {
+        broadcastUpdateStatus({
+          status: 'error',
+          message: 'Could not reach GitHub Releases update server.',
+          error: msg,
+          checkedAt: Date.now(),
+          source: 'github-api',
+        });
+      } else {
+        broadcastUpdateStatus({
+          status: 'idle',
+          message: `ProTimer v${APP_VERSION} is ready.`,
+          error: null,
+        });
+      }
+      return latestUpdateStatus;
+    }
+  })().finally(() => {
+    activeUpdateCheckPromise = null;
+  });
 
-        if (result.response === 0) {
-          setImmediate(() => {
-            autoUpdater.quitAndInstall(false, true);
+  return activeUpdateCheckPromise;
+}
+
+function setupAutoUpdater() {
+  if (canUseNativeElectronUpdater()) {
+    try {
+      autoUpdater.autoDownload = true;
+      autoUpdater.autoInstallOnAppQuit = true;
+      autoUpdater.allowPrerelease = false;
+      autoUpdater.allowDowngrade = false;
+
+      // Guarantee the GitHub Releases feed URL is always configured for this repo,
+      // even if app-update.yml was omitted or overridden during packaging.
+      autoUpdater.setFeedURL({
+        provider: 'github',
+        owner: GITHUB_RELEASE_REPO.owner,
+        repo: GITHUB_RELEASE_REPO.repo,
+        releaseType: 'release',
+      });
+
+      autoUpdater.on('checking-for-update', () => {
+        broadcastUpdateStatus({
+          status: 'checking',
+          message: 'Checking GitHub Releases for updates...',
+          error: null,
+          canAutoInstall: true,
+          source: 'electron-updater',
+        });
+      });
+
+      autoUpdater.on('update-available', (info) => {
+        const nextVer = normalizeVersion((info && info.version) || '');
+        const tagUrl = nextVer
+          ? `https://github.com/${GITHUB_RELEASE_REPO.owner}/${GITHUB_RELEASE_REPO.repo}/releases/tag/v${nextVer}`
+          : DEFAULT_RELEASES_URL;
+        broadcastUpdateStatus({
+          status: 'available',
+          availableVersion: nextVer || 'new',
+          percent: 0,
+          message: `Update v${nextVer || 'new'} found. Downloading in background...`,
+          error: null,
+          releaseUrl: tagUrl,
+          downloadUrl: tagUrl,
+          releaseNotes: formatReleaseNotesText(info && info.releaseNotes),
+          publishedAt: (info && info.releaseDate) || null,
+          canAutoInstall: true,
+          checkedAt: Date.now(),
+          source: 'electron-updater',
+        });
+      });
+
+      autoUpdater.on('update-not-available', (info) => {
+        const remoteVer = normalizeVersion((info && info.version) || APP_VERSION);
+        broadcastUpdateStatus({
+          status: 'up-to-date',
+          availableVersion: remoteVer || APP_VERSION,
+          percent: 100,
+          message: `You are running the latest version (v${APP_VERSION}).`,
+          error: null,
+          releaseUrl: DEFAULT_RELEASES_URL,
+          downloadUrl: null,
+          canAutoInstall: true,
+          checkedAt: Date.now(),
+          source: 'electron-updater',
+        });
+      });
+
+      autoUpdater.on('download-progress', (progressObj) => {
+        const pct =
+          progressObj && typeof progressObj.percent === 'number'
+            ? Math.min(100, Math.max(0, Math.round(progressObj.percent)))
+            : 0;
+        broadcastUpdateStatus({
+          status: 'downloading',
+          percent: pct,
+          bytesPerSecond: (progressObj && progressObj.bytesPerSecond) || 0,
+          transferredBytes: (progressObj && progressObj.transferred) || 0,
+          totalBytes: (progressObj && progressObj.total) || 0,
+          message: `Downloading update v${latestUpdateStatus.availableVersion || 'latest'}... (${pct}%)`,
+          error: null,
+          canAutoInstall: true,
+          source: 'electron-updater',
+        });
+      });
+
+      autoUpdater.on('update-downloaded', async (info) => {
+        const downloadedVersion = normalizeVersion((info && info.version) || latestUpdateStatus.availableVersion || '');
+        const tagUrl = downloadedVersion
+          ? `https://github.com/${GITHUB_RELEASE_REPO.owner}/${GITHUB_RELEASE_REPO.repo}/releases/tag/v${downloadedVersion}`
+          : DEFAULT_RELEASES_URL;
+        broadcastUpdateStatus({
+          status: 'downloaded',
+          availableVersion: downloadedVersion || 'latest',
+          percent: 100,
+          message: `Update v${downloadedVersion || 'latest'} is downloaded and ready to install.`,
+          error: null,
+          releaseUrl: tagUrl,
+          releaseNotes:
+            formatReleaseNotesText(info && info.releaseNotes) || latestUpdateStatus.releaseNotes,
+          canAutoInstall: true,
+          checkedAt: Date.now(),
+          source: 'electron-updater',
+        });
+
+        try {
+          const dialogOpts = {
+            type: 'info',
+            buttons: ['Restart and Install Now', 'Later'],
+            defaultId: 0,
+            cancelId: 1,
+            title: 'ProTimer Update Ready',
+            message: `ProTimer v${downloadedVersion || 'latest'} has been downloaded.`,
+            detail:
+              'A new version of ProTimer is ready to install. Would you like to restart the application now to apply the update?',
+          };
+
+          const result =
+            mainWindow && !mainWindow.isDestroyed()
+              ? await dialog.showMessageBox(mainWindow, dialogOpts)
+              : await dialog.showMessageBox(dialogOpts);
+
+          if (result.response === 0) {
+            performQuitAndInstall();
+          }
+        } catch (err) {
+          console.warn('[AutoUpdater] Failed to show update prompt:', err && err.message);
+        }
+      });
+
+      autoUpdater.on('error', (err) => {
+        const msg = (err && err.message) || 'Unable to check for updates.';
+        console.warn('[AutoUpdater] Event error:', msg);
+        // If we are not currently inside performUpdateCheck (e.g. a background download failed,
+        // such as Squirrel.Mac code-signature validation on unsigned macOS), fall back cleanly
+        // to the GitHub Releases download link so the user can still update with 1 click!
+        if (!activeUpdateCheckPromise) {
+          checkGitHubReleaseFallback(true).catch(() => {
+            broadcastUpdateStatus({
+              status: 'error',
+              message: 'Automatic download failed. You can download the latest installer from GitHub.',
+              error: msg,
+              canAutoInstall: false,
+              checkedAt: Date.now(),
+            });
           });
         }
-      } catch (err) {
-        console.warn('[AutoUpdater] Failed to show update prompt:', err && err.message);
-      }
-    });
-
-    autoUpdater.on('error', (err) => {
-      const msg = (err && err.message) || 'Unable to check for updates.';
-      console.warn('[AutoUpdater] Error:', msg);
-      broadcastUpdateStatus({
-        state: 'error',
-        message: 'Could not reach update server.',
-        error: msg,
-      });
-    });
-
-    // Check for updates on startup
-    if (app.isPackaged) {
-      autoUpdater.checkForUpdatesAndNotify().catch((err) => {
-        console.warn('[AutoUpdater] Initial check failed:', err && err.message);
       });
 
-      // Check periodically every 1 hour
-      if (autoUpdateIntervalTimer) {
-        clearInterval(autoUpdateIntervalTimer);
-      }
-      autoUpdateIntervalTimer = setInterval(() => {
-        autoUpdater.checkForUpdatesAndNotify().catch((err) => {
-          console.warn('[AutoUpdater] Periodic check failed:', err && err.message);
-        });
-      }, AUTO_UPDATE_CHECK_INTERVAL_MS);
+      autoUpdaterInitialized = true;
+    } catch (err) {
+      console.warn('[AutoUpdater] Setup failed:', err && err.message);
     }
-  } catch (err) {
-    console.warn('[AutoUpdater] Setup failed:', err && err.message);
+  }
+
+  // Automatic startup check (delayed slightly so splash screen & UI finish initializing cleanly)
+  if (app.isPackaged && shouldAutoCheckForUpdates()) {
+    if (autoUpdateStartupTimer) {
+      clearTimeout(autoUpdateStartupTimer);
+    }
+    autoUpdateStartupTimer = setTimeout(() => {
+      if (shouldAutoCheckForUpdates()) {
+        performUpdateCheck({ silent: true }).catch(() => {});
+      }
+    }, 4500);
+
+    // Check periodically every 1 hour
+    if (autoUpdateIntervalTimer) {
+      clearInterval(autoUpdateIntervalTimer);
+    }
+    autoUpdateIntervalTimer = setInterval(() => {
+      if (shouldAutoCheckForUpdates()) {
+        performUpdateCheck({ silent: true }).catch(() => {});
+      }
+    }, AUTO_UPDATE_CHECK_INTERVAL_MS);
   }
 }
 
 ipcMain.handle('check-for-updates', async () => {
-  if (!autoUpdater) {
-    return {
-      ...latestUpdateStatus,
-      state: 'not-available',
-      message: `Auto-updater unavailable in this environment (v${APP_VERSION}).`,
-    };
+  return performUpdateCheck({ silent: false });
+});
+
+ipcMain.handle('download-update', async () => {
+  if (canUseNativeElectronUpdater() && autoUpdaterInitialized && latestUpdateStatus.canAutoInstall) {
+    if (latestUpdateStatus.status === 'downloaded' || latestUpdateStatus.status === 'downloading') {
+      return latestUpdateStatus;
+    }
+    try {
+      await autoUpdater.downloadUpdate();
+      return latestUpdateStatus;
+    } catch (err) {
+      console.warn('[AutoUpdater] Manual download failed, opening GitHub download link:', err && err.message);
+    }
   }
-  if (!app.isPackaged) {
-    return {
-      ...latestUpdateStatus,
-      state: 'not-available',
-      message: `Running in development mode (v${APP_VERSION}). Build installer to test GitHub Release auto-updates.`,
-    };
+  const targetUrl = latestUpdateStatus.downloadUrl || latestUpdateStatus.releaseUrl || DEFAULT_RELEASES_URL;
+  if (targetUrl && /^https:\/\//i.test(targetUrl)) {
+    try {
+      await shell.openExternal(targetUrl);
+    } catch {
+      // Ignore external open error
+    }
   }
-  try {
-    await autoUpdater.checkForUpdatesAndNotify();
-    return latestUpdateStatus;
-  } catch (err) {
-    return {
-      ...latestUpdateStatus,
-      state: 'error',
-      error: (err && err.message) || 'Update check failed',
-    };
-  }
+  return latestUpdateStatus;
 });
 
 ipcMain.handle('quit-and-install-update', async () => {
-  if (autoUpdater && latestUpdateStatus.state === 'downloaded') {
-    setImmediate(() => {
-      autoUpdater.quitAndInstall(false, true);
-    });
-    return true;
-  }
-  return false;
+  return performQuitAndInstall();
 });
 
 ipcMain.handle('get-update-status', async () => {
   return latestUpdateStatus;
+});
+
+ipcMain.handle('open-external-url', async (_event, targetUrl) => {
+  if (typeof targetUrl !== 'string' || !/^https:\/\//i.test(targetUrl.trim())) {
+    return false;
+  }
+  try {
+    await shell.openExternal(targetUrl.trim());
+    return true;
+  } catch {
+    return false;
+  }
 });
 
 // =============================================================================

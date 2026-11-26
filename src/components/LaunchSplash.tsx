@@ -31,7 +31,7 @@ export const LaunchSplash: React.FC<LaunchSplashProps> = ({ onComplete }) => {
       window.matchMedia &&
       window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-    const holdMs = prefersReducedMotion ? 550 : 1650;
+    const holdMs = prefersReducedMotion ? 1100 : 3000;
     const holdTimer = window.setTimeout(() => {
       setIsExiting(true);
     }, holdMs);
@@ -48,7 +48,7 @@ export const LaunchSplash: React.FC<LaunchSplashProps> = ({ onComplete }) => {
       window.matchMedia &&
       window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-    const fadeDurationMs = prefersReducedMotion ? 180 : 480;
+    const fadeDurationMs = prefersReducedMotion ? 220 : 620;
     const finishTimer = window.setTimeout(() => {
       onComplete();
     }, fadeDurationMs);
@@ -73,7 +73,7 @@ export const LaunchSplash: React.FC<LaunchSplashProps> = ({ onComplete }) => {
       role="status"
       aria-label="Launching ProTimer"
       onClick={beginExit}
-      className={`fixed inset-0 z-[10000] flex flex-col items-center justify-center select-none overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+      className={`fixed inset-0 z-[10000] flex flex-col items-center justify-center select-none overflow-hidden transition-all duration-[620ms] ease-[cubic-bezier(0.16,1,0.3,1)] ${
         isExiting ? 'opacity-0 scale-[1.03] pointer-events-none' : 'opacity-100 scale-100'
       }`}
       style={{
@@ -194,7 +194,7 @@ export const LaunchSplash: React.FC<LaunchSplashProps> = ({ onComplete }) => {
                     ? 'text-neutral-100'
                     : 'text-slate-900'
               }`}
-              style={{ animationDelay: `${300 + idx * 45}ms` }}
+              style={{ animationDelay: `${420 + idx * 65}ms` }}
             >
               {item.char}
             </span>

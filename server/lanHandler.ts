@@ -15,6 +15,11 @@ const requireCjs =
     ? require
     : createRequire(path.join(process.cwd(), 'server', 'lanHandler.ts'));
 const { ndiNativeBridge } = requireCjs('./ndiNativeBridge.cjs');
+const {
+  resolveGitHubRepo,
+  resolvePackageVersion,
+  fetchLatestGitHubRelease,
+} = requireCjs('./githubUpdateHelper.cjs');
 
 let activeServerPort = 3000;
 
@@ -1134,6 +1139,72 @@ export async function handleLanApi(req: IncomingMessage, res: ServerResponse): P
     req.on('close', () => {
       ndiStreamClients.delete(res);
     });
+    return true;
+  }
+
+  // 14. GET /api/lan/updates/check (Check GitHub Releases for newer ProTimer versions)
+  if (pathname === '/api/lan/updates/check' && method === 'GET') {
+    const rootDir = path.resolve(process.cwd());
+    const { owner, repo } = resolveGitHubRepo(rootDir);
+    const currentVersion = resolvePackageVersion(rootDir);
+    try {
+      const release = await fetchLatestGitHubRelease({
+        owner,
+        repo,
+        currentVersion,
+        platform: process.platform,
+        arch: process.arch,
+        isPortable: false,
+      });
+      if (release.isUpdateAvailable) {
+        sendJson(200, {
+          status: 'available',
+          currentVersion: release.currentVersion,
+          availableVersion: release.availableVersion,
+          percent: 0,
+          message: `ProTimer v${release.availableVersion} is available on GitHub Releases.`,
+          error: null,
+          releaseUrl: release.releaseUrl,
+          downloadUrl: release.downloadUrl,
+          releaseNotes: release.releaseNotes,
+          publishedAt: release.publishedAt,
+          canAutoInstall: false,
+          checkedAt: Date.now(),
+          source: 'github-api',
+        });
+      } else {
+        sendJson(200, {
+          status: 'up-to-date',
+          currentVersion: release.currentVersion,
+          availableVersion: release.availableVersion,
+          percent: 100,
+          message: `You are running the latest version (v${release.currentVersion}).`,
+          error: null,
+          releaseUrl: release.releaseUrl,
+          downloadUrl: null,
+          releaseNotes: release.releaseNotes,
+          publishedAt: release.publishedAt,
+          canAutoInstall: false,
+          checkedAt: Date.now(),
+          source: 'github-api',
+        });
+      }
+    } catch (err: any) {
+      sendJson(200, {
+        status: 'error',
+        currentVersion,
+        availableVersion: null,
+        percent: 0,
+        message: 'Could not reach GitHub Releases update server.',
+        error: err?.message || 'Unable to check GitHub Releases.',
+        releaseUrl: `https://github.com/${owner}/${repo}/releases`,
+        downloadUrl: null,
+        releaseNotes: null,
+        canAutoInstall: false,
+        checkedAt: Date.now(),
+        source: 'github-api',
+      });
+    }
     return true;
   }
 

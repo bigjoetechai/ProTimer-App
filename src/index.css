@@ -730,38 +730,38 @@ input[type="number"] {
 }
 
 .splash-logo-enter {
-  animation: splash-logo-enter 720ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: splash-logo-enter 950ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 .splash-ring-sweep {
   stroke-dasharray: 377;
   stroke-dashoffset: 377;
-  animation: splash-ring-sweep 1100ms cubic-bezier(0.22, 1, 0.36, 1) 120ms forwards;
+  animation: splash-ring-sweep 1600ms cubic-bezier(0.22, 1, 0.36, 1) 150ms forwards;
 }
 
 .splash-sheen {
-  animation: splash-sheen 900ms cubic-bezier(0.25, 1, 0.5, 1) 460ms forwards;
+  animation: splash-sheen 1150ms cubic-bezier(0.25, 1, 0.5, 1) 720ms forwards;
 }
 
 .splash-letter-rise {
   opacity: 0;
-  animation: splash-letter-rise 540ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: splash-letter-rise 680ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 .splash-divider-expand {
   opacity: 0;
   transform-origin: center;
-  animation: splash-divider-expand 620ms cubic-bezier(0.16, 1, 0.3, 1) 720ms forwards;
+  animation: splash-divider-expand 780ms cubic-bezier(0.16, 1, 0.3, 1) 1050ms forwards;
 }
 
 .splash-subtitle-fade {
   opacity: 0;
-  animation: splash-subtitle-fade 520ms cubic-bezier(0.16, 1, 0.3, 1) 860ms forwards;
+  animation: splash-subtitle-fade 680ms cubic-bezier(0.16, 1, 0.3, 1) 1280ms forwards;
 }
 
 .splash-glow-breathe {
   opacity: 0;
-  animation: splash-glow-breathe 1200ms cubic-bezier(0.16, 1, 0.3, 1) 80ms forwards;
+  animation: splash-glow-breathe 1800ms cubic-bezier(0.16, 1, 0.3, 1) 100ms forwards;
 }
 
 @media (prefers-reduced-motion: reduce) {

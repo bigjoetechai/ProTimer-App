@@ -325,12 +325,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getSystemFonts: () => ipcRenderer.invoke('get-system-fonts'),
 
   // ===========================================================================
-  // 5. AUTO-UPDATER (GitHub Releases via electron-updater)
+  // 5. AUTO-UPDATER (GitHub Releases via electron-updater + GitHub API fallback)
   // ===========================================================================
 
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
+  downloadUpdate: () => ipcRenderer.invoke('download-update'),
   quitAndInstallUpdate: () => ipcRenderer.invoke('quit-and-install-update'),
   getUpdateStatus: () => ipcRenderer.invoke('get-update-status'),
+  openExternalUrl: (url) => ipcRenderer.invoke('open-external-url', url),
   onUpdateStatus: (callback) => {
     if (typeof callback !== 'function') return () => {};
     const handler = (_event, status) => callback(status);

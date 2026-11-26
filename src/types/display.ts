@@ -244,28 +244,41 @@ export interface ElectronAPI {
   }>;
   getSystemFonts?: () => Promise<string[]>;
 
-  // Auto-Updater (GitHub Releases via electron-updater)
-  checkForUpdates?: () => Promise<{
-    status: string;
-    message?: string;
-    version?: string | null;
-    percent?: number;
-  }>;
+  // Auto-Updater (GitHub Releases via electron-updater + GitHub Releases API fallback)
+  checkForUpdates?: () => Promise<UpdateStatusInfo>;
+  downloadUpdate?: () => Promise<UpdateStatusInfo>;
   quitAndInstallUpdate?: () => Promise<boolean>;
-  getUpdateStatus?: () => Promise<{
-    status: string;
-    version: string | null;
-    percent: number;
-    error: string | null;
-  }>;
-  onUpdateStatus?: (
-    callback: (status: {
-      status: string;
-      version: string | null;
-      percent: number;
-      error: string | null;
-    }) => void
-  ) => () => void;
+  getUpdateStatus?: () => Promise<UpdateStatusInfo>;
+  openExternalUrl?: (url: string) => Promise<boolean>;
+  onUpdateStatus?: (callback: (status: UpdateStatusInfo) => void) => () => void;
+}
+
+export type UpdateState =
+  | 'idle'
+  | 'checking'
+  | 'available'
+  | 'downloading'
+  | 'downloaded'
+  | 'up-to-date'
+  | 'error';
+
+export interface UpdateStatusInfo {
+  status: UpdateState;
+  currentVersion: string;
+  availableVersion: string | null;
+  percent: number;
+  bytesPerSecond?: number;
+  transferredBytes?: number;
+  totalBytes?: number;
+  message: string;
+  error: string | null;
+  releaseUrl?: string | null;
+  downloadUrl?: string | null;
+  releaseNotes?: string | null;
+  publishedAt?: string | null;
+  canAutoInstall?: boolean;
+  checkedAt?: number | null;
+  source?: 'electron-updater' | 'github-api';
 }
 
 declare global {

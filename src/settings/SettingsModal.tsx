@@ -12,7 +12,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { X, Upload, Download, RotateCcw, Check, ChevronDown, ChevronUp, Radio, Copy } from 'lucide-react';
+import { X, Upload, Download, RotateCcw, Check, ChevronDown, ChevronUp, Radio, Copy, ExternalLink } from 'lucide-react';
 import {
   AppPreferences,
   DEFAULT_PREFERENCES,
@@ -26,12 +26,14 @@ import {
   createDefaultSizesAndPositionsExtras,
   ensureBebasCountdownDefault,
   TimerList,
+  UpdateStatusInfo,
   extractNdiSourcePrefix,
   formatListNdiSourceName,
 } from '../types';
 import { useTheme } from '../hooks';
 import { timerManagerService } from '../services/timerManager';
 import { ndiStreamService, NdiStreamStatus } from '../services/ndiStreamService';
+import { updateService } from '../services/updateService';
 import { APP_VERSION_TAG } from '../constants/appVersion';
 import {
   COMMON_SYSTEM_FONTS,
@@ -506,6 +508,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [ndiStatus, setNdiStatus] = useState<NdiStreamStatus>(() =>
     ndiStreamService.getStatus()
   );
+  const [updateInfo, setUpdateInfo] = useState<UpdateStatusInfo>(() =>
+    updateService.getStatus()
+  );
   const [copiedNdiKey, setCopiedNdiKey] = useState<string | null>(null);
   const copyNdiUrl = (key: string, url: string) => {
     if (typeof navigator !== 'undefined' && navigator.clipboard) {
@@ -524,10 +529,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const pendingListLogoTargetIdRef = useRef<string | null>(null);
 
   useEffect(() => {
-    const unsubscribe = ndiStreamService.subscribe((status) => {
+    const unsubscribeNdi = ndiStreamService.subscribe((status) => {
       setNdiStatus(status);
     });
-    return () => unsubscribe();
+    const unsubscribeUpdates = updateService.subscribe((info) => {
+      setUpdateInfo(info);
+    });
+    return () => {
+      unsubscribeNdi();
+      unsubscribeUpdates();
+    };
   }, []);
 
   useEffect(() => {
@@ -3045,8 +3056,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             {activeSection === 'updates' && (
               <div className="flex-1 p-3 overflow-y-auto">
                 <div className={`h-full border rounded-xs p-5 space-y-6 ${contentCardCls}`}>
-                  <div className="space-y-3">
-                    <h3 className={sectionHeadingCls}>SOFTWARE VERSION & UPDATES</h3>
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                      <h3 className={sectionHeadingCls}>SOFTWARE VERSION & UPDATES</h3>
+                      <button
+                        type="button"
+                        onClick={() => updateService.checkForUpdates(false)}
+                        disabled={updateInfo.status === 'checking' || updateInfo.status === 'downloading'}
+                        className="glass-btn glass-btn-cyan glass-btn-subtle px-4 py-1.5 text-[12px] font-semibold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      >
+                        <RotateCcw className={`w-3.5 h-3.5 ${updateInfo.status === 'checking' ? 'animate-spin' : ''}`} />
+                        <span>{updateInfo.status === 'checking' ? 'Checking...' : 'Check for Updates Now'}</span>
+                      </button>
+                    </div>
+
                     <div className="space-y-1">
                       <p className="text-[13px]">
                         ProTimer Desktop{' '}
@@ -3059,12 +3082,119 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         Owner / Company: Bigjoe Technology • Copyright © 2026 Bigjoe Technology
                       </p>
                     </div>
+
                     <PrefCheckbox
                       isDark={isDark}
                       checked={prefs.checkForUpdatesAutomatically ?? true}
                       onChange={(val) => updatePref('checkForUpdatesAutomatically', val)}
                       label="Check for ProTimer updates automatically on startup"
                     />
+
+                    {/* Live GitHub Releases Update Status Card */}
+                    <div
+                      className={`glass-subcard p-4 rounded-2xl text-[12px] space-y-3 ${
+                        isDark ? 'text-neutral-300' : 'text-slate-700'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <span className="font-semibold text-[12.5px]">
+                          {updateInfo.status === 'checking' && 'Checking GitHub Releases...'}
+                          {updateInfo.status === 'downloading' &&
+                            `Downloading ProTimer v${updateInfo.availableVersion || 'latest'} (${updateInfo.percent}%)`}
+                          {updateInfo.status === 'available' &&
+                            `Update Available: ProTimer v${updateInfo.availableVersion || 'latest'}`}
+                          {updateInfo.status === 'downloaded' &&
+                            `Ready to Install: ProTimer v${updateInfo.availableVersion || 'latest'}`}
+                          {updateInfo.status === 'up-to-date' &&
+                            `Up to Date (${APP_VERSION_TAG})`}
+                          {updateInfo.status === 'idle' &&
+                            `GitHub Auto-Update Ready (${APP_VERSION_TAG})`}
+                          {updateInfo.status === 'error' && 'Update Check Notice'}
+                        </span>
+                        {updateInfo.checkedAt && (
+                          <span className={`text-[11px] ${isDark ? 'text-neutral-500' : 'text-slate-500'}`}>
+                            Last checked {new Date(updateInfo.checkedAt).toLocaleTimeString()}
+                          </span>
+                        )}
+                      </div>
+
+                      {updateInfo.status === 'downloading' && (
+                        <div className="space-y-1.5">
+                          <div className={`w-full h-2 rounded-full overflow-hidden ${isDark ? 'bg-black/40' : 'bg-slate-200'}`}>
+                            <div
+                              className="h-full bg-cyan-500 transition-all duration-200"
+                              style={{ width: `${Math.min(100, Math.max(4, updateInfo.percent || 0))}%` }}
+                            />
+                          </div>
+                          {updateInfo.bytesPerSecond ? (
+                            <div className="text-[11px] font-mono text-neutral-400">
+                              {(updateInfo.bytesPerSecond / (1024 * 1024)).toFixed(2)} MB/s
+                            </div>
+                          ) : null}
+                        </div>
+                      )}
+
+                      <p className={`text-[12px] ${isDark ? 'text-neutral-400' : 'text-slate-600'}`}>
+                        {updateInfo.error || updateInfo.message}
+                      </p>
+
+                      {updateInfo.releaseNotes &&
+                        (updateInfo.status === 'available' ||
+                          updateInfo.status === 'downloading' ||
+                          updateInfo.status === 'downloaded') && (
+                          <div
+                            className={`p-2.5 rounded-xl border text-[11px] max-h-36 overflow-y-auto whitespace-pre-wrap leading-relaxed ${
+                              isDark
+                                ? 'bg-black/30 border-white/[0.08] text-neutral-300'
+                                : 'bg-white/70 border-slate-200 text-slate-700'
+                            }`}
+                          >
+                            {updateInfo.releaseNotes}
+                          </div>
+                        )}
+
+                      <div className="flex flex-wrap items-center gap-2 pt-1">
+                        {updateInfo.status === 'downloaded' && (
+                          <button
+                            type="button"
+                            onClick={() => updateService.quitAndInstall()}
+                            className="glass-btn glass-btn-emerald-active px-4 py-1.5 text-[12px] font-semibold cursor-pointer"
+                          >
+                            Restart and Install Now
+                          </button>
+                        )}
+                        {updateInfo.status === 'available' && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              updateInfo.canAutoInstall
+                                ? updateService.downloadUpdate()
+                                : updateService.openExternalReleaseLink(
+                                    updateInfo.downloadUrl || updateInfo.releaseUrl
+                                  )
+                            }
+                            className="glass-btn glass-btn-emerald-active px-4 py-1.5 text-[12px] font-semibold flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                            <span>
+                              {updateInfo.canAutoInstall
+                                ? `Download & Install v${updateInfo.availableVersion || 'Latest'}`
+                                : `Download v${updateInfo.availableVersion || 'Latest'}`}
+                            </span>
+                          </button>
+                        )}
+                        {updateInfo.releaseUrl && (
+                          <button
+                            type="button"
+                            onClick={() => updateService.openExternalReleaseLink(updateInfo.releaseUrl)}
+                            className="glass-btn glass-btn-subtle px-3.5 py-1.5 text-[11px] font-medium flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                            <span>GitHub Releases</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>

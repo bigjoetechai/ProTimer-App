@@ -26,10 +26,14 @@ import {
   FileText,
   Lock,
   RotateCcw,
+  Download,
+  ExternalLink,
   X,
 } from 'lucide-react';
 import { useWindowManager } from '../hooks';
 import { APP_VERSION_TAG } from '../constants/appVersion';
+import { UpdateStatusInfo } from '../types';
+import { updateService } from '../services/updateService';
 
 interface TopMenuBarProps {
   currentListName: string;
@@ -103,53 +107,24 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
   const [activeBrandDialog, setActiveBrandDialog] = useState<
     'about' | 'support' | 'guide' | 'activation' | 'updates' | null
   >(null);
-  const [updateInfo, setUpdateInfo] = useState<{
-    status: string;
-    version: string | null;
-    percent: number;
-    error: string | null;
-  }>({
-    status: 'idle',
-    version: null,
-    percent: 0,
-    error: null,
-  });
+  const [updateInfo, setUpdateInfo] = useState<UpdateStatusInfo>(() =>
+    updateService.getStatus()
+  );
 
   useEffect(() => {
-    const api = typeof window !== 'undefined' ? window.electronAPI : undefined;
-    if (!api) return;
-    if (api.getUpdateStatus) {
-      api.getUpdateStatus().then((st) => {
-        if (st) setUpdateInfo(st);
-      }).catch(() => {});
-    }
-    if (api.onUpdateStatus) {
-      return api.onUpdateStatus((st) => {
-        if (st) setUpdateInfo(st);
-      });
-    }
+    return updateService.subscribe((st) => {
+      setUpdateInfo(st);
+    });
   }, []);
 
   const triggerManualUpdateCheck = async () => {
-    const api = typeof window !== 'undefined' ? window.electronAPI : undefined;
-    if (api?.checkForUpdates) {
-      setUpdateInfo((prev) => ({ ...prev, status: 'checking', error: null }));
-      try {
-        const res = await api.checkForUpdates();
-        if (res && res.status === 'dev-mode') {
-          setUpdateInfo((prev) => ({ ...prev, status: 'up-to-date' }));
-        }
-      } catch (err: any) {
-        setUpdateInfo((prev) => ({
-          ...prev,
-          status: 'error',
-          error: err?.message || 'Update check failed',
-        }));
-      }
-    } else {
-      setUpdateInfo((prev) => ({ ...prev, status: 'up-to-date' }));
-    }
+    await updateService.checkForUpdates(false);
   };
+
+  const hasPendingUpdate =
+    updateInfo.status === 'available' ||
+    updateInfo.status === 'downloading' ||
+    updateInfo.status === 'downloaded';
 
   const {
     toggleMaximize,
@@ -280,6 +255,16 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
             <span className={`font-bold tracking-wider text-xs ${isDark ? 'text-white' : 'text-slate-900'}`}>
               PRO<span className="text-cyan-500">TIMER</span>
             </span>
+            {hasPendingUpdate && (
+              <span
+                title={
+                  updateInfo.status === 'downloaded'
+                    ? `Update v${updateInfo.availableVersion || 'new'} ready to install`
+                    : `Update v${updateInfo.availableVersion || 'new'} available`
+                }
+                className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0"
+              />
+            )}
             <ChevronDown className="w-3 h-3 opacity-60" />
           </button>
 
@@ -343,12 +328,21 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
                 onClick={() => {
                   setActiveBrandDialog('updates');
                   setActiveMenu(null);
-                  triggerManualUpdateCheck();
+                  if (updateInfo.status !== 'downloading' && updateInfo.status !== 'downloaded') {
+                    triggerManualUpdateCheck();
+                  }
                 }}
-                className={`${dropdownItemClass} gap-2.5 py-2`}
+                className={`${dropdownItemClass} justify-between py-2`}
               >
-                <RotateCcw className={`w-3.5 h-3.5 shrink-0 ${isDark ? 'text-neutral-400' : 'text-slate-500'}`} />
-                <span>Check for Updates</span>
+                <div className="flex items-center gap-2.5">
+                  <RotateCcw className={`w-3.5 h-3.5 shrink-0 ${isDark ? 'text-neutral-400' : 'text-slate-500'}`} />
+                  <span>Check for Updates</span>
+                </div>
+                {hasPendingUpdate && (
+                  <span className="px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/20 text-emerald-400">
+                    {updateInfo.status === 'downloaded' ? 'Ready' : `v${updateInfo.availableVersion || 'New'}`}
+                  </span>
+                )}
               </button>
             </div>
           )}
@@ -1083,6 +1077,10 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
 
               {activeBrandDialog === 'updates' && (
                 <div className="space-y-3">
+                  <div className={`text-[11px] font-mono ${isDark ? 'text-neutral-400' : 'text-slate-500'}`}>
+                    Installed Version: <span className={isDark ? 'text-white font-semibold' : 'text-slate-900 font-semibold'}>v{updateInfo.currentVersion || APP_VERSION_TAG.replace(/^v/, '')}</span>
+                  </div>
+
                   {updateInfo.status === 'checking' && (
                     <div className="flex items-center gap-2 text-cyan-400 font-semibold">
                       <RotateCcw className="w-4 h-4 animate-spin" />
@@ -1090,17 +1088,67 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
                     </div>
                   )}
 
-                  {(updateInfo.status === 'available' || updateInfo.status === 'downloading') && (
+                  {updateInfo.status === 'downloading' && (
                     <div className="space-y-2">
                       <div className="flex items-center justify-between text-cyan-400 font-semibold">
-                        <span>Downloading ProTimer v{updateInfo.version || 'latest'}...</span>
+                        <span>Downloading ProTimer v{updateInfo.availableVersion || 'latest'}...</span>
                         <span>{Math.round(updateInfo.percent || 0)}%</span>
                       </div>
                       <div className={`w-full h-2 rounded-full overflow-hidden ${isDark ? 'bg-[#1e2636]' : 'bg-slate-300'}`}>
                         <div
                           className="h-full bg-cyan-500 transition-all duration-200"
-                          style={{ width: `${Math.min(100, Math.max(5, Math.round(updateInfo.percent || 0)))}%` }}
+                          style={{ width: `${Math.min(100, Math.max(4, Math.round(updateInfo.percent || 0)))}%` }}
                         />
+                      </div>
+                      {updateInfo.bytesPerSecond ? (
+                        <div className={`text-[11px] font-mono ${isDark ? 'text-neutral-400' : 'text-slate-600'}`}>
+                          {(updateInfo.bytesPerSecond / (1024 * 1024)).toFixed(2)} MB/s
+                        </div>
+                      ) : null}
+                    </div>
+                  )}
+
+                  {updateInfo.status === 'available' && (
+                    <div className="space-y-2.5">
+                      <div className="flex items-center gap-2 text-cyan-400 font-semibold">
+                        <Download className="w-4 h-4" />
+                        <span>New version ProTimer v{updateInfo.availableVersion || 'latest'} is available!</span>
+                      </div>
+                      <p className={isDark ? 'text-neutral-300' : 'text-slate-600'}>
+                        {updateInfo.canAutoInstall
+                          ? 'Preparing automatic background download from GitHub Releases...'
+                          : 'A newer release was published on GitHub. Download the latest installer to upgrade.'}
+                      </p>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {updateInfo.canAutoInstall ? (
+                          <button
+                            type="button"
+                            onClick={() => updateService.downloadUpdate()}
+                            className="glass-btn glass-btn-cyan px-4 py-1.5 rounded-full font-semibold flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                            Download Update
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => updateService.openExternalReleaseLink(updateInfo.downloadUrl || updateInfo.releaseUrl)}
+                            className="glass-btn glass-btn-emerald-active px-4 py-1.5 rounded-full font-semibold flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                            Download v{updateInfo.availableVersion || 'Latest'}
+                          </button>
+                        )}
+                        {updateInfo.releaseUrl && (
+                          <button
+                            type="button"
+                            onClick={() => updateService.openExternalReleaseLink(updateInfo.releaseUrl)}
+                            className="glass-btn glass-btn-subtle px-3.5 py-1.5 rounded-full text-[11px] font-medium flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                            View Release
+                          </button>
+                        )}
                       </div>
                     </div>
                   )}
@@ -1109,14 +1157,14 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
                     <div className="space-y-2.5">
                       <div className="flex items-center gap-2 text-emerald-500 font-semibold">
                         <CheckCircle2 className="w-4 h-4" />
-                        <span>Update v{updateInfo.version || 'new'} is downloaded and ready!</span>
+                        <span>Update v{updateInfo.availableVersion || 'new'} is downloaded and ready!</span>
                       </div>
                       <p className={isDark ? 'text-neutral-400' : 'text-slate-600'}>
-                        Restart ProTimer now to install the new update.
+                        Restart ProTimer now to install the new update automatically.
                       </p>
                       <button
                         type="button"
-                        onClick={() => window.electronAPI?.quitAndInstallUpdate?.()}
+                        onClick={() => updateService.quitAndInstall()}
                         className="glass-btn glass-btn-emerald-active px-4 py-1.5 rounded-full font-semibold cursor-pointer"
                       >
                         Restart and Install Now
@@ -1137,26 +1185,56 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
                   )}
 
                   {updateInfo.status === 'error' && (
-                    <div className="space-y-1.5">
+                    <div className="space-y-2">
                       <div className="flex items-center gap-2 text-amber-400 font-semibold">
                         <Info className="w-4 h-4" />
                         <span>Update Check Notice</span>
                       </div>
-                      <p className={isDark ? 'text-neutral-400' : 'text-slate-600'}>
-                        {updateInfo.error || 'Could not reach GitHub Releases update server.'}
+                      <p className={isDark ? 'text-neutral-300' : 'text-slate-600'}>
+                        {updateInfo.error || updateInfo.message || 'Could not reach GitHub Releases update server.'}
                       </p>
+                      {updateInfo.releaseUrl && (
+                        <button
+                          type="button"
+                          onClick={() => updateService.openExternalReleaseLink(updateInfo.releaseUrl)}
+                          className="glass-btn glass-btn-subtle px-3.5 py-1.5 rounded-full text-[11px] font-medium inline-flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" />
+                          Open GitHub Releases
+                        </button>
+                      )}
                     </div>
                   )}
 
-                  <div className="pt-1">
+                  {updateInfo.releaseNotes &&
+                    (updateInfo.status === 'available' ||
+                      updateInfo.status === 'downloading' ||
+                      updateInfo.status === 'downloaded') && (
+                      <div
+                        className={`p-2.5 rounded-xl border text-[11px] max-h-32 overflow-y-auto whitespace-pre-wrap leading-relaxed ${
+                          isDark
+                            ? 'bg-black/30 border-white/[0.08] text-neutral-300'
+                            : 'bg-slate-100 border-slate-200 text-slate-700'
+                        }`}
+                      >
+                        {updateInfo.releaseNotes}
+                      </div>
+                    )}
+
+                  <div className="pt-1 flex items-center justify-between gap-2">
                     <button
                       type="button"
                       onClick={triggerManualUpdateCheck}
                       disabled={updateInfo.status === 'checking' || updateInfo.status === 'downloading'}
-                      className="glass-btn glass-btn-subtle px-4 py-1.5 rounded-full text-[11px] font-medium cursor-pointer"
+                      className="glass-btn glass-btn-subtle px-4 py-1.5 rounded-full text-[11px] font-medium cursor-pointer disabled:opacity-50"
                     >
-                      Check Again
+                      {updateInfo.status === 'checking' ? 'Checking...' : 'Check Again'}
                     </button>
+                    {updateInfo.checkedAt && (
+                      <span className={`text-[10.5px] ${isDark ? 'text-neutral-500' : 'text-slate-400'}`}>
+                        Checked {new Date(updateInfo.checkedAt).toLocaleTimeString()}
+                      </span>
+                    )}
                   </div>
                 </div>
               )}
