@@ -42,6 +42,7 @@ import {
   ListTemplateCategory,
   TemplateLoadMode,
 } from './listTemplatesService';
+import { parseTimersCsv } from '../utils/csvTimerParser';
 
 export type TimerManagerSubscriber = (snapshot: TimerSnapshot, timers: TimerItem[]) => void;
 
@@ -2909,7 +2910,7 @@ class TimerManagerService {
   }
 
   /**
-   * Export active list to standard CSV file.
+   * Export active list to standard RFC-4180 CSV file with UTF-8 BOM for Excel compatibility.
    */
   public downloadListCsv(targetListId?: string): void {
     const listId = targetListId || this.activeListId;
@@ -2922,22 +2923,70 @@ class TimerManagerService {
 
     const escapeCsv = (str: string) => `"${(str || '').replace(/"/g, '""')}"`;
 
-    let csvContent = 'Name,Duration,Type,End Action,Alert 1,Alert 2,Scheduled Start\r\n';
+    const formatTypeLabel = (type: TimerItem['type']): string => {
+      switch (type) {
+        case 'count_up':
+          return 'Count Up';
+        case 'stopwatch':
+          return 'Stopwatch';
+        case 'digital_clock':
+          return 'Digital Clock';
+        case 'meeting_timer':
+          return 'Meeting Timer';
+        case 'empty':
+          return 'Empty';
+        case 'spacer':
+          return 'Spacer';
+        case 'countdown':
+        case 'count_down':
+        default:
+          return 'Countdown';
+      }
+    };
+
+    const formatEndActionLabel = (action: TimerItem['endAction']): string => {
+      switch (action) {
+        case 'count_up':
+          return 'Overtime';
+        case 'next_timer':
+          return 'Next Timer';
+        case 'blackout':
+          return 'Blackout';
+        case 'loop':
+          return 'Loop';
+        case 'none':
+          return 'None';
+        case 'stop':
+        default:
+          return 'Stop';
+      }
+    };
+
+    let csvContent =
+      '\uFEFFName,Start,Duration,End,Timer Type,Alert 1,Alert 2,End Action,Speed,Scheduled Start,Notes\r\n';
 
     timers.forEach((t) => {
       const durFormatted = formatSeconds(t.durationSeconds, true);
       const a1Formatted = t.alert1 ? formatSeconds(t.alert1.timeSeconds, true) : '';
       const a2Formatted = t.alert2 ? formatSeconds(t.alert2.timeSeconds, true) : '';
+      const start = t.startTime || '';
+      const end = t.endTime || '';
       const sched = t.scheduledStartTime || '';
+      const speed = `${t.speed || 100}%`;
+      const notes = t.notes || '';
 
       csvContent += [
         escapeCsv(t.name),
+        escapeCsv(start),
         escapeCsv(durFormatted),
-        escapeCsv(t.type),
-        escapeCsv(t.endAction),
+        escapeCsv(end),
+        escapeCsv(formatTypeLabel(t.type)),
         escapeCsv(a1Formatted),
         escapeCsv(a2Formatted),
+        escapeCsv(formatEndActionLabel(t.endAction)),
+        escapeCsv(speed),
         escapeCsv(sched),
+        escapeCsv(notes),
       ].join(',') + '\r\n';
     });
 
@@ -2954,7 +3003,8 @@ class TimerManagerService {
   }
 
   /**
-   * Import cues from CSV text into a list.
+   * Import cues from CSV/TSV text into a list with automatic delimiter detection,
+   * header-based column mapping, and per-column typo correction.
    */
   public async importCsv(
     csvText: string,
@@ -2965,99 +3015,57 @@ class TimerManagerService {
       const list = this.lists.get(listId);
       if (!list) return { success: false, count: 0, message: 'Target list not found.' };
 
-      const lines = csvText.split(/\r?\n/).filter((l) => l.trim().length > 0);
-      if (lines.length === 0) {
-        return { success: false, count: 0, message: 'Empty CSV file.' };
+      const parsed = parseTimersCsv(csvText);
+      if (parsed.rows.length === 0) {
+        return { success: false, count: 0, message: 'No valid timer rows found in CSV file.' };
       }
 
       this.pushHistory(`Import CSV into "${list.name}"`);
 
-      let startIndex = 0;
-      const firstLineLower = lines[0].toLowerCase();
-      if (firstLineLower.includes('name') || firstLineLower.includes('duration')) {
-        startIndex = 1;
-      }
-
-      const parseCsvLine = (line: string): string[] => {
-        const result: string[] = [];
-        let cur = '';
-        let insideQuote = false;
-        for (let i = 0; i < line.length; i++) {
-          const char = line[i];
-          if (char === '"') {
-            if (insideQuote && line[i + 1] === '"') {
-              cur += '"';
-              i++;
-            } else {
-              insideQuote = !insideQuote;
-            }
-          } else if (char === ',' && !insideQuote) {
-            result.push(cur.trim());
-            cur = '';
-          } else {
-            cur += char;
-          }
-        }
-        result.push(cur.trim());
-        return result;
-      };
-
-      const parseTimeToSec = (str: string): number => {
-        if (!str) return 300;
-        if (/^\d+$/.test(str)) return parseInt(str, 10);
-        const parts = str.split(':').map((p) => parseInt(p, 10) || 0);
-        if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
-        if (parts.length === 2) return parts[0] * 60 + parts[1];
-        return 300;
-      };
-
       let count = 0;
-      for (let i = startIndex; i < lines.length; i++) {
-        const cols = parseCsvLine(lines[i]);
-        if (cols.length === 0 || !cols[0]) continue;
-
-        const name = cols[0];
-        const durSec = parseTimeToSec(cols[1]);
-        const type = (cols[2] || 'countdown') as any;
-        const endAction = (cols[3] || 'stop') as any;
-        const a1Sec = cols[4] ? parseTimeToSec(cols[4]) : undefined;
-        const a2Sec = cols[5] ? parseTimeToSec(cols[5]) : undefined;
-        const scheduledStartTime = cols[6] || undefined;
-
+      const now = Date.now();
+      for (const row of parsed.rows) {
         const newTimer: TimerItem = {
           id: generateId('t'),
-          name,
+          name: row.name,
           order: list.timerIds.length,
-          durationSeconds: durSec,
+          durationSeconds: row.durationSeconds,
           elapsedSeconds: 0,
-          remainingSeconds: durSec,
-          type: ['countdown', 'count_up', 'stopwatch', 'digital_clock', 'meeting_timer'].includes(type)
-            ? type
-            : 'countdown',
+          remainingSeconds: row.durationSeconds,
+          type: row.type,
           status: 'idle',
-          speed: 100,
-          endAction: ['stop', 'count_up', 'next_timer', 'loop', 'blackout'].includes(endAction)
-            ? endAction
-            : 'stop',
-          scheduledStartTime,
-          alert1: a1Sec !== undefined ? {
-            id: generateId('alt'),
-            timeSeconds: a1Sec,
-            color: '#eab308',
-            flash: false,
-            soundEnabled: true,
-            label: 'Warning',
-          } : undefined,
-          alert2: a2Sec !== undefined ? {
-            id: generateId('alt'),
-            timeSeconds: a2Sec,
-            color: '#ef4444',
-            flash: true,
-            soundEnabled: true,
-            label: 'Danger',
-          } : undefined,
-          createdAt: Date.now() + count,
-          updatedAt: Date.now() + count,
+          startTime: row.startTime,
+          endTime: row.endTime,
+          speed: row.speed,
+          endAction: row.endAction,
+          scheduledStartTime: row.scheduledStartTime,
+          autoStart: row.autoStart,
+          notes: row.notes,
+          colorTag: row.colorTag,
+          alert1:
+            row.alert1Seconds !== undefined
+              ? {
+                  id: generateId('alt'),
+                  timeSeconds: row.alert1Seconds,
+                  color: '#eab308',
+                  flash: false,
+                  soundEnabled: true,
+                  label: 'Warning',
+                }
+              : undefined,
+          alert2:
+            row.alert2Seconds !== undefined
+              ? {
+                  id: generateId('alt'),
+                  timeSeconds: row.alert2Seconds,
+                  color: '#ef4444',
+                  flash: true,
+                  soundEnabled: true,
+                  label: 'Danger',
+                }
+              : undefined,
+          createdAt: now + count,
+          updatedAt: now + count,
         };
 
         this.timers.set(newTimer.id, newTimer);

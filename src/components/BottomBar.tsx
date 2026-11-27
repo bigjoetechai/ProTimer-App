@@ -22,7 +22,6 @@ import {
   X,
   Wifi,
   History,
-  Radio,
   Palette,
   FolderInput,
   BookmarkPlus,
@@ -334,9 +333,19 @@ export const BottomBar: React.FC<BottomBarProps> = ({
                 {isListNdiActive && (
                   <span
                     title={`NDI output is active for ${list.name}: ${listNdiSourceName}`}
-                    className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded-full text-[9px] font-mono bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                    className={`inline-flex items-center gap-1 px-1.5 py-0.2 rounded-full text-[9px] font-mono border ${
+                      ndiStreamStatus?.multiActive && !effectiveActiveNdiByList[list.id]
+                        ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                        : 'bg-purple-500/20 text-purple-300 border-purple-500/40'
+                    }`}
                   >
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full animate-pulse ${
+                        ndiStreamStatus?.multiActive && !effectiveActiveNdiByList[list.id]
+                          ? 'bg-amber-400'
+                          : 'bg-purple-400'
+                      }`}
+                    />
                     <span>NDI</span>
                   </span>
                 )}
@@ -468,7 +477,6 @@ export const BottomBar: React.FC<BottomBarProps> = ({
                   ? ndiStreamStatus.multiActive
                   : ndiStreamStatus?.active && ndiStreamStatus.mode === 'multi'
               );
-            const isNdiButton = item.label === 'NDI' || item.label === 'NDI Multi';
             const isActive =
               (item.label === 'Presenter' && isPresenterActive) ||
               (item.label === 'Preview' && isPreviewActive) ||
@@ -511,8 +519,10 @@ export const BottomBar: React.FC<BottomBarProps> = ({
                     : item.tooltip
                 }
                 className={`glass-btn glass-btn-subtle px-3 py-1 rounded-full text-[11px] font-medium flex items-center gap-1.5 cursor-pointer ${
-                  isNdiButton && isActive
-                    ? 'glass-btn-emerald-active'
+                  isNdiSingleActive
+                    ? 'glass-btn-purple-active'
+                    : isNdiMultiActive
+                    ? 'glass-btn-amber-active'
                     : isActive
                     ? 'glass-btn-cyan-active'
                     : ''
@@ -521,7 +531,11 @@ export const BottomBar: React.FC<BottomBarProps> = ({
                 {isActive && (
                   <span
                     className={`w-1.5 h-1.5 rounded-full animate-pulse ${
-                      isNdiButton ? 'bg-emerald-300' : 'bg-cyan-300'
+                      isNdiSingleActive
+                        ? 'bg-purple-200'
+                        : isNdiMultiActive
+                        ? 'bg-amber-200'
+                        : 'bg-cyan-300'
                     }`}
                   />
                 )}
@@ -529,43 +543,6 @@ export const BottomBar: React.FC<BottomBarProps> = ({
               </button>
             );
           })}
-
-          {/* Active NDI Network Stream Indicator Pill */}
-          {ndiStreamStatus?.active && (
-            <div
-              title={`Broadcasting NDI Streams on Network:\nActive Sources: ${
-                ndiStreamStatus.activeSourceNames && ndiStreamStatus.activeSourceNames.length > 0
-                  ? ndiStreamStatus.activeSourceNames.join(', ')
-                  : activeListNdiSourceName
-              }\nCurrent Tab Source: ${activeListNdiSourceName}\nFormat: ${ndiStreamStatus.width}×${ndiStreamStatus.height} @ ${ndiStreamStatus.frameRate} FPS\nGroups: ${
-                ndiStreamStatus.useCustomGroups ? ndiStreamStatus.customGroups : 'Public'
-              }\nNetwork Capture URL: http://${ndiStreamStatus.ips[0] || 'localhost'}:${ndiStreamStatus.port}/api/lan/ndi/mjpeg`}
-              className={`px-2.5 py-0.5 rounded border text-[10.5px] font-mono flex items-center gap-1.5 ${
-                isDark
-                  ? 'bg-emerald-950/50 border-emerald-500/40 text-emerald-300'
-                  : 'bg-emerald-50 border-emerald-300 text-emerald-800'
-              }`}
-            >
-              <Radio className="w-3 h-3 text-emerald-400 animate-pulse shrink-0" />
-              <span className="font-semibold">
-                NDI LIVE:{' '}
-                {ndiStreamStatus.multiActive &&
-                ndiStreamStatus.activeSourceNames &&
-                ndiStreamStatus.activeSourceNames.length > 1
-                  ? ndiStreamStatus.activeSourceNames.join(' • ')
-                  : effectiveActiveNdiByList[activeListId]
-                  ? activeListNdiSourceName
-                  : ndiStreamStatus.activeSourceNames &&
-                    ndiStreamStatus.activeSourceNames.length > 0
-                  ? ndiStreamStatus.activeSourceNames.join(' • ')
-                  : activeListNdiSourceName}
-              </span>
-              <span className="opacity-80 hidden xl:inline">
-                ({ndiStreamStatus.width}×{ndiStreamStatus.height} @ {ndiStreamStatus.frameRate}fps
-                {ndiStreamStatus.alphaChannel ? ' • Alpha' : ''})
-              </span>
-            </div>
-          )}
         </div>
 
         {/* Fullscreen Monitor Selector Dropdown (Independent per List Tab) */}

@@ -434,7 +434,7 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
         <input
           ref={csvFileInputRef}
           type="file"
-          accept=".csv"
+          accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values"
           className="hidden"
           onChange={handleCsvFileChange}
         />

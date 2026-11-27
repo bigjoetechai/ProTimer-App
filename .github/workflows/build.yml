@@ -1,6 +1,8 @@
 name: Build & Publish Cross-Platform Releases (Windows, macOS & Linux)
 
 on:
+  release:
+    types: [published]
   push:
     tags:
       - 'v*'
@@ -9,30 +11,46 @@ on:
       - master
   workflow_dispatch:
 
+concurrency:
+  group: protimer-release-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
 jobs:
   prepare:
     name: Resolve Release Version
+    if: ${{ github.event_name != 'push' || !contains(github.event.head_commit.message, '[skip ci]') }}
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.pkg.outputs.version }}
       tag: ${{ steps.pkg.outputs.tag }}
+      release_notes_file: ${{ steps.pkg.outputs.release_notes_file }}
+      prerelease: ${{ steps.pkg.outputs.prerelease }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Determine Release Version & Tag from Git Ref or package.json
+      - name: Determine Release Version & Tag from Release Event, Git Tag, or package.json
         id: pkg
         shell: bash
+        env:
+          RELEASE_EVENT_TAG: ${{ github.event.release.tag_name }}
         run: |
           PKG_VER=$(node -p "require('./package.json').version")
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            TAG_NAME="${GITHUB_REF#refs/tags/}"
-            # Strip leading 'v' so pushed tags like v3.0.2 always stamp 3.0.2 into installers & latest*.yml
+          RAW_TAG=""
+          if [[ "${GITHUB_EVENT_NAME}" == "release" && -n "${RELEASE_EVENT_TAG}" ]]; then
+            RAW_TAG="${RELEASE_EVENT_TAG}"
+          elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            RAW_TAG="${GITHUB_REF#refs/tags/}"
+          fi
+
+          if [[ -n "${RAW_TAG}" ]]; then
+            TAG_NAME="${RAW_TAG}"
+            # Strip leading 'v' so release tags like v3.0.2 always stamp 3.0.2 into installers & latest*.yml
             TAG_VER="${TAG_NAME#v}"
             if [[ "${TAG_VER}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
               RESOLVED_VER="${TAG_VER}"
@@ -43,9 +61,20 @@ jobs:
             RESOLVED_VER="${PKG_VER}"
             TAG_NAME="v${PKG_VER}"
           fi
+
+          SAFE_TAG=$(echo "${TAG_NAME}" | sed 's/[^A-Za-z0-9._-]/_/g')
+          RELEASE_NOTES_FILE="RELEASE_NOTES_${SAFE_TAG}.md"
+          if [[ "${RESOLVED_VER}" == *-* ]]; then
+            IS_PRERELEASE="true"
+          else
+            IS_PRERELEASE="false"
+          fi
+
           echo "version=${RESOLVED_VER}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG_NAME}" >> "$GITHUB_OUTPUT"
-          echo "Resolved Release Tag: ${TAG_NAME} (version ${RESOLVED_VER}, repo ${GITHUB_REPOSITORY})"
+          echo "release_notes_file=${RELEASE_NOTES_FILE}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${IS_PRERELEASE}" >> "$GITHUB_OUTPUT"
+          echo "Resolved Release Tag: ${TAG_NAME} (version ${RESOLVED_VER}, notes ${RELEASE_NOTES_FILE}, prerelease=${IS_PRERELEASE}, repo ${GITHUB_REPOSITORY})"
 
   build-windows:
     name: Build Windows (x64)
@@ -64,14 +93,27 @@ jobs:
 
       - name: Sync Release Version & Repository Metadata
         shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+          REPO_SLUG: ${{ github.repository }}
+          IS_PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
         run: |
-          node -e "
-            const fs = require('fs');
-            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-            pkg.version = '${{ needs.prepare.outputs.version }}';
-            pkg.repository = { type: 'git', url: 'https://github.com/${{ github.repository }}.git' };
-            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
-          "
+          node <<'EOF'
+          const fs = require('fs');
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          pkg.version = process.env.RELEASE_VERSION;
+          pkg.repository = { type: 'git', url: `https://github.com/${process.env.REPO_SLUG}.git` };
+          fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+
+          const releaseType = process.env.IS_PRERELEASE === 'true' ? 'prerelease' : 'release';
+          let yml = fs.readFileSync('electron-builder.yml', 'utf8');
+          yml = yml.replace(/^(\s*owner:\s*).+$/m, `$1${process.env.REPO_OWNER}`);
+          yml = yml.replace(/^(\s*repo:\s*).+$/m, `$1${process.env.REPO_NAME}`);
+          yml = yml.replace(/^(\s*releaseType:\s*).+$/m, `$1${releaseType}`);
+          fs.writeFileSync('electron-builder.yml', yml, 'utf8');
+          EOF
 
       - name: Install Dependencies
         run: npm install --legacy-peer-deps
@@ -83,12 +125,7 @@ jobs:
         run: npm run build
 
       - name: Build Windows Installer & Portable (x64)
-        run: >-
-          npx electron-builder --win --x64 --publish never
-          -c.publish.provider=github
-          -c.publish.owner=${{ github.repository_owner }}
-          -c.publish.repo=${{ github.event.repository.name }}
-          -c.publish.releaseType=release
+        run: npx electron-builder --win --x64 --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
@@ -130,14 +167,27 @@ jobs:
 
       - name: Sync Release Version & Repository Metadata
         shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+          REPO_SLUG: ${{ github.repository }}
+          IS_PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
         run: |
-          node -e "
-            const fs = require('fs');
-            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-            pkg.version = '${{ needs.prepare.outputs.version }}';
-            pkg.repository = { type: 'git', url: 'https://github.com/${{ github.repository }}.git' };
-            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
-          "
+          node <<'EOF'
+          const fs = require('fs');
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          pkg.version = process.env.RELEASE_VERSION;
+          pkg.repository = { type: 'git', url: `https://github.com/${process.env.REPO_SLUG}.git` };
+          fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+
+          const releaseType = process.env.IS_PRERELEASE === 'true' ? 'prerelease' : 'release';
+          let yml = fs.readFileSync('electron-builder.yml', 'utf8');
+          yml = yml.replace(/^(\s*owner:\s*).+$/m, `$1${process.env.REPO_OWNER}`);
+          yml = yml.replace(/^(\s*repo:\s*).+$/m, `$1${process.env.REPO_NAME}`);
+          yml = yml.replace(/^(\s*releaseType:\s*).+$/m, `$1${releaseType}`);
+          fs.writeFileSync('electron-builder.yml', yml, 'utf8');
+          EOF
 
       - name: Install Dependencies
         run: npm install --legacy-peer-deps
@@ -149,12 +199,7 @@ jobs:
         run: npm run build
 
       - name: Build macOS Apple Silicon (arm64) & Intel (x64)
-        run: >-
-          npx electron-builder --mac dmg zip --arm64 --x64 --publish never
-          -c.publish.provider=github
-          -c.publish.owner=${{ github.repository_owner }}
-          -c.publish.repo=${{ github.event.repository.name }}
-          -c.publish.releaseType=release
+        run: npx electron-builder --mac dmg zip --arm64 --x64 --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
@@ -197,14 +242,27 @@ jobs:
 
       - name: Sync Release Version & Repository Metadata
         shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+          REPO_SLUG: ${{ github.repository }}
+          IS_PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
         run: |
-          node -e "
-            const fs = require('fs');
-            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-            pkg.version = '${{ needs.prepare.outputs.version }}';
-            pkg.repository = { type: 'git', url: 'https://github.com/${{ github.repository }}.git' };
-            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
-          "
+          node <<'EOF'
+          const fs = require('fs');
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          pkg.version = process.env.RELEASE_VERSION;
+          pkg.repository = { type: 'git', url: `https://github.com/${process.env.REPO_SLUG}.git` };
+          fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+
+          const releaseType = process.env.IS_PRERELEASE === 'true' ? 'prerelease' : 'release';
+          let yml = fs.readFileSync('electron-builder.yml', 'utf8');
+          yml = yml.replace(/^(\s*owner:\s*).+$/m, `$1${process.env.REPO_OWNER}`);
+          yml = yml.replace(/^(\s*repo:\s*).+$/m, `$1${process.env.REPO_NAME}`);
+          yml = yml.replace(/^(\s*releaseType:\s*).+$/m, `$1${releaseType}`);
+          fs.writeFileSync('electron-builder.yml', yml, 'utf8');
+          EOF
 
       - name: Install Dependencies
         run: npm install --legacy-peer-deps
@@ -216,12 +274,7 @@ jobs:
         run: npm run build
 
       - name: Build Linux AppImage & Debian Package (x64)
-        run: >-
-          npx electron-builder --linux AppImage deb --x64 --publish never
-          -c.publish.provider=github
-          -c.publish.owner=${{ github.repository_owner }}
-          -c.publish.repo=${{ github.event.repository.name }}
-          -c.publish.releaseType=release
+        run: npx electron-builder --linux AppImage deb --x64 --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
@@ -246,10 +299,33 @@ jobs:
             release/latest-linux.yml
 
   publish-release:
-    name: Publish GitHub Release (Windows, macOS & Linux)
+    name: Publish GitHub Release & Sync Docs (Windows, macOS & Linux)
     needs: [prepare, build-windows, build-macos, build-linux]
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Checkout Default Branch for Release Docs Sync
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          git fetch origin "${DEFAULT_BRANCH}" --tags
+          git checkout -B "${DEFAULT_BRANCH}" "origin/${DEFAULT_BRANCH}"
+          if [ ! -f scripts/generate-release-docs.cjs ]; then
+            git checkout "${TARGET_SHA}" -- scripts/generate-release-docs.cjs
+          fi
+
       - name: Download All Platform Build Artifacts
         uses: actions/download-artifact@v4
         with:
@@ -264,17 +340,56 @@ jobs:
           test -f release-assets/latest-mac.yml
           test -f release-assets/latest-linux.yml
 
-      - name: Publish All Distributions to GitHub Releases
+      - name: Generate RELEASE_NOTES & README.md
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_NOTES_FILE: ${{ needs.prepare.outputs.release_notes_file }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          node scripts/generate-release-docs.cjs \
+            --version "${RELEASE_VERSION}" \
+            --tag "${RELEASE_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --assets-dir release-assets \
+            --target-ref "${TARGET_SHA}"
+          test -f "${RELEASE_NOTES_FILE}"
+          test -f README.md
+          cp "${RELEASE_NOTES_FILE}" "release-assets/${RELEASE_NOTES_FILE}"
+
+      - name: Publish All Distributions & Release Notes to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.prepare.outputs.tag }}
           name: ProTimer ${{ needs.prepare.outputs.tag }}
+          body_path: ${{ needs.prepare.outputs.release_notes_file }}
           draft: false
-          prerelease: false
-          make_latest: true
+          prerelease: ${{ needs.prepare.outputs.prerelease == 'true' }}
+          make_latest: ${{ needs.prepare.outputs.prerelease == 'true' && 'false' || 'true' }}
           fail_on_unmatched_files: true
-          generate_release_notes: true
           files: |
             release-assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Commit & Push Generated RELEASE_NOTES & README.md to Repository
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_NOTES_FILE: ${{ needs.prepare.outputs.release_notes_file }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md "${RELEASE_NOTES_FILE}"
+          if git diff --cached --quiet; then
+            echo "README.md and ${RELEASE_NOTES_FILE} are already up to date."
+            exit 0
+          fi
+          git commit -m "docs(release): auto-generate ${RELEASE_NOTES_FILE} and README.md for ${RELEASE_TAG} [skip ci]"
+          if ! git push origin "HEAD:${DEFAULT_BRANCH}"; then
+            echo "Initial push failed; rebasing onto origin/${DEFAULT_BRANCH} and retrying..."
+            git pull --rebase origin "${DEFAULT_BRANCH}"
+            git push origin "HEAD:${DEFAULT_BRANCH}" || echo "::warning::Could not push docs directly to ${DEFAULT_BRANCH} (check branch protection rules). Release notes were still attached to the GitHub Release."
+          fi

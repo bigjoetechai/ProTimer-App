@@ -29,6 +29,7 @@
     "dist:publish": "node scripts/build-dist.cjs publish",
     "electron:build": "node scripts/build-dist.cjs win",
     "release": "node scripts/build-dist.cjs publish",
+    "docs:release": "node scripts/generate-release-docs.cjs",
     "preview": "vite preview",
     "clean": "node -e \"const fs=require('fs');['dist','release','server.js'].forEach(p=>fs.rmSync(p,{recursive:true,force:true}))\"",
     "lint": "tsc --noEmit"
