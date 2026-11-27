@@ -5,7 +5,7 @@ import path from 'path';
 import {defineConfig} from 'vite';
 
 const pkgJson = JSON.parse(fs.readFileSync(path.resolve(__dirname, 'package.json'), 'utf8'));
-const appVersion: string = typeof pkgJson.version === 'string' ? pkgJson.version : '3.0.1';
+const appVersion: string = typeof pkgJson.version === 'string' ? pkgJson.version : '3.0.2';
 
 function lanApiPlugin() {
   return {

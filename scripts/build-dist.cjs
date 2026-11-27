@@ -25,9 +25,9 @@ const ndiDir = path.join(rootDir, 'ndi');
 const rawTarget = (process.argv[2] || 'win').toLowerCase();
 const pkgVersion = (() => {
   try {
-    return require(path.join(rootDir, 'package.json')).version || '3.0.1';
+    return require(path.join(rootDir, 'package.json')).version || '3.0.2';
   } catch {
-    return '3.0.1';
+    return '3.0.2';
   }
 })();
 

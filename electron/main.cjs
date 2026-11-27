@@ -4,7 +4,7 @@
  * Application Identity:
  * - Application Name: ProTimer
  * - Application ID: com.protimer.desktop
- * - Version: 3.0.1 (read dynamically from package.json)
+ * - Version: 3.0.2 (read dynamically from package.json)
  *
  * Implements:
  * 1. Single-Instance Lock & Windows Application User Model ID (`com.protimer.desktop`).

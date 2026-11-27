@@ -136,7 +136,7 @@ function resolvePackageVersion(rootDir) {
       // Ignore read errors
     }
   }
-  return '3.0.1';
+  return '3.0.2';
 }
 
 function fetchJsonHttps(url, userAgent, timeoutMs = 12000, redirectsLeft = 3) {
@@ -145,7 +145,7 @@ function fetchJsonHttps(url, userAgent, timeoutMs = 12000, redirectsLeft = 3) {
       url,
       {
         headers: {
-          'User-Agent': userAgent || 'ProTimer-Updater/3.0.1',
+          'User-Agent': userAgent || 'ProTimer-Updater/3.0.2',
           Accept: 'application/vnd.github+json',
           'X-GitHub-Api-Version': '2022-11-28',
         },

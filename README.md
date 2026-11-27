@@ -1,10 +1,10 @@
 # ProTimer
 
-[![Latest Release](https://img.shields.io/badge/release-v3.0.1-0ea5e9?style=for-the-badge)](https://github.com/bigjoetechai/ProTimer-App/releases/tag/v3.0.1) [![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-1e293b?style=for-the-badge)](https://github.com/bigjoetechai/ProTimer-App/releases/latest) [![Release Type](https://img.shields.io/badge/type-Patch%20%26%20Maintenance%20Release-10b981?style=for-the-badge)](./RELEASE_NOTES_v3.0.1.md)
+[![Latest Release](https://img.shields.io/badge/release-v3.0.2-0ea5e9?style=for-the-badge)](https://github.com/bigjoetechai/ProTimer-App/releases/tag/v3.0.2) [![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-1e293b?style=for-the-badge)](https://github.com/bigjoetechai/ProTimer-App/releases/latest) [![Release Type](https://img.shields.io/badge/type-Patch%20%26%20Maintenance%20Release-10b981?style=for-the-badge)](./RELEASE_NOTES_v3.0.2.md)
 
 **ProTimer - Professional Multi-Timer & Stage Production Management** — built by **Bigjoe Technology** for churches, broadcast studios, live conferences, sports venues, and stage production teams.
 
-> **Latest Release:** [`v3.0.1`](https://github.com/bigjoetechai/ProTimer-App/releases/tag/v3.0.1) (2026-11-27) — [Read the v3.0.1 Release Notes](./RELEASE_NOTES_v3.0.1.md) · [Browse All Releases](https://github.com/bigjoetechai/ProTimer-App/releases)
+> **Latest Release:** [`v3.0.2`](https://github.com/bigjoetechai/ProTimer-App/releases/tag/v3.0.2) (2026-11-27) — [Read the v3.0.2 Release Notes](./RELEASE_NOTES_v3.0.2.md) · [Browse All Releases](https://github.com/bigjoetechai/ProTimer-App/releases)
 
 ## Key Features
 
@@ -15,20 +15,20 @@
 - **LAN & QR Code Remote Control**: Share a local network link or QR code so stage managers and speakers can view or control timers from phones, tablets, or secondary computers.
 - **Built-in GitHub Auto-Updates**: Check for updates in-app and install new releases seamlessly across Windows, macOS (Apple Silicon & Intel), and Linux.
 
-## Download ProTimer v3.0.1
+## Download ProTimer v3.0.2
 
-| Platform | Package | Download | Size | Notes |
-| :--- | :--- | :--- | ---: | :--- |
-| Windows (x64) | Installer (Auto-Update) | [ProTimer-v3.0.1-Setup.exe](https://github.com/bigjoetechai/ProTimer-App/releases/download/v3.0.1/ProTimer-v3.0.1-Setup.exe) | 121.2 MB | Recommended — supports automatic in-app updates |
-| Windows (x64) | Portable Executable | [ProTimer-v3.0.1-Portable.exe](https://github.com/bigjoetechai/ProTimer-App/releases/download/v3.0.1/ProTimer-v3.0.1-Portable.exe) | 108.6 MB | No installation required |
-| macOS (Apple Silicon) | DMG Installer (`arm64`) | [ProTimer-v3.0.1-Mac-arm64.dmg](https://github.com/bigjoetechai/ProTimer-App/releases/download/v3.0.1/ProTimer-v3.0.1-Mac-arm64.dmg) | 137.2 MB | For M1 / M2 / M3 / M4 Macs |
-| macOS (Apple Silicon) | ZIP Archive (`arm64`) | [ProTimer-v3.0.1-Mac-arm64.zip](https://github.com/bigjoetechai/ProTimer-App/releases/download/v3.0.1/ProTimer-v3.0.1-Mac-arm64.zip) | 132.4 MB | Portable macOS bundle |
-| macOS (Intel) | DMG Installer (`x64`) | [ProTimer-v3.0.1-Mac-x64.dmg](https://github.com/bigjoetechai/ProTimer-App/releases/download/v3.0.1/ProTimer-v3.0.1-Mac-x64.dmg) | 142.3 MB | For Intel-based Macs |
-| macOS (Intel) | ZIP Archive (`x64`) | [ProTimer-v3.0.1-Mac-x64.zip](https://github.com/bigjoetechai/ProTimer-App/releases/download/v3.0.1/ProTimer-v3.0.1-Mac-x64.zip) | 137.5 MB | Portable macOS bundle |
-| Linux (x64) | AppImage (Auto-Update) | [ProTimer-v3.0.1-Linux-x86_64.AppImage](https://github.com/bigjoetechai/ProTimer-App/releases/download/v3.0.1/ProTimer-v3.0.1-Linux-x86_64.AppImage) | 142.4 MB | Universal Linux package with auto-update support |
-| Linux (x64) | Debian / Ubuntu (`.deb`) | [ProTimer-v3.0.1-Linux-amd64.deb](https://github.com/bigjoetechai/ProTimer-App/releases/download/v3.0.1/ProTimer-v3.0.1-Linux-amd64.deb) | 107.3 MB | Install with `sudo apt install ./ProTimer-*.deb` |
+| Platform | Package | Download | Notes |
+| :--- | :--- | :--- | :--- |
+| Windows (x64) | Installer (Auto-Update) | [ProTimer-v3.0.2-Setup.exe](https://github.com/bigjoetechai/ProTimer-App/releases/download/v3.0.2/ProTimer-v3.0.2-Setup.exe) | Recommended — supports automatic in-app updates |
+| Windows (x64) | Portable Executable | [ProTimer-v3.0.2-Portable.exe](https://github.com/bigjoetechai/ProTimer-App/releases/download/v3.0.2/ProTimer-v3.0.2-Portable.exe) | No installation required |
+| macOS (Apple Silicon) | DMG Installer (`arm64`) | [ProTimer-v3.0.2-Mac-arm64.dmg](https://github.com/bigjoetechai/ProTimer-App/releases/download/v3.0.2/ProTimer-v3.0.2-Mac-arm64.dmg) | For M1 / M2 / M3 / M4 Macs |
+| macOS (Apple Silicon) | ZIP Archive (`arm64`) | [ProTimer-v3.0.2-Mac-arm64.zip](https://github.com/bigjoetechai/ProTimer-App/releases/download/v3.0.2/ProTimer-v3.0.2-Mac-arm64.zip) | Portable macOS bundle |
+| macOS (Intel) | DMG Installer (`x64`) | [ProTimer-v3.0.2-Mac-x64.dmg](https://github.com/bigjoetechai/ProTimer-App/releases/download/v3.0.2/ProTimer-v3.0.2-Mac-x64.dmg) | For Intel-based Macs |
+| macOS (Intel) | ZIP Archive (`x64`) | [ProTimer-v3.0.2-Mac-x64.zip](https://github.com/bigjoetechai/ProTimer-App/releases/download/v3.0.2/ProTimer-v3.0.2-Mac-x64.zip) | Portable macOS bundle |
+| Linux (x64) | AppImage (Auto-Update) | [ProTimer-v3.0.2-Linux-x64.AppImage](https://github.com/bigjoetechai/ProTimer-App/releases/download/v3.0.2/ProTimer-v3.0.2-Linux-x64.AppImage) | Universal Linux package with auto-update support |
+| Linux (x64) | Debian / Ubuntu (`.deb`) | [ProTimer-v3.0.2-Linux-amd64.deb](https://github.com/bigjoetechai/ProTimer-App/releases/download/v3.0.2/ProTimer-v3.0.2-Linux-amd64.deb) | Install with `sudo apt install ./ProTimer-*.deb` |
 
-For checksums, upgrade steps, and the full change summary, see **[RELEASE_NOTES_v3.0.1.md](./RELEASE_NOTES_v3.0.1.md)**.
+For checksums, upgrade steps, and the full change summary, see **[RELEASE_NOTES_v3.0.2.md](./RELEASE_NOTES_v3.0.2.md)**.
 
 ## Installation & Updating
 
@@ -41,7 +41,8 @@ For checksums, upgrade steps, and the full change summary, see **[RELEASE_NOTES_
 
 | Version | Release Notes | GitHub Release |
 | :--- | :--- | :--- |
-| **v3.0.1** (Latest) | [RELEASE_NOTES_v3.0.1.md](./RELEASE_NOTES_v3.0.1.md) | [View Release](https://github.com/bigjoetechai/ProTimer-App/releases/tag/v3.0.1) |
+| **v3.0.2** (Latest) | [RELEASE_NOTES_v3.0.2.md](./RELEASE_NOTES_v3.0.2.md) | [View Release](https://github.com/bigjoetechai/ProTimer-App/releases/tag/v3.0.2) |
+| v3.0.1 | [RELEASE_NOTES_v3.0.1.md](./RELEASE_NOTES_v3.0.1.md) | [View Release](https://github.com/bigjoetechai/ProTimer-App/releases/tag/v3.0.1) |
 
 ## Development & Building from Source
 
